@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.log
+ROADMAP_PROGRESS.md
+*.tgz
