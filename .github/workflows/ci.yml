@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the floor declared in package.json engines; 22 is current LTS.
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # The server has to answer a real MCP handshake, not just compile. This
+      # catches a broken entry point or an unregistered tool, which a unit test
+      # over the helpers would happily miss.
+      - name: Smoke test the stdio server
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | node dist/miyagi.js 2>/dev/null \
+            | node -e '
+              let raw = "";
+              process.stdin.on("data", (d) => (raw += d));
+              process.stdin.on("end", () => {
+                const tools = raw
+                  .split("\n")
+                  .filter(Boolean)
+                  .map((l) => JSON.parse(l))
+                  .find((m) => m.id === 2)?.result?.tools;
+                if (!tools || tools.length !== 8) {
+                  console.error("expected 8 tools, got", tools?.length);
+                  process.exit(1);
+                }
+                console.log("ok: 8 tools over stdio");
+              });
+            '
+        env:
+          # Never touch a real profile on a runner.
+          MIYAGI_HOME: ${{ runner.temp }}/miyagi
+
+      # Installs the packed tarball and runs the bin through npm's symlink,
+      # which is how npx and a global install actually invoke it. The entry
+      # guard compares argv[1] against the module path, and a symlink made that
+      # comparison fail once already: the server exited 0 having served nothing,
+      # and every unit test still passed.
+      - name: Smoke test the published bin via its symlink
+        run: |
+          npm pack
+          mkdir -p /tmp/install-check && cd /tmp/install-check
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/miyagi-mcp-*.tgz
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | ./node_modules/.bin/miyagi-mcp 2>/dev/null \
+            | node -e '
+              let raw = "";
+              process.stdin.on("data", (d) => (raw += d));
+              process.stdin.on("end", () => {
+                const msgs = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+                const tools = msgs.find((m) => m.id === 2)?.result?.tools;
+                if (!tools || tools.length !== 8) {
+                  console.error("bin served no tools; the entry guard is broken");
+                  process.exit(1);
+                }
+                console.log("ok: installed bin served 8 tools");
+              });
+            '
+        env:
+          MIYAGI_HOME: ${{ runner.temp }}/miyagi-install

@@ -3,3 +3,4 @@ dist/
 *.log
 ROADMAP_PROGRESS.md
 *.tgz
+dist-test/

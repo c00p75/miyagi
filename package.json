@@ -1,12 +1,13 @@
 {
-  "name": "miyagi",
+  "name": "miyagi-mcp",
   "version": "1.0.0",
   "description": "A patient, gamified, voice-enabled MCP coding tutor. You run the commands; it drills, corrects, and keeps score.",
   "type": "module",
   "bin": {
-    "miyagi": "./dist/miyagi.js"
+    "miyagi": "dist/miyagi.js",
+    "miyagi-mcp": "dist/miyagi.js"
   },
-  "main": "./dist/miyagi.js",
+  "main": "dist/miyagi.js",
   "files": [
     "dist",
     "README.md",
@@ -17,7 +18,9 @@
     "start": "node dist/miyagi.js",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run typecheck && npm test && npm run build",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=18.0.0"

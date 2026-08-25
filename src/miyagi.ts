@@ -4,11 +4,11 @@
  * A patient, gamified, voice-enabled MCP coding tutor.
  *
  * Wax on, wax off: the learner runs every command themselves. This server
- * drills, corrects, catches the falls, and keeps score — it never does the
+ * drills, corrects, catches the falls, and keeps score. It never does the
  * work for them.
  *
- * Transport: stdio. NOTHING may be written to stdout except MCP frames —
- * all diagnostics go to stderr.
+ * Transport: stdio. NOTHING may be written to stdout except MCP frames.
+ * All diagnostics go to stderr.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,7 +18,16 @@ import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  loadProfile,
+  saveProfile,
+  PROFILE_VERSION,
+  profilePath,
+  type PersistedProfile,
+} from "./profile.js";
 
 const exec = promisify(execCb);
 const log = (...a: unknown[]) => console.error("[miyagi]", ...a);
@@ -104,6 +113,85 @@ const sessionHistory: HistoryEntry[] = [];
 let pendingQuiz: PendingQuiz | null = null;
 
 const sessionStartedAt = new Date().toISOString();
+
+/* ------------------------------------------------------------------ *
+ * Persistence
+ *
+ * Progress is written through on every change that earns XP, so a client
+ * restart costs nothing. Writes are debounced and fire-and-forget: a learner
+ * should never wait on a disk write to see their teaching card, and a failed
+ * write should cost the streak rather than the session.
+ * ------------------------------------------------------------------ */
+
+function snapshot(): PersistedProfile {
+  return {
+    version: PROFILE_VERSION,
+    updatedAt: new Date().toISOString(),
+    player: {
+      xp: player.xp,
+      level: player.level,
+      title: player.title,
+      quizStreak: player.quizStreak,
+      bestStreak: player.bestStreak,
+      badges: [...player.badges],
+    },
+    settings: {
+      skillLevel,
+      voiceEnabled: voice.enabled,
+      wordsPerMinute: voice.words_per_minute,
+    },
+    roadmap: { ...activeRoadmap },
+  };
+}
+
+let persistTimer: NodeJS.Timeout | null = null;
+
+function schedulePersist(): void {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void saveProfile(snapshot()).then((ok) => {
+      if (!ok) log("could not write profile; progress is session-only");
+    });
+  }, 250);
+  // A pending write must not hold the process open on shutdown.
+  persistTimer.unref?.();
+}
+
+/** Restores a saved profile over the defaults. Absent or unusable: keep defaults. */
+async function hydrate(): Promise<boolean> {
+  const saved = await loadProfile();
+  if (!saved) return false;
+
+  player.xp = saved.player.xp;
+  player.level = saved.player.level;
+  player.title = saved.player.title;
+  player.quizStreak = saved.player.quizStreak;
+  player.bestStreak = saved.player.bestStreak;
+  player.badges.splice(0, player.badges.length, ...saved.player.badges);
+
+  skillLevel = saved.settings.skillLevel as SkillLevel;
+  voice.enabled = saved.settings.voiceEnabled;
+  voice.words_per_minute = saved.settings.wordsPerMinute;
+
+  activeRoadmap.category = saved.roadmap.category as Category;
+  activeRoadmap.roadmap_name = saved.roadmap.roadmap_name;
+  activeRoadmap.current_topic = saved.roadmap.current_topic;
+  activeRoadmap.total_steps = saved.roadmap.total_steps;
+  activeRoadmap.step_index = saved.roadmap.step_index;
+  return true;
+}
+
+/** Wipes saved progress and returns the profile to its first-run state. */
+export function resetProgress(): void {
+  player.xp = 0;
+  player.level = 1;
+  player.title = TITLES[0].title;
+  player.quizStreak = 0;
+  player.bestStreak = 0;
+  player.badges.length = 0;
+  schedulePersist();
+}
 
 /* ------------------------------------------------------------------ *
  * Text sanitising for TTS
@@ -254,7 +342,7 @@ const audioQueue = new AudioQueue();
  * Gamification engine
  * ------------------------------------------------------------------ */
 
-function titleForLevel(level: number): string {
+export function titleForLevel(level: number): string {
   let title = TITLES[0].title;
   for (const t of TITLES) if (level >= t.minLevel) title = t.title;
   return title;
@@ -286,6 +374,8 @@ function awardXp(amount: number): XpResult {
 
   if (player.level >= 10) addBadge("Archwizard 🧙");
   if (player.xp >= 500) addBadge("Grinder 💪");
+
+  schedulePersist();
 
   return {
     awarded: amount,
@@ -359,17 +449,17 @@ function mermaidFor(command: string, ok: boolean): string {
 
 function pitfallsFor(command: string): string[] {
   const generic = [
-    "Unquoted variables split on whitespace — always quote `\"$VAR\"`.",
+    "Unquoted variables split on whitespace, so always quote `\"$VAR\"`.",
     "Relative paths depend on your current directory; confirm with `pwd` first.",
-    "A zero exit code inside a pipeline can hide an earlier failure — use `set -o pipefail`.",
+    "A zero exit code inside a pipeline can hide an earlier failure. Use `set -o pipefail`.",
   ];
   const bin = guessConcept(command);
   const specific: Record<string, string[]> = {
-    rm: ["`rm -rf` has no undo and no trash — dry-run the glob with `ls` first.", "A stray space in `rm -rf / path` is catastrophic."],
-    git: ["`git push --force` rewrites shared history; prefer `--force-with-lease`.", "Detached HEAD commits are easy to lose — branch before experimenting."],
-    docker: ["Containers are ephemeral; unmounted data dies with them.", "`latest` is not a version — pin digests for reproducibility."],
+    rm: ["`rm -rf` has no undo and no trash, so dry-run the glob with `ls` first.", "A stray space in `rm -rf / path` is catastrophic."],
+    git: ["`git push --force` rewrites shared history; prefer `--force-with-lease`.", "Detached HEAD commits are easy to lose, so branch before experimenting."],
+    docker: ["Containers are ephemeral; unmounted data dies with them.", "`latest` is not a version. Pin digests for reproducibility."],
     npm: ["`npm install` can drift lockfiles; use `npm ci` in CI.", "Global installs mask project-local version mismatches."],
-    chmod: ["`chmod 777` is almost never the fix — narrow the owner/group instead."],
+    chmod: ["`chmod 777` is almost never the fix. Narrow the owner or group instead."],
     curl: ["Piping `curl` straight to a shell executes unreviewed code.", "Without `-f`, curl exits 0 on HTTP 500."],
   };
   return [...(specific[bin] ?? []), ...generic].slice(0, 4);
@@ -427,7 +517,7 @@ function buildQuiz(command: string, exitOk: boolean): PendingQuiz {
         "Always 0",
       ],
       answer: "The last command's (grep)",
-      explanation: "Without `set -o pipefail`, only the final command's status propagates — earlier failures are silently masked.",
+      explanation: "Without `set -o pipefail`, only the final command's status propagates, so earlier failures are masked.",
     },
   ];
   const idx = (bin.length + activeRoadmap.step_index + (exitOk ? 0 : 1)) % bank.length;
@@ -504,7 +594,7 @@ function suggestCommand(): { command: string; rationale: string } {
   const idx = Math.min(list.length - 1, Math.max(0, activeRoadmap.step_index - 1));
   return {
     command: list[idx],
-    rationale: `Step ${activeRoadmap.step_index}/${activeRoadmap.total_steps} of "${activeRoadmap.roadmap_name}" — topic: ${activeRoadmap.current_topic}.`,
+    rationale: `Step ${activeRoadmap.step_index}/${activeRoadmap.total_steps} of "${activeRoadmap.roadmap_name}". Topic: ${activeRoadmap.current_topic}.`,
   };
 }
 
@@ -532,7 +622,7 @@ const DANGEROUS_PATTERNS: Array<{ re: RegExp; why: string }> = [
   { re: /\bgit\s+push\b.*--force(?!-with-lease)/, why: "history-rewriting force push" },
 ];
 
-function screenDanger(command: string): string[] {
+export function screenDanger(command: string): string[] {
   return DANGEROUS_PATTERNS.filter((p) => p.re.test(command)).map((p) => p.why);
 }
 
@@ -574,7 +664,7 @@ function hotfixDiagnostic(command: string, outcome: ExecOutcome): string {
     tips.push(`\`${bin}\` is not on your PATH. Install it, or check with \`command -v ${bin}\`.`);
   }
   if (blob.includes("permission denied")) {
-    tips.push("Permission denied — check ownership with `ls -l`, and prefer fixing the file mode over `sudo`.");
+    tips.push("Permission denied. Check ownership with `ls -l`, and prefer fixing the file mode over `sudo`.");
   }
   if (blob.includes("no such file or directory")) {
     tips.push("A path does not exist. Run `pwd` and `ls` to confirm where you actually are.");
@@ -583,13 +673,13 @@ function hotfixDiagnostic(command: string, outcome: ExecOutcome): string {
     tips.push("The command exceeded the 60s tutor timeout. Long-running or interactive commands should be run in your own terminal.");
   }
   if (blob.includes("unexpected") || blob.includes("syntax error")) {
-    tips.push("Shell syntax error — usually an unbalanced quote, paren, or a stray backslash.");
+    tips.push("Shell syntax error, usually an unbalanced quote, paren or stray backslash.");
   }
   if (blob.includes("eacces") || blob.includes("eperm")) {
     tips.push("The OS refused the operation. You may be writing outside your user-owned directories.");
   }
   if (tips.length === 0) {
-    tips.push(`Exit code ${outcome.code ?? "unknown"}. Read the stderr text above literally — it usually names the failing argument.`);
+    tips.push(`Exit code ${outcome.code ?? "unknown"}. Read the stderr text above literally, because it usually names the failing argument.`);
     tips.push(`Re-read the contract with \`${bin} --help\` or \`man ${bin}\`.`);
   }
   tips.push("Reproduce in isolation: run the smallest version of the command, then add flags back one at a time.");
@@ -604,7 +694,7 @@ function hotfixDiagnostic(command: string, outcome: ExecOutcome): string {
     "**Troubleshooting ladder:**",
     ...tips.map((t, i) => `${i + 1}. ${t}`),
     "",
-    "> Failures are curriculum. Nothing crashed — read the diagnosis, adjust one variable, and try again.",
+    "> Failures are curriculum. Nothing crashed. Read the diagnosis, change one variable, try again.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -626,7 +716,7 @@ function renderTeachingCard(
   const lens = AUDIENCE_LENS[skillLevel];
   const out: string[] = [];
 
-  out.push(`# 🥋 Miyagi — \`${command}\``);
+  out.push(`# 🥋 Miyagi · \`${command}\``);
   out.push("");
   out.push("## 🗺️ Roadmap Alignment");
   out.push(
@@ -640,7 +730,7 @@ function renderTeachingCard(
     out.push("## ⚠️ Safety Screen");
     out.push(
       dangerReasons.map((r) => `- Flagged: **${r}**`).join("\n") +
-        (dryRun ? "\n\n_Executed as a dry run — nothing was changed._" : "")
+        (dryRun ? "\n\n_Executed as a dry run. Nothing was changed._" : "")
     );
     out.push("");
   }
@@ -654,11 +744,11 @@ function renderTeachingCard(
 
   out.push("## 🖥️ Execution");
   if (dryRun || !outcome) {
-    out.push("**Mode:** `DRY RUN` — the command was parsed and explained but not executed.");
+    out.push("**Mode:** `DRY RUN`. The command was parsed and explained but not executed.");
     out.push("Copy-paste to run it yourself when ready:");
     out.push("```bash\n" + command + "\n```");
   } else if (outcome.ok) {
-    out.push(`**Mode:** \`EXECUTED\` — exit code \`0\` ✅`);
+    out.push(`**Mode:** \`EXECUTED\`. Exit code \`0\` ✅`);
     const so = outcome.stdout.trim();
     out.push("```\n" + (so ? so.slice(0, 4000) : "(no stdout)") + "\n```");
     if (outcome.stderr.trim()) {
@@ -736,10 +826,18 @@ server.registerTool(
       current_topic: z.string().optional(),
       voice_enabled: z.boolean().optional(),
       words_per_minute: z.number().int().min(80).max(400).optional(),
+      reset_progress: z
+        .boolean()
+        .optional()
+        .describe("Wipe saved XP, level, streak and badges back to first-run state."),
     },
   },
   async (args) => {
     const changes: string[] = [];
+    if (args.reset_progress) {
+      resetProgress();
+      changes.push("**progress reset** to level 1, 0 XP");
+    }
     if (args.skill_level) {
       skillLevel = args.skill_level;
       changes.push(`skill level → **${skillLevel}**`);
@@ -775,6 +873,7 @@ server.registerTool(
       );
     }
 
+    schedulePersist();
     record({ kind: "config", label: "quick_config", detail: changes.join("; "), xpAwarded: 0 });
     audioQueue.enqueue(`Configuration updated. Teaching at ${skillLevel} level on ${activeRoadmap.roadmap_name}.`);
 
@@ -811,6 +910,7 @@ server.registerTool(
     activeRoadmap.total_steps = args.total_steps;
     activeRoadmap.step_index = Math.min(args.step_index, args.total_steps);
 
+    schedulePersist();
     record({
       kind: "concept",
       label: `Roadmap set: ${args.roadmap_name}`,
@@ -854,6 +954,7 @@ server.registerTool(
   async ({ advance }) => {
     if (advance && activeRoadmap.step_index < activeRoadmap.total_steps) {
       activeRoadmap.step_index += 1;
+      schedulePersist();
     }
     const { command, rationale } = suggestCommand();
     const danger = screenDanger(command);
@@ -871,7 +972,7 @@ server.registerTool(
         "",
         "```bash\n" + command + "\n```",
         danger.length
-          ? `\n⚠️ **Safety note:** flagged for _${danger.join(", ")}_ — run with \`dry_run: true\` first.`
+          ? `\n⚠️ **Safety note:** flagged for _${danger.join(", ")}_. Run with \`dry_run: true\` first.`
           : "",
         "",
         "Run it through `run_teaching_command` to get the full teaching card and earn XP.",
@@ -900,6 +1001,7 @@ server.registerTool(
       if (!voice.enabled) audioQueue.clear();
     }
     if (args.words_per_minute) voice.words_per_minute = args.words_per_minute;
+    schedulePersist();
 
     const platform = os.platform();
     const engine =
@@ -945,7 +1047,7 @@ server.registerTool(
     const summary = [
       "# 🏆 Player Stats",
       "",
-      `**${player.title}** — Level **${player.level}**`,
+      `**${player.title}** · Level **${player.level}**`,
       `XP: **${player.xp}** \`${xpBar()}\` (${nextLevelAt - player.xp} to level ${player.level + 1})`,
       `Quiz streak: **${player.quizStreak}** 🔥 · Best: **${player.bestStreak}**`,
       `Badges: ${player.badges.length ? player.badges.join(" · ") : "_none yet_"}`,
@@ -963,7 +1065,7 @@ server.registerTool(
       "## 🎖️ Title Ladder",
       ...TITLES.map(
         (t) =>
-          `- ${player.level >= t.minLevel ? "✅" : "🔒"} **${t.title}** — level ${t.minLevel}+`
+          `- ${player.level >= t.minLevel ? "✅" : "🔒"} **${t.title}** · level ${t.minLevel}+`
       ),
     ].join("\n");
 
@@ -1024,10 +1126,10 @@ server.registerTool(
       kind: "command",
       label: command,
       detail: dryRun
-        ? "dry run — not executed"
+        ? "dry run, not executed"
         : outcome!.ok
         ? "executed successfully (exit 0)"
-        : `failed (exit ${outcome!.code ?? "n/a"}) — hotfix diagnostic issued`,
+        : `failed (exit ${outcome!.code ?? "n/a"}), hotfix diagnostic issued`,
       xpAwarded: xp?.awarded ?? 0,
     });
 
@@ -1056,13 +1158,13 @@ server.registerTool(
       answer: z
         .string()
         .min(1)
-        .describe("The learner's answer — a letter (A-D) or the answer text."),
+        .describe("The learner's answer, either a letter (A-D) or the answer text."),
     },
   },
   async ({ answer }) => {
     if (!pendingQuiz) {
       return textResult(
-        "## ❓ No Active Quiz\nRun `run_teaching_command` first — every teaching card ends with a question."
+        "## ❓ No Active Quiz\nRun `run_teaching_command` first. Every teaching card ends with a question."
       );
     }
 
@@ -1095,7 +1197,7 @@ server.registerTool(
       record({
         kind: "quiz",
         label: quiz.question,
-        detail: `Correct (${quiz.answer}) — streak ${player.quizStreak}, x${multiplier}`,
+        detail: `Correct (${quiz.answer}), streak ${player.quizStreak}, x${multiplier}`,
         xpAwarded: amount,
       });
 
@@ -1112,12 +1214,12 @@ server.registerTool(
         "",
         `+**${xp.awarded} XP** (base 25 × ${multiplier} streak multiplier)`,
         `Streak: **${player.quizStreak}** 🔥 · Best: **${player.bestStreak}**`,
-        `**${player.title}** — Level **${player.level}** · ${player.xp} XP \`${xpBar()}\``,
+        `**${player.title}** · Level **${player.level}** · ${player.xp} XP \`${xpBar()}\``,
       ];
       if (xp.leveledUp) lines.push("", `## 🎉 LEVEL UP → **${player.level}**`);
       if (xp.titleChanged) lines.push(`New title unlocked: **${player.title}**`);
       if (newBadges.length) lines.push(`Badges unlocked: ${newBadges.join(" · ")}`);
-      lines.push("", "_Keep going — call `get_next_roadmap_command` for the next milestone._");
+      lines.push("", "_Keep going. Call `get_next_roadmap_command` for the next milestone._");
 
       pendingQuiz = null;
       return textResult(lines.join("\n"));
@@ -1130,7 +1232,7 @@ server.registerTool(
     record({
       kind: "quiz",
       label: quiz.question,
-      detail: `Incorrect (answered "${given}", correct: ${quiz.answer}) — streak reset from ${lostStreak}`,
+      detail: `Incorrect (answered "${given}", correct: ${quiz.answer}), streak reset from ${lostStreak}`,
       xpAwarded: 5,
     });
 
@@ -1148,9 +1250,9 @@ server.registerTool(
         `**Why:** ${quiz.explanation}`,
         "",
         `+**5 XP** for the attempt.` + (lostStreak ? ` Streak reset from **${lostStreak}** → 0.` : ""),
-        `**${player.title}** — Level **${player.level}** · ${player.xp} XP \`${xpBar()}\``,
+        `**${player.title}** · Level **${player.level}** · ${player.xp} XP \`${xpBar()}\``,
         "",
-        "_Re-run the command and say the answer out loud before checking — that's what makes recall stick._",
+        "_Re-run the command and say the answer out loud before checking. That's what makes recall stick._",
       ].join("\n")
     );
   }
@@ -1162,7 +1264,7 @@ server.registerTool(
   {
     title: "Export Roadmap Notes",
     description:
-      "Write a clean ROADMAP_PROGRESS.md summary of the session — roadmap position, player stats, and every concept/command covered.",
+      "Write a clean ROADMAP_PROGRESS.md summary of the session: roadmap position, player stats, and every concept and command covered.",
     inputSchema: {
       output_path: z
         .string()
@@ -1210,14 +1312,14 @@ server.registerTool(
       "",
       commands.length
         ? commands
-            .map((c) => `- \`${c.label}\` — ${c.detail}${c.xpAwarded ? ` _(+${c.xpAwarded} XP)_` : ""}`)
+            .map((c) => `- \`${c.label}\`: ${c.detail}${c.xpAwarded ? ` _(+${c.xpAwarded} XP)_` : ""}`)
             .join("\n")
         : "_No commands run this session._",
       "",
       "## Concepts Covered",
       "",
       concepts.length
-        ? concepts.map((c) => `- **${c.label}** — ${c.detail}`).join("\n")
+        ? concepts.map((c) => `- **${c.label}**: ${c.detail}`).join("\n")
         : "_No concepts recorded._",
       "",
       "## Quiz Log",
@@ -1231,7 +1333,7 @@ server.registerTool(
       "```bash\n" + suggestCommand().command + "\n```",
       "",
       "---",
-      "_Review this file tomorrow before starting — spaced repetition is where the XP turns into skill._",
+      "_Review this file tomorrow before starting. Spaced repetition is where the XP turns into skill._",
       "",
     ].join("\n");
 
@@ -1281,12 +1383,42 @@ process.on("uncaughtException", (e) => log("uncaughtException:", e));
 process.on("unhandledRejection", (e) => log("unhandledRejection:", e));
 
 async function main(): Promise<void> {
+  const restored = await hydrate();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  log(`ready on stdio — platform ${os.platform()}, cwd ${process.cwd()}`);
+  log(
+    restored
+      ? `ready on stdio. Restored ${player.title}, level ${player.level}, ${player.xp} XP from ${profilePath()}`
+      : `ready on stdio. New profile; progress will be saved to ${profilePath()}`,
+  );
+  log(`platform ${os.platform()}, cwd ${process.cwd()}`);
 }
 
-main().catch((err) => {
-  log("fatal:", err);
-  process.exit(1);
-});
+/**
+ * Only boot when run as a program. Without this guard, importing the module
+ * (a test, a script) would connect a stdio transport and hang.
+ */
+/**
+ * Symlinks have to be resolved on both sides. npm installs a bin as a symlink
+ * (`node_modules/.bin/miyagi-mcp` into the package), so `process.argv[1]` is
+ * the link while `import.meta.url` is the real file. Comparing the two without
+ * realpath makes this false for every `npx` and global install, and the server
+ * exits silently having served nothing.
+ */
+function canonicalPath(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+const entryPoint = process.argv[1] ? canonicalPath(process.argv[1]) : "";
+const invokedDirectly = entryPoint !== "" && entryPoint === canonicalPath(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    log("fatal:", err);
+    process.exit(1);
+  });
+}
