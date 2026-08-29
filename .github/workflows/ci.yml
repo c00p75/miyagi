@@ -52,16 +52,23 @@ jobs:
                   .filter(Boolean)
                   .map((l) => JSON.parse(l))
                   .find((m) => m.id === 2)?.result?.tools;
-                if (!tools || tools.length !== 8) {
-                  console.error("expected 8 tools, got", tools?.length);
+                if (!tools || tools.length !== 10) {
+                  console.error("expected 10 tools, got", tools?.length);
                   process.exit(1);
                 }
-                console.log("ok: 8 tools over stdio");
+                console.log("ok: 10 tools over stdio");
               });
             '
         env:
           # Never touch a real profile on a runner.
           MIYAGI_HOME: ${{ runner.temp }}/miyagi
+
+      # The doctor is the only mode allowed to write to stdout, and it is what a
+      # user runs when an install misbehaves, so it has to work on a bare runner.
+      - name: Smoke test --doctor
+        run: node dist/miyagi.js --doctor
+        env:
+          MIYAGI_HOME: ${{ runner.temp }}/miyagi-doctor
 
       # Installs the packed tarball and runs the bin through npm's symlink,
       # which is how npx and a global install actually invoke it. The entry
@@ -85,11 +92,11 @@ jobs:
               process.stdin.on("end", () => {
                 const msgs = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l));
                 const tools = msgs.find((m) => m.id === 2)?.result?.tools;
-                if (!tools || tools.length !== 8) {
+                if (!tools || tools.length !== 10) {
                   console.error("bin served no tools; the entry guard is broken");
                   process.exit(1);
                 }
-                console.log("ok: installed bin served 8 tools");
+                console.log("ok: installed bin served 10 tools");
               });
             '
         env:

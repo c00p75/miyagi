@@ -14,11 +14,20 @@ import path from "node:path";
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-test-"));
 process.env.MIYAGI_HOME = home;
 
-const { loadProfile, saveProfile, normaliseProfile, profilePath, PROFILE_VERSION } = await import(
-  "../src/profile.js"
-);
+const {
+  loadProfile,
+  saveProfile,
+  normaliseProfile,
+  profilePath,
+  PROFILE_VERSION,
+  scheduleReview,
+  dueItems,
+  touchStreak,
+  streakStatus,
+  dueAtForBox,
+} = await import("../src/profile.js");
 
-const valid = () => ({
+const valid = (): any => ({
   version: PROFILE_VERSION,
   updatedAt: new Date().toISOString(),
   player: {
@@ -37,6 +46,10 @@ const valid = () => ({
     step_index: 3,
     total_steps: 10,
   },
+  streak: { lastActiveDay: null, dayStreak: 0, bestDayStreak: 4, totalDays: 9 },
+  mastery: { git: { attempts: 6, successes: 5, quizAttempts: 2, quizCorrect: 1, lastAt: new Date().toISOString() } },
+  review: [],
+  recentQuizIds: ["git-force-lease"],
 });
 
 test("a saved profile round-trips", async () => {
@@ -47,6 +60,7 @@ test("a saved profile round-trips", async () => {
   assert.equal(back.player.bestStreak, 7);
   assert.equal(back.settings.skillLevel, "Senior");
   assert.equal(back.settings.voiceEnabled, false);
+  assert.equal(back.settings.mode, "ride-along", "a file with no mode is the quiet default");
   assert.equal(back.roadmap.roadmap_name, "Backend Developer");
 });
 
@@ -63,6 +77,78 @@ test("a truncated file is discarded rather than thrown", async () => {
 test("a profile from another version is not trusted", () => {
   assert.equal(normaliseProfile({ ...valid(), version: 99 }), null);
   assert.equal(normaliseProfile({ ...valid(), version: 0 }), null);
+});
+
+test("a version 1 profile is migrated, not discarded", () => {
+  // v1 had no streak, mastery, review or recentQuizIds. Losing a learner's XP
+  // on upgrade would be a worse bug than any of those fields being empty.
+  const v1 = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    player: { xp: 620, level: 7, title: "CLI Artisan", quizStreak: 2, bestStreak: 9, badges: ["Grinder 💪"] },
+    settings: { skillLevel: "Mid", voiceEnabled: false, wordsPerMinute: 200 },
+    roadmap: {
+      category: "Skill Based",
+      roadmap_name: "Git and GitHub",
+      current_topic: "Branching",
+      step_index: 6,
+      total_steps: 10,
+    },
+  };
+  const p = normaliseProfile(v1);
+  assert.ok(p);
+  assert.equal(p.version, PROFILE_VERSION, "the migrated profile is stamped with the current version");
+  assert.equal(p.player.xp, 620, "XP survives the upgrade");
+  assert.equal(p.player.bestStreak, 9);
+  assert.equal(p.settings.skillLevel, "Mid");
+  assert.equal(p.settings.mode, "ride-along", "v1 had no mode field");
+  assert.equal(p.streak.dayStreak, 0, "no day streak is knowable from a v1 file");
+  assert.deepEqual(p.mastery, {});
+  assert.deepEqual(p.review, []);
+  assert.deepEqual(p.recentQuizIds, []);
+});
+
+test("mastery counts cannot claim more successes than attempts", () => {
+  const p = normaliseProfile({
+    ...valid(),
+    mastery: { git: { attempts: 2, successes: 99, quizAttempts: 1, quizCorrect: 50 } },
+  });
+  assert.equal(p?.mastery.git.successes, 2);
+  assert.equal(p?.mastery.git.quizCorrect, 1);
+});
+
+test("a review item with an unreadable due date is treated as due now", () => {
+  const p = normaliseProfile({
+    ...valid(),
+    review: [{ id: "quiz:x", kind: "quiz", ref: "x", label: "x", dueAt: "not-a-date", box: 99 }],
+  });
+  assert.ok(p);
+  assert.equal(p.review.length, 1);
+  assert.ok(Date.parse(p.review[0].dueAt) <= Date.now(), "fails safe towards revision");
+  assert.ok(p.review[0].box <= 5, "box is clamped to the ladder");
+});
+
+test("duplicate review ids are collapsed", () => {
+  const item = { id: "quiz:x", kind: "quiz", ref: "x", label: "x", dueAt: new Date().toISOString() };
+  const p = normaliseProfile({ ...valid(), review: [item, { ...item }] });
+  assert.equal(p?.review.length, 1);
+});
+
+test("a day streak in the file cannot exceed its own best", () => {
+  const p = normaliseProfile({
+    ...valid(),
+    streak: { lastActiveDay: "2026-01-01", dayStreak: 40, bestDayStreak: 2, totalDays: 1 },
+  });
+  assert.equal(p?.streak.bestDayStreak, 40, "best is raised to match, not the other way round");
+  assert.ok((p?.streak.totalDays ?? 0) >= 1);
+});
+
+test("a streak with no last active day has no length", () => {
+  const p = normaliseProfile({
+    ...valid(),
+    streak: { lastActiveDay: "not-a-day", dayStreak: 12, bestDayStreak: 12, totalDays: 30 },
+  });
+  assert.equal(p?.streak.dayStreak, 0, "a streak nobody can date is not a streak");
 });
 
 test("level is derived from XP, never read from the file", () => {

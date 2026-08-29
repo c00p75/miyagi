@@ -1,6 +1,6 @@
 {
   "name": "miyagi-mcp",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "A patient, gamified, voice-enabled MCP coding tutor. You run the commands; it drills, corrects, and keeps score.",
   "type": "module",
   "bin": {
@@ -20,6 +20,8 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run typecheck && npm test && npm run build",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "eval": "tsc -p tsconfig.test.json && node --test dist-test/test/quality.test.js dist-test/test/journey.test.js dist-test/test/coverage.test.js",
+    "doctor": "node dist/miyagi.js --doctor",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

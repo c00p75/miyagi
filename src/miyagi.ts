@@ -9,849 +9,541 @@
  *
  * Transport: stdio. NOTHING may be written to stdout except MCP frames.
  * All diagnostics go to stderr.
+ *
+ * This file is the MCP surface only — tools, resources, prompts. The teaching
+ * content lives in content.ts, progression in state.ts, layout in render.ts.
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { completable } from "@modelcontextprotocol/sdk/server/completable.js";
 import { z } from "zod";
-import { exec as execCb } from "node:child_process";
-import { promisify } from "node:util";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  loadProfile,
-  saveProfile,
-  PROFILE_VERSION,
-  profilePath,
-  type PersistedProfile,
-} from "./profile.js";
 
-const exec = promisify(execCb);
+import { VERSION } from "./version.js";
+import { profilePath, profileDir, isDue, REVIEW_INTERVALS_DAYS } from "./profile.js";
+import { readHistory, summarise, historyPath, flushHistory } from "./history.js";
+import { analyse } from "./insights.js";
+import { runDoctor } from "./doctor.js";
+import {
+  allTracks,
+  exampleTrackJson,
+  findTrack,
+  loadUserTracks,
+  resolveStep,
+  roadmapsDir,
+  stepAt,
+  trackNames,
+  trackShellWarning,
+  verifiableSteps,
+  CATEGORIES,
+  DEFAULT_TRACK_FOR_CATEGORY,
+  type Category,
+  type RoadmapStep,
+} from "./roadmaps.js";
+import { binOf, conceptFor, type SkillLevel } from "./content.js";
+import { isSameCommand, runCheckpoint, type CheckpointResult } from "./checkpoint.js";
+import { execShellName, hostShell, posixEscapeHatch } from "./platform.js";
+import {
+  ask,
+  grade,
+  generatedCount,
+  pickQuestion,
+  questionById,
+  type AskedQuiz,
+} from "./quiz.js";
+import {
+  attachSampling,
+  bankCovers,
+  cachedCount,
+  generateQuestion,
+  gradeProse,
+  loadGeneratedCache,
+  samplingAvailable,
+} from "./sampling.js";
+import { screenCommand, screenDanger } from "./safety.js";
+import { looksInteractive, runCommand, DEFAULT_TIMEOUT_MS } from "./run.js";
+import { AudioQueue, sanitizeForSpeech } from "./tts.js";
+import {
+  commandXp,
+  parseMode,
+  policyFor,
+  requestModeChange,
+  shouldSurfaceCard,
+  showsXpFootnote,
+  surfaceFor,
+} from "./modes.js";
+import {
+  activeRoadmap,
+  awardXp,
+  due,
+  ensureReviewItem,
+  gradeReviewItem,
+  hydrate,
+  masteryRows,
+  nextDueAt,
+  noteQuizAsked,
+  persistNow,
+  player,
+  record,
+  recordMastery,
+  resetProgress,
+  review,
+  reviewCounts,
+  schedulePersist,
+  session,
+  snapshot,
+  streak,
+  streakState,
+  strongSpots,
+  titleLadder,
+  touchDay,
+  firstRun,
+  markReturning,
+  onPersist,
+  verified,
+  verifiedAt,
+  verifiedCount,
+  isVerified,
+  markVerified,
+  voice,
+  weakSpots,
+  type DayResult,
+  type XpResult,
+} from "./state.js";
+import {
+  playerBlock,
+  relative,
+  renderTeachingCard,
+  reviewLadder,
+  roadmapBar,
+  quizBlock,
+  xpBar,
+  xpFootnote,
+} from "./render.js";
+
 const log = (...a: unknown[]) => console.error("[miyagi]", ...a);
 
-/* ------------------------------------------------------------------ *
- * State
- * ------------------------------------------------------------------ */
+/** Re-exported for the test suite, which screens commands without a transport. */
+export { screenDanger, sanitizeForSpeech };
+export { titleForLevel } from "./profile.js";
+export { resetProgress };
 
-type Category =
-  | "Role Based"
-  | "Skill Based"
-  | "Absolute Beginners"
-  | "Best Practices";
-
-type SkillLevel = "Junior" | "Mid" | "Senior";
-
-interface Roadmap {
-  category: Category;
-  roadmap_name: string;
-  current_topic: string;
-  step_index: number;
-  total_steps: number;
-}
-
-interface Player {
-  xp: number;
-  level: number;
-  title: string;
-  quizStreak: number;
-  bestStreak: number;
-  badges: string[];
-}
-
-interface VoiceConfig {
-  enabled: boolean;
-  words_per_minute: number;
-}
-
-interface HistoryEntry {
-  at: string;
-  kind: "command" | "concept" | "quiz" | "config";
-  label: string;
-  detail: string;
-  xpAwarded: number;
-}
-
-interface PendingQuiz {
-  question: string;
-  answer: string;
-  choices: string[];
-  explanation: string;
-}
-
-const TITLES: Array<{ minLevel: number; title: string }> = [
-  { minLevel: 1, title: "Terminal Novice" },
-  { minLevel: 3, title: "Shell Apprentice" },
-  { minLevel: 6, title: "CLI Artisan" },
-  { minLevel: 10, title: "Terminal Wizard" },
-];
-
-const activeRoadmap: Roadmap = {
-  category: "Absolute Beginners",
-  roadmap_name: "Command Line Basics",
-  current_topic: "Navigating the filesystem",
-  step_index: 1,
-  total_steps: 10,
-};
-
-const player: Player = {
-  xp: 0,
-  level: 1,
-  title: "Terminal Novice",
-  quizStreak: 0,
-  bestStreak: 0,
-  badges: [],
-};
-
-const voice: VoiceConfig = { enabled: true, words_per_minute: 180 };
-
-let skillLevel: SkillLevel = "Junior";
-
-const sessionHistory: HistoryEntry[] = [];
-let pendingQuiz: PendingQuiz | null = null;
-
-const sessionStartedAt = new Date().toISOString();
+const audioQueue = new AudioQueue(voice);
 
 /* ------------------------------------------------------------------ *
- * Persistence
+ * Open quizzes
  *
- * Progress is written through on every change that earns XP, so a client
- * restart costs nothing. Writes are debounced and fire-and-forget: a learner
- * should never wait on a disk write to see their teaching card, and a failed
- * write should cost the streak rather than the session.
+ * There used to be one `pendingQuiz` global, so a second command silently
+ * discarded the question you were part-way through answering, and two clients
+ * sharing a server clobbered each other. Askings are now addressed by token.
+ * The most recent one is still the default, so answering without a token works
+ * exactly as it did.
  * ------------------------------------------------------------------ */
 
-function snapshot(): PersistedProfile {
-  return {
-    version: PROFILE_VERSION,
-    updatedAt: new Date().toISOString(),
-    player: {
-      xp: player.xp,
-      level: player.level,
-      title: player.title,
-      quizStreak: player.quizStreak,
-      bestStreak: player.bestStreak,
-      badges: [...player.badges],
-    },
-    settings: {
-      skillLevel,
-      voiceEnabled: voice.enabled,
-      wordsPerMinute: voice.words_per_minute,
-    },
-    roadmap: { ...activeRoadmap },
-  };
+interface OpenQuiz extends AskedQuiz {
+  token: string;
 }
 
-let persistTimer: NodeJS.Timeout | null = null;
+const openQuizzes = new Map<string, OpenQuiz>();
+let quizCounter = 0;
+const MAX_OPEN_QUIZZES = 20;
 
-function schedulePersist(): void {
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    void saveProfile(snapshot()).then((ok) => {
-      if (!ok) log("could not write profile; progress is session-only");
-    });
-  }, 250);
-  // A pending write must not hold the process open on shutdown.
-  persistTimer.unref?.();
-}
-
-/** Restores a saved profile over the defaults. Absent or unusable: keep defaults. */
-async function hydrate(): Promise<boolean> {
-  const saved = await loadProfile();
-  if (!saved) return false;
-
-  player.xp = saved.player.xp;
-  player.level = saved.player.level;
-  player.title = saved.player.title;
-  player.quizStreak = saved.player.quizStreak;
-  player.bestStreak = saved.player.bestStreak;
-  player.badges.splice(0, player.badges.length, ...saved.player.badges);
-
-  skillLevel = saved.settings.skillLevel as SkillLevel;
-  voice.enabled = saved.settings.voiceEnabled;
-  voice.words_per_minute = saved.settings.wordsPerMinute;
-
-  activeRoadmap.category = saved.roadmap.category as Category;
-  activeRoadmap.roadmap_name = saved.roadmap.roadmap_name;
-  activeRoadmap.current_topic = saved.roadmap.current_topic;
-  activeRoadmap.total_steps = saved.roadmap.total_steps;
-  activeRoadmap.step_index = saved.roadmap.step_index;
-  return true;
-}
-
-/** Wipes saved progress and returns the profile to its first-run state. */
-export function resetProgress(): void {
-  player.xp = 0;
-  player.level = 1;
-  player.title = TITLES[0].title;
-  player.quizStreak = 0;
-  player.bestStreak = 0;
-  player.badges.length = 0;
-  schedulePersist();
-}
-
-/* ------------------------------------------------------------------ *
- * Text sanitising for TTS
- * ------------------------------------------------------------------ */
-
-/** Strip markdown, code fences, symbols and URLs so the TTS engine reads prose. */
-export function sanitizeForSpeech(raw: string): string {
-  let t = raw;
-  t = t.replace(/```[\s\S]*?```/g, " code block. ");
-  t = t.replace(/`([^`]*)`/g, "$1");
-  t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, " image. ");
-  t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
-  t = t.replace(/\bhttps?:\/\/\S+/gi, " link ");
-  t = t.replace(/\bwww\.\S+/gi, " link ");
-  t = t.replace(/^\s{0,3}#{1,6}\s+/gm, "");
-  t = t.replace(/^\s{0,3}>\s?/gm, "");
-  t = t.replace(/^\s*[-*+]\s+/gm, "");
-  t = t.replace(/^\s*\d+\.\s+/gm, "");
-  t = t.replace(/^\s*[-*_]{3,}\s*$/gm, " ");
-  t = t.replace(/\|/g, " ");
-  t = t.replace(/(\*\*|__|\*|_|~~)/g, "");
-  t = t.replace(/[#`<>{}\[\]\\^|]/g, " ");
-  // Emoji / pictographs
-  t = t.replace(
-    /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}]/gu,
-    " "
-  );
-  t = t.replace(/\s+/g, " ").trim();
-  return t.slice(0, 1200);
-}
-
-/** Quote a string for safe single-argument shell use. */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/* ------------------------------------------------------------------ *
- * Cross-platform audio engine: non-blocking FIFO queue with fallbacks
- * ------------------------------------------------------------------ */
-
-class AudioQueue {
-  private queue: string[] = [];
-  private draining = false;
-  private linuxSpeaker: string | null | undefined = undefined; // undefined = not probed
-
-  enqueue(text: string): void {
-    if (!voice.enabled) return;
-    const clean = sanitizeForSpeech(text);
-    if (!clean) return;
-    this.queue.push(clean);
-    if (!this.draining) void this.drain();
+function openQuiz(quiz: AskedQuiz): OpenQuiz {
+  const token = `${quiz.id}#${++quizCounter}`;
+  const open: OpenQuiz = { ...quiz, token };
+  openQuizzes.set(token, open);
+  // Oldest first out. A question from forty commands ago is not being answered.
+  while (openQuizzes.size > MAX_OPEN_QUIZZES) {
+    const oldest = openQuizzes.keys().next().value;
+    if (oldest === undefined) break;
+    openQuizzes.delete(oldest);
   }
+  noteQuizAsked(quiz.id);
+  return open;
+}
 
-  clear(): void {
-    this.queue = [];
-  }
-
-  get pending(): number {
-    return this.queue.length;
-  }
-
-  private async drain(): Promise<void> {
-    this.draining = true;
-    try {
-      while (this.queue.length > 0) {
-        const next = this.queue.shift()!;
-        try {
-          await this.speak(next);
-        } catch (err) {
-          // Never let a TTS failure take down the server.
-          log("tts failed (non-fatal):", (err as Error).message);
-        }
-      }
-    } finally {
-      this.draining = false;
-    }
-  }
-
-  private async commandExists(cmd: string): Promise<boolean> {
-    try {
-      await exec(`command -v ${cmd}`, { shell: "/bin/sh" });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private async resolveLinuxSpeaker(): Promise<string | null> {
-    if (this.linuxSpeaker !== undefined) return this.linuxSpeaker;
-    for (const cmd of ["spd-say", "espeak-ng", "espeak", "festival"]) {
-      if (await this.commandExists(cmd)) {
-        this.linuxSpeaker = cmd;
-        return cmd;
-      }
-    }
-    this.linuxSpeaker = null;
-    log("no Linux TTS binary found; audio disabled for this session");
+function resolveQuiz(token?: string): OpenQuiz | null {
+  if (token) {
+    const direct = openQuizzes.get(token);
+    if (direct) return direct;
+    // A caller may pass the bare question id rather than the token it was given.
+    const byId = [...openQuizzes.values()].reverse().find((q) => q.id === token);
+    if (byId) return byId;
     return null;
   }
-
-  private async speak(text: string): Promise<void> {
-    const platform = os.platform();
-    const wpm = Math.min(400, Math.max(80, Math.round(voice.words_per_minute)));
-    const timeout = 60_000;
-
-    if (platform === "darwin") {
-      if (!(await this.commandExists("say"))) return;
-      await exec(`say -r ${wpm} -- ${shellQuote(text)}`, { timeout });
-      return;
-    }
-
-    if (platform === "win32") {
-      // PowerShell rate is -10..10; 180 wpm ~= rate 0.
-      const rate = Math.max(-10, Math.min(10, Math.round((wpm - 180) / 20)));
-      const psText = text.replace(/'/g, "''");
-      const script =
-        `Add-Type -AssemblyName System.Speech; ` +
-        `$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; ` +
-        `$s.Rate = ${rate}; ` +
-        `$s.Speak('${psText}');`;
-      const encoded = Buffer.from(script, "utf16le").toString("base64");
-      await exec(
-        `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`,
-        { timeout }
-      );
-      return;
-    }
-
-    // Linux / other POSIX
-    const speaker = await this.resolveLinuxSpeaker();
-    if (!speaker) return;
-    const quoted = shellQuote(text);
-    if (speaker === "spd-say") {
-      // spd-say rate is -100..100; 180 wpm ~= 0.
-      const rate = Math.max(-100, Math.min(100, Math.round((wpm - 180) / 2)));
-      await exec(`spd-say -w -r ${rate} -- ${quoted}`, { timeout });
-    } else if (speaker === "festival") {
-      await exec(`echo ${quoted} | festival --tts`, { timeout, shell: "/bin/sh" });
-    } else {
-      await exec(`${speaker} -s ${wpm} ${quoted}`, { timeout });
-    }
-  }
-}
-
-const audioQueue = new AudioQueue();
-
-/* ------------------------------------------------------------------ *
- * Gamification engine
- * ------------------------------------------------------------------ */
-
-export function titleForLevel(level: number): string {
-  let title = TITLES[0].title;
-  for (const t of TITLES) if (level >= t.minLevel) title = t.title;
-  return title;
-}
-
-function addBadge(badge: string): boolean {
-  if (player.badges.includes(badge)) return false;
-  player.badges.push(badge);
-  return true;
-}
-
-interface XpResult {
-  awarded: number;
-  leveledUp: boolean;
-  newLevel: number;
-  newTitle: string;
-  titleChanged: boolean;
-  newBadges: string[];
-}
-
-function awardXp(amount: number): XpResult {
-  const beforeLevel = player.level;
-  const beforeTitle = player.title;
-  const beforeBadges = player.badges.length;
-
-  player.xp = Math.max(0, player.xp + amount);
-  player.level = Math.floor(player.xp / 100) + 1;
-  player.title = titleForLevel(player.level);
-
-  if (player.level >= 10) addBadge("Archwizard 🧙");
-  if (player.xp >= 500) addBadge("Grinder 💪");
-
-  schedulePersist();
-
-  return {
-    awarded: amount,
-    leveledUp: player.level > beforeLevel,
-    newLevel: player.level,
-    newTitle: player.title,
-    titleChanged: player.title !== beforeTitle,
-    newBadges: player.badges.slice(beforeBadges),
-  };
-}
-
-function record(entry: Omit<HistoryEntry, "at">): void {
-  sessionHistory.push({ at: new Date().toISOString(), ...entry });
-  if (sessionHistory.length > 500) sessionHistory.shift();
-}
-
-function xpBar(): string {
-  const into = player.xp % 100;
-  const filled = Math.round(into / 10);
-  return `[${"█".repeat(filled)}${"░".repeat(10 - filled)}] ${into}/100`;
-}
-
-function roadmapBar(): string {
-  const total = Math.max(1, activeRoadmap.total_steps);
-  const done = Math.min(total, Math.max(0, activeRoadmap.step_index));
-  const filled = Math.round((done / total) * 12);
-  return `[${"█".repeat(filled)}${"░".repeat(12 - filled)}] step ${done}/${total}`;
+  const all = [...openQuizzes.values()];
+  return all.length ? all[all.length - 1] : null;
 }
 
 /* ------------------------------------------------------------------ *
- * Teaching content generators
+ * Shared helpers
  * ------------------------------------------------------------------ */
 
-const AUDIENCE_LENS: Record<SkillLevel, { what: string; how: string; tradeoffs: string }> = {
-  Junior: {
-    what: "Plain-language definition, what you should expect to see on screen, and the one job this command does.",
-    how: "Flag-by-flag walkthrough with a safe example you can retype from memory.",
-    tradeoffs: "When to reach for this versus the GUI equivalent, and the single mistake beginners make most.",
-  },
-  Mid: {
-    what: "Where this fits in the wider toolchain and what state it mutates.",
-    how: "Composition with pipes/redirects, exit codes, and scripting-safe invocation.",
-    tradeoffs: "Performance, portability across shells/OSes, and idempotency concerns in CI.",
-  },
-  Senior: {
-    what: "The system-level contract: syscalls/IO touched, failure domains, blast radius.",
-    how: "Hardening: quoting, --, set -euo pipefail, least privilege, deterministic output for parsing.",
-    tradeoffs: "Operational cost, auditability, rollback story, and where this belongs in automation versus a purpose-built tool.",
-  },
-};
-
-function guessConcept(command: string): string {
-  const bin = command.trim().split(/\s+/)[0]?.replace(/^.*\//, "") ?? "shell";
-  return bin;
+function streakLine(): string {
+  const state = streakState();
+  const nudge =
+    state === "at-risk"
+      ? " — practise today to keep it"
+      : state === "broken"
+      ? " — lapsed, today restarts it"
+      : "";
+  return (
+    `Quiz streak: **${player.quizStreak}** 🔥 (best ${player.bestStreak})  \n` +
+    `Practice days: **${streak.dayStreak}** in a row${nudge} (best ${streak.bestDayStreak}, ${streak.totalDays} total)`
+  );
 }
 
-function mermaidFor(command: string, ok: boolean): string {
-  const bin = guessConcept(command);
+/* ------------------------------------------------------------------ *
+ * First run
+ *
+ * A new user had to already know that `list_roadmaps` existed. The first
+ * substantive response of a fresh install now carries the orientation, once,
+ * and then never again — a banner on every card would be noise by the third
+ * one.
+ * ------------------------------------------------------------------ */
+
+let onboardingShown = false;
+
+function onboarding(): string | null {
+  if (!firstRun || onboardingShown) return null;
+  onboardingShown = true;
   return [
-    "flowchart TD",
-    `    A["Shell parses: ${bin}"] --> B{"Binary on PATH?"}`,
-    '    B -- "no" --> E["127: command not found"]',
-    '    B -- "yes" --> C["fork + execve"]',
-    '    C --> D{"Args & permissions valid?"}',
-    '    D -- "no" --> F["non-zero exit + stderr"]',
-    '    D -- "yes" --> G["Process runs, writes stdout"]',
-    `    G --> H["Exit code ${ok ? "0 (success)" : "non-zero"}"]`,
-    `    H --> I["Roadmap: ${activeRoadmap.current_topic.replace(/"/g, "'")}"]`,
+    "> ### 👋 First run",
+    "> Nothing is saved yet, so here is the shape of it:",
+    `> 1. \`list_roadmaps\` — pick a track. There are ${allTracks().length}, and you can author your own.`,
+    "> 2. `get_next_roadmap_command` — it hands you a command. **You** run it, in your own terminal or through `run_teaching_command`.",
+    "> 3. `verify_step` — checks the outcome actually exists on your machine. That is what earns real XP; running a command is worth a token amount.",
+    "> 4. `review_due_items` — comes back later for whatever you got wrong. That is the part that turns practice into memory.",
+    `> Progress saves to \`${profilePath()}\`. Nothing leaves your machine.`,
   ].join("\n");
 }
 
-function pitfallsFor(command: string): string[] {
-  const generic = [
-    "Unquoted variables split on whitespace, so always quote `\"$VAR\"`.",
-    "Relative paths depend on your current directory; confirm with `pwd` first.",
-    "A zero exit code inside a pipeline can hide an earlier failure. Use `set -o pipefail`.",
-  ];
-  const bin = guessConcept(command);
-  const specific: Record<string, string[]> = {
-    rm: ["`rm -rf` has no undo and no trash, so dry-run the glob with `ls` first.", "A stray space in `rm -rf / path` is catastrophic."],
-    git: ["`git push --force` rewrites shared history; prefer `--force-with-lease`.", "Detached HEAD commits are easy to lose, so branch before experimenting."],
-    docker: ["Containers are ephemeral; unmounted data dies with them.", "`latest` is not a version. Pin digests for reproducibility."],
-    npm: ["`npm install` can drift lockfiles; use `npm ci` in CI.", "Global installs mask project-local version mismatches."],
-    chmod: ["`chmod 777` is almost never the fix. Narrow the owner or group instead."],
-    curl: ["Piping `curl` straight to a shell executes unreviewed code.", "Without `-f`, curl exits 0 on HTTP 500."],
-  };
-  return [...(specific[bin] ?? []), ...generic].slice(0, 4);
-}
-
-function docsFor(command: string): Array<{ label: string; url: string }> {
-  const bin = guessConcept(command);
-  const map: Record<string, Array<{ label: string; url: string }>> = {
-    git: [
-      { label: "Pro Git (free book)", url: "https://git-scm.com/book/en/v2" },
-      { label: "git reference", url: "https://git-scm.com/docs" },
-    ],
-    docker: [
-      { label: "Docker CLI reference", url: "https://docs.docker.com/reference/cli/docker/" },
-      { label: "Dockerfile best practices", url: "https://docs.docker.com/build/building/best-practices/" },
-    ],
-    npm: [
-      { label: "npm CLI docs", url: "https://docs.npmjs.com/cli/v10/commands" },
-    ],
-  };
-  return [
-    ...(map[bin] ?? []),
-    { label: `man page: ${bin}`, url: `https://man7.org/linux/man-pages/man1/${bin}.1.html` },
-    { label: "roadmap.sh (this track)", url: "https://roadmap.sh/roadmaps" },
-    { label: "Bash Reference Manual", url: "https://www.gnu.org/software/bash/manual/bash.html" },
-  ].slice(0, 4);
-}
-
-function buildQuiz(command: string, exitOk: boolean): PendingQuiz {
-  const bin = guessConcept(command);
-  const bank: PendingQuiz[] = [
-    {
-      question: `You ran \`${bin}\`. Which shell variable holds the exit code of the command that just finished?`,
-      choices: ["$?", "$!", "$0", "$#"],
-      answer: "$?",
-      explanation: "`$?` is the exit status of the most recently completed foreground command. 0 means success.",
-    },
-    {
-      question: `Before running \`${bin}\` destructively, what is the safest first move?`,
-      choices: [
-        "Run it with a dry-run/list flag first",
-        "Run it as root",
-        "Run it twice to be sure",
-        "Redirect stderr to /dev/null",
-      ],
-      answer: "Run it with a dry-run/list flag first",
-      explanation: "Previewing the affected set (dry-run, `ls`, `--dry-run`, `-n`) turns an irreversible action into a reviewable one.",
-    },
-    {
-      question: `In the pipeline \`${bin} ... | grep x\`, which exit code does the shell report by default?`,
-      choices: [
-        "The last command's (grep)",
-        "The first command's",
-        "The highest of the two",
-        "Always 0",
-      ],
-      answer: "The last command's (grep)",
-      explanation: "Without `set -o pipefail`, only the final command's status propagates, so earlier failures are masked.",
-    },
-  ];
-  const idx = (bin.length + activeRoadmap.step_index + (exitOk ? 0 : 1)) % bank.length;
-  return bank[idx];
-}
-
-/* ------------------------------------------------------------------ *
- * Roadmap command suggestions
- * ------------------------------------------------------------------ */
-
-const ROADMAP_COMMANDS: Record<string, string[]> = {
-  "Command Line Basics": [
-    "pwd",
-    "ls -lah",
-    "cd .. && pwd",
-    "mkdir -p practice/day1 && cd practice/day1",
-    "touch notes.txt && echo 'hello shell' > notes.txt",
-    "cat notes.txt",
-    "grep -n 'hello' notes.txt",
-    "cp notes.txt notes.bak && ls -l",
-    "mv notes.bak archive.txt",
-    "rm -i archive.txt",
-  ],
-  "Git and GitHub": [
-    "git --version",
-    "git init demo-repo && cd demo-repo",
-    "git status",
-    "git add -A && git commit -m 'chore: initial commit'",
-    "git log --oneline --graph --decorate --all",
-    "git switch -c feature/first-branch",
-    "git diff --stat",
-    "git restore --staged .",
-    "git remote -v",
-    "git push --force-with-lease",
-  ],
-  "Backend Developer": [
-    "node --version && npm --version",
-    "npm init -y",
-    "npm ci",
-    "npm run build --if-present",
-    "curl -fsS -o /dev/null -w '%{http_code}\\n' https://example.com",
-    "lsof -nP -iTCP -sTCP:LISTEN",
-    "docker compose config",
-    "docker compose up -d --build",
-    "docker compose logs --tail=100 -f",
-    "docker compose down -v",
-  ],
-  "DevOps": [
-    "uname -a",
-    "df -h",
-    "free -m || vm_stat",
-    "systemctl --failed || launchctl list | head",
-    "journalctl -p err -n 50 --no-pager",
-    "docker ps --format 'table {{.Names}}\\t{{.Status}}'",
-    "kubectl config current-context",
-    "kubectl get pods -A",
-    "terraform plan -out=tfplan",
-    "terraform apply tfplan",
-  ],
-};
-
-const DEFAULT_TRACK_FOR_CATEGORY: Record<Category, string> = {
-  "Role Based": "Backend Developer",
-  "Skill Based": "Git and GitHub",
-  "Absolute Beginners": "Command Line Basics",
-  "Best Practices": "DevOps",
-};
-
-function suggestCommand(): { command: string; rationale: string } {
-  const list =
-    ROADMAP_COMMANDS[activeRoadmap.roadmap_name] ??
-    ROADMAP_COMMANDS[DEFAULT_TRACK_FOR_CATEGORY[activeRoadmap.category]] ??
-    ROADMAP_COMMANDS["Command Line Basics"];
-  const idx = Math.min(list.length - 1, Math.max(0, activeRoadmap.step_index - 1));
-  return {
-    command: list[idx],
-    rationale: `Step ${activeRoadmap.step_index}/${activeRoadmap.total_steps} of "${activeRoadmap.roadmap_name}". Topic: ${activeRoadmap.current_topic}.`,
-  };
-}
-
-/* ------------------------------------------------------------------ *
- * Command execution with hotfix diagnostics
- * ------------------------------------------------------------------ */
-
-interface ExecOutcome {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  errorMessage?: string;
-}
-
-const DANGEROUS_PATTERNS: Array<{ re: RegExp; why: string }> = [
-  { re: /\brm\s+(-[a-zA-Z]*\s+)*-?[a-zA-Z]*[rf]/, why: "recursive/forced delete" },
-  { re: /\bmkfs(\.|\s)/, why: "filesystem format" },
-  { re: /\bdd\s+.*of=\/dev\//, why: "raw device write" },
-  { re: /:\(\)\s*\{.*\};\s*:/, why: "fork bomb" },
-  { re: />\s*\/dev\/sd[a-z]/, why: "raw disk overwrite" },
-  { re: /\bshutdown\b|\breboot\b|\bhalt\b/, why: "host power state change" },
-  { re: /\bchmod\s+-R\s+777\b/, why: "world-writable recursion" },
-  { re: /\bcurl\b[^|]*\|\s*(sudo\s+)?(ba)?sh/, why: "piping remote code into a shell" },
-  { re: /\bgit\s+push\b.*--force(?!-with-lease)/, why: "history-rewriting force push" },
-];
-
-export function screenDanger(command: string): string[] {
-  return DANGEROUS_PATTERNS.filter((p) => p.re.test(command)).map((p) => p.why);
-}
-
-async function runCommand(command: string, cwd?: string): Promise<ExecOutcome> {
-  try {
-    const { stdout, stderr } = await exec(command, {
-      timeout: 60_000,
-      maxBuffer: 1024 * 1024 * 4,
-      cwd: cwd || process.cwd(),
-      env: process.env,
-    });
-    return { ok: true, stdout, stderr, code: 0 };
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException & {
-      stdout?: string;
-      stderr?: string;
-      code?: number | string;
-      killed?: boolean;
-      signal?: string;
-    };
-    return {
-      ok: false,
-      stdout: e.stdout ?? "",
-      stderr: e.stderr ?? "",
-      code: typeof e.code === "number" ? e.code : null,
-      errorMessage: e.killed
-        ? `Process timed out or was killed (${e.signal ?? "timeout"}).`
-        : e.message,
-    };
-  }
-}
-
-function hotfixDiagnostic(command: string, outcome: ExecOutcome): string {
-  const bin = guessConcept(command);
-  const blob = `${outcome.stderr}\n${outcome.errorMessage ?? ""}`.toLowerCase();
-  const tips: string[] = [];
-
-  if (blob.includes("command not found") || outcome.code === 127) {
-    tips.push(`\`${bin}\` is not on your PATH. Install it, or check with \`command -v ${bin}\`.`);
-  }
-  if (blob.includes("permission denied")) {
-    tips.push("Permission denied. Check ownership with `ls -l`, and prefer fixing the file mode over `sudo`.");
-  }
-  if (blob.includes("no such file or directory")) {
-    tips.push("A path does not exist. Run `pwd` and `ls` to confirm where you actually are.");
-  }
-  if (blob.includes("timed out") || blob.includes("killed")) {
-    tips.push("The command exceeded the 60s tutor timeout. Long-running or interactive commands should be run in your own terminal.");
-  }
-  if (blob.includes("unexpected") || blob.includes("syntax error")) {
-    tips.push("Shell syntax error, usually an unbalanced quote, paren or stray backslash.");
-  }
-  if (blob.includes("eacces") || blob.includes("eperm")) {
-    tips.push("The OS refused the operation. You may be writing outside your user-owned directories.");
-  }
-  if (tips.length === 0) {
-    tips.push(`Exit code ${outcome.code ?? "unknown"}. Read the stderr text above literally, because it usually names the failing argument.`);
-    tips.push(`Re-read the contract with \`${bin} --help\` or \`man ${bin}\`.`);
-  }
-  tips.push("Reproduce in isolation: run the smallest version of the command, then add flags back one at a time.");
-
-  return [
-    "### 🛠️ Tutor Hotfix Diagnostic",
-    `**Command:** \`${command}\``,
-    `**Exit code:** \`${outcome.code ?? "n/a"}\``,
-    outcome.stderr.trim() ? "**stderr:**\n```\n" + outcome.stderr.trim().slice(0, 1500) + "\n```" : "",
-    outcome.errorMessage ? `**Runtime error:** ${outcome.errorMessage}` : "",
-    "",
-    "**Troubleshooting ladder:**",
-    ...tips.map((t, i) => `${i + 1}. ${t}`),
-    "",
-    "> Failures are curriculum. Nothing crashed. Read the diagnosis, change one variable, try again.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-/* ------------------------------------------------------------------ *
- * UI card rendering
- * ------------------------------------------------------------------ */
-
-function renderTeachingCard(
-  command: string,
-  outcome: ExecOutcome | null,
-  dryRun: boolean,
-  concept: string,
-  quiz: PendingQuiz,
-  xp: XpResult | null,
-  dangerReasons: string[]
-): string {
-  const lens = AUDIENCE_LENS[skillLevel];
-  const out: string[] = [];
-
-  out.push(`# 🥋 Miyagi · \`${command}\``);
-  out.push("");
-  out.push("## 🗺️ Roadmap Alignment");
-  out.push(
-    `**${activeRoadmap.category} → ${activeRoadmap.roadmap_name}**  \n` +
-      `Topic: **${activeRoadmap.current_topic}**  \n` +
-      `Progress: \`${roadmapBar()}\``
-  );
-  out.push("");
-
-  if (dangerReasons.length) {
-    out.push("## ⚠️ Safety Screen");
-    out.push(
-      dangerReasons.map((r) => `- Flagged: **${r}**`).join("\n") +
-        (dryRun ? "\n\n_Executed as a dry run. Nothing was changed._" : "")
-    );
-    out.push("");
-  }
-
-  out.push(`## 🧠 Concept: ${concept}`);
-  out.push(`**Audience level: ${skillLevel}**`);
-  out.push(`- **What:** ${lens.what}`);
-  out.push(`- **How:** ${lens.how}`);
-  out.push(`- **Trade-offs:** ${lens.tradeoffs}`);
-  out.push("");
-
-  out.push("## 🖥️ Execution");
-  if (dryRun || !outcome) {
-    out.push("**Mode:** `DRY RUN`. The command was parsed and explained but not executed.");
-    out.push("Copy-paste to run it yourself when ready:");
-    out.push("```bash\n" + command + "\n```");
-  } else if (outcome.ok) {
-    out.push(`**Mode:** \`EXECUTED\`. Exit code \`0\` ✅`);
-    const so = outcome.stdout.trim();
-    out.push("```\n" + (so ? so.slice(0, 4000) : "(no stdout)") + "\n```");
-    if (outcome.stderr.trim()) {
-      out.push("_stderr (non-fatal):_\n```\n" + outcome.stderr.trim().slice(0, 800) + "\n```");
-    }
-  } else {
-    out.push(hotfixDiagnostic(command, outcome));
-  }
-  out.push("");
-
-  out.push("## 📊 Mental Model");
-  out.push("```mermaid\n" + mermaidFor(command, outcome?.ok ?? true) + "\n```");
-  out.push("");
-
-  out.push("## 🕳️ Common Pitfalls");
-  out.push(pitfallsFor(command).map((p) => `- ${p}`).join("\n"));
-  out.push("");
-
-  out.push("## 📚 Curated Docs");
-  out.push(docsFor(command).map((d) => `- [${d.label}](${d.url})`).join("\n"));
-  out.push("");
-
-  out.push("## ❓ Active Recall Quiz");
-  out.push(`**${quiz.question}**`);
-  out.push(quiz.choices.map((c, i) => `${String.fromCharCode(65 + i)}. ${c}`).join("\n"));
-  out.push("");
-  out.push("_Answer with the `verify_quiz_answer` tool to bank XP and extend your streak._");
-  out.push("");
-
-  out.push("## 🏆 Player");
-  out.push(
-    `**${player.title}** · Level **${player.level}** · ${player.xp} XP  \n` +
-      `\`${xpBar()}\`  \n` +
-      `Streak: **${player.quizStreak}** 🔥 (best ${player.bestStreak})` +
-      (player.badges.length ? `  \nBadges: ${player.badges.join(" · ")}` : "")
-  );
-  if (xp) {
-    const bits = [`+${xp.awarded} XP`];
-    if (xp.leveledUp) bits.push(`**LEVEL UP → ${xp.newLevel}**`);
-    if (xp.titleChanged) bits.push(`new title: **${xp.newTitle}**`);
-    if (xp.newBadges.length) bits.push(`unlocked: ${xp.newBadges.join(", ")}`);
-    out.push(`> ${bits.join(" · ")}`);
-  }
-
-  return out.join("\n");
+/** Prepends the first-run orientation to a card, when there is one to show. */
+function withOnboarding(text: string): string {
+  const intro = onboarding();
+  return intro ? `${intro}\n\n${text}` : text;
 }
 
 function textResult(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
+function result<T extends Record<string, unknown>>(text: string, structured: T) {
+  return {
+    content: [{ type: "text" as const, text: withOnboarding(text) }],
+    structuredContent: structured,
+  };
+}
+
 /* ------------------------------------------------------------------ *
- * Server + tools
+ * Human confirmation
+ *
+ * `confirm_dangerous` was a flag the *model* filled in, which is not
+ * confirmation at all: a prompt-injected or over-eager assistant sets it as
+ * easily as a careful one. Where the client supports elicitation, the server
+ * asks the person directly and requires them to type the word, and no amount
+ * of model enthusiasm satisfies that. The flag remains only as the fallback
+ * for clients that cannot elicit, and is documented as such.
+ * ------------------------------------------------------------------ */
+
+const CONFIRM_WORD = "RUN";
+
+type ConfirmDecision =
+  | { authorised: true; by: "human" | "caller-flag" }
+  | { authorised: false; reason: string };
+
+function clientCanElicit(): boolean {
+  return Boolean(server.server.getClientCapabilities()?.elicitation);
+}
+
+async function askHuman(command: string, reasons: string[]): Promise<ConfirmDecision> {
+  try {
+    const answer = await server.server.elicitInput({
+      message:
+        `miyagi wants to run a command flagged as destructive:\n\n${command}\n\n` +
+        `Flagged for: ${reasons.join(", ")}.\n\n` +
+        `Read it. If you want it to run, type ${CONFIRM_WORD}. Anything else cancels.`,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          confirm: {
+            type: "string",
+            title: `Type ${CONFIRM_WORD} to execute`,
+            description: `Exactly "${CONFIRM_WORD}" authorises this command. Leave blank to cancel.`,
+          },
+        },
+        required: ["confirm"],
+      },
+    });
+
+    if (answer.action !== "accept") {
+      return { authorised: false, reason: `you ${answer.action === "decline" ? "declined" : "cancelled"} the confirmation` };
+    }
+    const typed = String(answer.content?.confirm ?? "").trim().toUpperCase();
+    if (typed !== CONFIRM_WORD) {
+      return {
+        authorised: false,
+        reason: `the confirmation did not match (expected ${CONFIRM_WORD}, got ${typed ? `"${typed}"` : "nothing"})`,
+      };
+    }
+    return { authorised: true, by: "human" };
+  } catch (err) {
+    // A client that advertises elicitation and then fails it must not become a
+    // way to execute something nobody approved. Failure means no.
+    log("elicitation failed:", (err as Error).message);
+    return { authorised: false, reason: "the confirmation prompt could not be delivered" };
+  }
+}
+
+/** The current track, resolved through the roadmap registry every time. */
+function currentTrack() {
+  return findTrack(activeRoadmap.roadmap_name, activeRoadmap.category);
+}
+
+interface Suggestion {
+  command: string;
+  topic: string;
+  note?: string;
+  rationale: string;
+  matched: boolean;
+  step: RoadmapStep;
+  /** The POSIX line was swapped for a PowerShell one. */
+  substituted: boolean;
+  /** Set when this host cannot run the step and there is no alternative. */
+  shellWarning: string | null;
+  /** The pass criterion, when the step has one. */
+  criterion: string | null;
+  alreadyVerified: boolean;
+}
+
+function suggestCommand(): Suggestion {
+  const lookup = currentTrack();
+  const step = stepAt(lookup.track, activeRoadmap.step_index);
+  const resolved = resolveStep(lookup.track, step);
+  return {
+    command: resolved.command,
+    topic: step.topic,
+    note: step.note,
+    matched: lookup.matched,
+    step,
+    substituted: resolved.substituted,
+    shellWarning: resolved.warning,
+    criterion: step.verify?.describe ?? null,
+    alreadyVerified: isVerified(lookup.track.name, activeRoadmap.step_index),
+    rationale: `Step ${activeRoadmap.step_index}/${activeRoadmap.total_steps} of "${lookup.track.name}". Topic: ${activeRoadmap.current_topic}.`,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Checkpoints
+ * ------------------------------------------------------------------ */
+
+/** XP for a verified outcome. Deliberately more than running the command. */
+const XP_COMMAND_ATTEMPT = 10;
+const XP_CHECKPOINT_PASS = 30;
+
+interface CheckpointOutcome {
+  result: CheckpointResult;
+  criterion: string;
+  /** First time this step has passed, so XP is owed. */
+  firstPass: boolean;
+  advanced: boolean;
+  xp: XpResult | null;
+}
+
+/**
+ * Verifies the current step and books the consequences: XP once, advance once.
+ * Re-verifying an already-passed step confirms it and pays nothing, because
+ * paying twice would recreate the problem checkpoints exist to solve.
+ */
+async function verifyCurrentStep(cwd?: string): Promise<CheckpointOutcome | null> {
+  const lookup = currentTrack();
+  const stepIndex = Math.min(lookup.track.steps.length, Math.max(1, activeRoadmap.step_index));
+  if (activeRoadmap.total_steps !== lookup.track.steps.length || activeRoadmap.step_index !== stepIndex) {
+    activeRoadmap.total_steps = lookup.track.steps.length;
+    activeRoadmap.step_index = stepIndex;
+    schedulePersist();
+  }
+  const step = stepAt(lookup.track, stepIndex);
+  if (!step.verify) return null;
+
+  const result = await runCheckpoint(step.verify, { cwd });
+  let firstPass = false;
+  let advanced = false;
+  let xp: XpResult | null = null;
+
+  if (result.passed) {
+    firstPass = markVerified(lookup.track.name, stepIndex);
+    if (firstPass) {
+      xp = awardXp(XP_CHECKPOINT_PASS);
+      touchDay();
+    }
+    if (stepIndex < lookup.track.steps.length) {
+      activeRoadmap.step_index = stepIndex + 1;
+      activeRoadmap.current_topic = stepAt(lookup.track, activeRoadmap.step_index).topic;
+      advanced = true;
+      schedulePersist();
+    }
+  } else if (!result.unusable) {
+    // A failed checkpoint is the clearest possible signal to practise again.
+    ensureReviewItem("command", binOf(step.command), step.command);
+  }
+
+  record({
+    kind: "checkpoint",
+    label: `${lookup.track.name} step ${stepIndex}: ${step.verify.describe}`,
+    bin: binOf(step.command),
+    correct: result.passed,
+    detail: result.passed
+      ? firstPass
+        ? "passed for the first time"
+        : "passed again (already credited)"
+      : `did not pass: ${result.reason}`,
+    xpAwarded: xp?.awarded ?? 0,
+  });
+
+  return { result, criterion: step.verify.describe, firstPass, advanced, xp };
+}
+
+function renderCheckpoint(outcome: CheckpointOutcome): string {
+  const lines = [outcome.result.passed ? "## ✅ Checkpoint Passed" : "## ⛔ Checkpoint Not Passed"];
+  lines.push(`**Criterion:** ${outcome.criterion}`);
+  if (outcome.result.passed) {
+    lines.push(
+      outcome.firstPass
+        ? `Verified on your machine, so this is credited: **+${XP_CHECKPOINT_PASS} XP**.`
+        : "Verified again. Already credited, so no XP this time — the ledger pays for outcomes, not for repeats.",
+    );
+    if (outcome.advanced) {
+      lines.push(`Advanced to step **${activeRoadmap.step_index}/${activeRoadmap.total_steps}**.`);
+    }
+  } else {
+    lines.push(`**Result:** ${outcome.result.reason}`);
+    if (outcome.result.output) lines.push("```\n" + outcome.result.output + "\n```");
+    lines.push(
+      outcome.result.unusable
+        ? "_The probe itself could not run, so nothing is being held against you._"
+        : "_The step stays where it is. Re-run the command, then `verify_step` again — the checkpoint is the whole point: XP is for the outcome, not for the attempt._",
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Shared shape for the player block in structured output. */
+const PLAYER_OUT = {
+  xp: z.number(),
+  level: z.number(),
+  title: z.string(),
+  quiz_streak: z.number(),
+  best_quiz_streak: z.number(),
+  day_streak: z.number(),
+  badges: z.array(z.string()),
+};
+
+function playerOut() {
+  return {
+    xp: player.xp,
+    level: player.level,
+    title: player.title,
+    quiz_streak: player.quizStreak,
+    best_quiz_streak: player.bestStreak,
+    day_streak: streak.dayStreak,
+    badges: [...player.badges],
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Server
  * ------------------------------------------------------------------ */
 
 const server = new McpServer({
   name: "miyagi",
-  version: "1.0.0",
+  version: VERSION,
 });
 
-/* ---- quick_config -------------------------------------------------- */
+/* ---- quick_config -------------------------------------------------- *
+ * Voice settings used to live in a second `configure_voice` tool that
+ * duplicated these fields. One tool now owns configuration, including the
+ * test phrase, because two ways to set the same value is two things to keep
+ * in sync and one of them will drift.
+ * ------------------------------------------------------------------ */
 server.registerTool(
   "quick_config",
   {
     title: "Quick Config",
+    annotations: {
+      title: "Quick Config",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
-      "Instantly switch the target skill level (Junior/Mid/Senior), roadmap category, roadmap track, or topic via simple key-value parameters.",
+      "Set the teaching depth (Junior/Mid/Senior), roadmap category, track, topic, voice, and session mode (drill, ride-along, or focus). Call with no arguments to read the current configuration.",
     inputSchema: {
-      skill_level: z.enum(["Junior", "Mid", "Senior"]).optional()
+      skill_level: z
+        .enum(["Junior", "Mid", "Senior"])
+        .optional()
         .describe("Depth of explanation used in every teaching card."),
-      category: z
-        .enum(["Role Based", "Skill Based", "Absolute Beginners", "Best Practices"])
-        .optional(),
-      roadmap_name: z.string().optional().describe('e.g. "Backend Developer", "Git and GitHub"'),
+      category: z.enum(CATEGORIES as [Category, ...Category[]]).optional(),
+      roadmap_name: z
+        .string()
+        .optional()
+        .describe('Track name. Use `list_roadmaps` for valid values, e.g. "Backend Developer".'),
       current_topic: z.string().optional(),
       voice_enabled: z.boolean().optional(),
       words_per_minute: z.number().int().min(80).max(400).optional(),
+      test_phrase: z.string().optional().describe("Speak this immediately to test the audio setup."),
+      mode: z
+        .string()
+        .optional()
+        .describe("Session intensity: drill (full lesson), ride-along (quiet default), or focus (refusals only)."),
       reset_progress: z
         .boolean()
         .optional()
-        .describe("Wipe saved XP, level, streak and badges back to first-run state."),
+        .describe("Wipe saved XP, level, streaks, mastery and review queue back to first-run state."),
     },
   },
   async (args) => {
     const changes: string[] = [];
+    const warnings: string[] = [];
+
     if (args.reset_progress) {
       resetProgress();
-      changes.push("**progress reset** to level 1, 0 XP");
+      changes.push("**progress reset** to level 1, 0 XP, empty review queue");
     }
     if (args.skill_level) {
-      skillLevel = args.skill_level;
-      changes.push(`skill level → **${skillLevel}**`);
+      session.skillLevel = args.skill_level;
+      changes.push(`skill level → **${session.skillLevel}**`);
     }
     if (args.category) {
       activeRoadmap.category = args.category;
-      if (!args.roadmap_name && !ROADMAP_COMMANDS[activeRoadmap.roadmap_name]) {
+      // Switching category with no track named moves to that category's default,
+      // but only when the current track does not exist any more.
+      if (!args.roadmap_name && !findTrack(activeRoadmap.roadmap_name).matched) {
         activeRoadmap.roadmap_name = DEFAULT_TRACK_FOR_CATEGORY[args.category];
+        changes.push(`track → **${activeRoadmap.roadmap_name}** (category default)`);
       }
       changes.push(`category → **${activeRoadmap.category}**`);
     }
     if (args.roadmap_name) {
-      activeRoadmap.roadmap_name = args.roadmap_name;
+      const lookup = findTrack(args.roadmap_name, activeRoadmap.category);
+      activeRoadmap.roadmap_name = lookup.matched ? lookup.track.name : args.roadmap_name;
+      activeRoadmap.total_steps = lookup.track.steps.length;
+      activeRoadmap.step_index = Math.min(activeRoadmap.step_index, activeRoadmap.total_steps);
       changes.push(`roadmap → **${activeRoadmap.roadmap_name}**`);
+      if (!lookup.matched) {
+        warnings.push(
+          `No track named **${args.roadmap_name}** exists, so suggestions will come from **${lookup.track.name}**.` +
+            (lookup.suggestions.length ? ` Did you mean: ${lookup.suggestions.join(", ")}?` : "") +
+            " `list_roadmaps` shows every track, including your own.",
+        );
+      }
     }
     if (args.current_topic) {
       activeRoadmap.current_topic = args.current_topic;
@@ -866,21 +558,150 @@ server.registerTool(
       voice.words_per_minute = args.words_per_minute;
       changes.push(`speech rate → **${voice.words_per_minute} wpm**`);
     }
+    if (args.mode !== undefined) {
+      const parsed = parseMode(args.mode);
+      if (!parsed) {
+        warnings.push(
+          `Unknown mode **${args.mode}**. Use \`drill\`, \`ride-along\`, or \`focus\`.`,
+        );
+      } else {
+        const req = requestModeChange(session.mode, parsed);
+        session.mode = req.mode;
+        if (req.changed) {
+          changes.push(`mode → **${req.policy.label}** — ${req.policy.when}`);
+          if (!req.policy.speak) audioQueue.clear();
+        }
+      }
+    }
+
+    const counts = reviewCounts();
+    const status = [
+      `- Skill level: **${session.skillLevel}**`,
+      `- Category: **${activeRoadmap.category}**`,
+      `- Roadmap: **${activeRoadmap.roadmap_name}** (\`${roadmapBar(activeRoadmap)}\`)`,
+      `- Topic: **${activeRoadmap.current_topic}**`,
+      `- Voice: **${voice.enabled ? "on" : "off"}** @ ${voice.words_per_minute} wpm via ${audioQueue.engineName()}`,
+      `- Mode: **${policyFor(session.mode).label}** — ${policyFor(session.mode).when}`,
+      `- Platform: **${os.platform()}** · queue depth ${audioQueue.pending}`,
+      `- Review queue: **${counts.due}** due of ${counts.total}`,
+      `- Profile: \`${profilePath()}\``,
+    ].join("\n");
+
+    if (args.test_phrase && voice.enabled) audioQueue.enqueue(args.test_phrase);
 
     if (!changes.length) {
-      return textResult(
-        `## ⚙️ Quick Config (unchanged)\n- Skill level: **${skillLevel}**\n- Category: **${activeRoadmap.category}**\n- Roadmap: **${activeRoadmap.roadmap_name}**\n- Topic: **${activeRoadmap.current_topic}**\n- Voice: **${voice.enabled ? "on" : "off"}** @ ${voice.words_per_minute} wpm`
-      );
+      return textResult(`## ⚙️ Configuration\n${status}`);
     }
 
     schedulePersist();
     record({ kind: "config", label: "quick_config", detail: changes.join("; "), xpAwarded: 0 });
-    audioQueue.enqueue(`Configuration updated. Teaching at ${skillLevel} level on ${activeRoadmap.roadmap_name}.`);
+    if (!args.test_phrase) {
+      audioQueue.enqueue(
+        `Configuration updated. Teaching at ${session.skillLevel} level on ${activeRoadmap.roadmap_name}.`,
+      );
+    }
 
     return textResult(
-      `## ⚙️ Quick Config Applied\n${changes.map((c) => `- ${c}`).join("\n")}\n\n**Now teaching:** ${activeRoadmap.category} → ${activeRoadmap.roadmap_name} → ${activeRoadmap.current_topic} at **${skillLevel}** depth.`
+      [
+        "## ⚙️ Quick Config Applied",
+        changes.map((c) => `- ${c}`).join("\n"),
+        warnings.length ? "\n### ⚠️ Warnings\n" + warnings.map((w) => `- ${w}`).join("\n") : "",
+        "",
+        "### Now",
+        status,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
-  }
+  },
+);
+
+/* ---- list_roadmaps -------------------------------------------------- */
+server.registerTool(
+  "list_roadmaps",
+  {
+    title: "List Roadmaps",
+    annotations: {
+      title: "List Roadmaps",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    description:
+      "List every available track, built-in and user-authored, with its category and step count. Call this before setting a roadmap name: previously an unknown name silently fell back to Command Line Basics.",
+    inputSchema: {
+      category: z.enum(CATEGORIES as [Category, ...Category[]]).optional(),
+      reload: z
+        .boolean()
+        .default(false)
+        .describe("Re-read user tracks from disk before listing, after you have edited them."),
+    },
+    outputSchema: {
+      tracks: z.array(
+        z.object({
+          name: z.string(),
+          category: z.string(),
+          description: z.string(),
+          steps: z.number(),
+          source: z.string(),
+          active: z.boolean(),
+        }),
+      ),
+      user_dir: z.string(),
+      loaded_user_tracks: z.number(),
+      skipped_files: z.array(z.string()),
+    },
+  },
+  async ({ category, reload }) => {
+    const report = reload ? await loadUserTracks() : null;
+    const tracks = allTracks()
+      .filter((t) => !category || t.category === category)
+      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+
+    const rows = tracks.map((t) => ({
+      name: t.name,
+      category: t.category,
+      description: t.description,
+      steps: t.steps.length,
+      source: t.source,
+      active: t.name === activeRoadmap.roadmap_name,
+    }));
+
+    const byCategory = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const list = byCategory.get(r.category) ?? [];
+      list.push(r);
+      byCategory.set(r.category, list);
+    }
+
+    const lines = ["# 🗺️ Available Roadmaps", ""];
+    for (const [cat, list] of byCategory) {
+      lines.push(`## ${cat}`);
+      for (const r of list) {
+        lines.push(
+          `- ${r.active ? "▶️" : "  "} **${r.name}** · ${r.steps} steps · ${r.source}  \n  ${r.description}`,
+        );
+      }
+      lines.push("");
+    }
+    lines.push("## Authoring your own");
+    lines.push(
+      `Drop a JSON file in \`${roadmapsDir()}\` and it appears here. A file whose \`name\` matches a built-in shadows it, so you can retune a track without forking the server.`,
+    );
+    lines.push("```json\n" + exampleTrackJson() + "\n```");
+    if (report?.skipped.length) {
+      lines.push("", "### ⚠️ Skipped files", report.skipped.map((s) => `- ${s}`).join("\n"));
+    }
+    lines.push("", "_Set one with `quick_config` or `set_active_roadmap`._");
+
+    return result(lines.join("\n"), {
+      tracks: rows,
+      user_dir: roadmapsDir(),
+      loaded_user_tracks: report?.loaded ?? rows.filter((r) => r.source === "user").length,
+      skipped_files: report?.skipped ?? [],
+    });
+  },
 );
 
 /* ---- set_active_roadmap -------------------------------------------- */
@@ -888,37 +709,46 @@ server.registerTool(
   "set_active_roadmap",
   {
     title: "Set Active Roadmap",
+    annotations: {
+      title: "Set Active Roadmap",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
-      "Configure the active roadmap: category, roadmap name, current topic node, and progress step counters.",
+      "Configure the active roadmap: category, track name, current topic, and progress counters. An unknown track name is reported rather than silently substituted.",
     inputSchema: {
-      category: z.enum([
-        "Role Based",
-        "Skill Based",
-        "Absolute Beginners",
-        "Best Practices",
-      ]),
+      category: z.enum(CATEGORIES as [Category, ...Category[]]),
       roadmap_name: z.string(),
-      current_topic: z.string(),
+      current_topic: z.string().optional(),
       step_index: z.number().int().min(1).default(1),
-      total_steps: z.number().int().min(1).default(10),
+      total_steps: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Ignored. The track's own step count is used so a caller cannot inflate the counter to farm checkpoint XP."),
     },
   },
   async (args) => {
+    const lookup = findTrack(args.roadmap_name, args.category);
     activeRoadmap.category = args.category;
-    activeRoadmap.roadmap_name = args.roadmap_name;
-    activeRoadmap.current_topic = args.current_topic;
-    activeRoadmap.total_steps = args.total_steps;
-    activeRoadmap.step_index = Math.min(args.step_index, args.total_steps);
+    activeRoadmap.roadmap_name = lookup.matched ? lookup.track.name : args.roadmap_name;
+    activeRoadmap.total_steps = lookup.track.steps.length;
+    activeRoadmap.step_index = Math.min(args.step_index, activeRoadmap.total_steps);
+    activeRoadmap.current_topic =
+      args.current_topic ?? stepAt(lookup.track, activeRoadmap.step_index).topic;
 
     schedulePersist();
     record({
       kind: "concept",
-      label: `Roadmap set: ${args.roadmap_name}`,
-      detail: `${args.category} → ${args.current_topic} (step ${activeRoadmap.step_index}/${activeRoadmap.total_steps})`,
+      label: `Roadmap set: ${activeRoadmap.roadmap_name}`,
+      detail: `${args.category} → ${activeRoadmap.current_topic} (step ${activeRoadmap.step_index}/${activeRoadmap.total_steps})`,
       xpAwarded: 0,
     });
     audioQueue.enqueue(
-      `Roadmap set to ${args.roadmap_name}. Current topic: ${args.current_topic}. Step ${activeRoadmap.step_index} of ${activeRoadmap.total_steps}.`
+      `Roadmap set to ${activeRoadmap.roadmap_name}. Current topic: ${activeRoadmap.current_topic}. Step ${activeRoadmap.step_index} of ${activeRoadmap.total_steps}.`,
     );
 
     const next = suggestCommand();
@@ -926,15 +756,26 @@ server.registerTool(
       [
         "## 🗺️ Active Roadmap Updated",
         `**Category:** ${activeRoadmap.category}`,
-        `**Roadmap:** ${activeRoadmap.roadmap_name}`,
+        `**Roadmap:** ${activeRoadmap.roadmap_name}${lookup.matched ? "" : " ⚠️"}`,
         `**Topic:** ${activeRoadmap.current_topic}`,
-        `**Progress:** \`${roadmapBar()}\``,
+        `**Progress:** \`${roadmapBar(activeRoadmap)}\``,
+        lookup.matched
+          ? ""
+          : [
+              "",
+              `### ⚠️ No track called **${args.roadmap_name}**`,
+              `Suggestions will come from **${lookup.track.name}** until you set a real one.` +
+                (lookup.suggestions.length ? ` Did you mean: ${lookup.suggestions.join(", ")}?` : ""),
+              "Run `list_roadmaps` to see every track, or author your own as JSON.",
+            ].join("\n"),
         "",
         "**Suggested next command:**",
         "```bash\n" + next.command + "\n```",
-      ].join("\n")
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
-  }
+  },
 );
 
 /* ---- get_next_roadmap_command -------------------------------------- */
@@ -942,13 +783,30 @@ server.registerTool(
   "get_next_roadmap_command",
   {
     title: "Get Next Roadmap Command",
+    annotations: {
+      title: "Get Next Roadmap Command",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     description:
-      "Suggest the next copy-pasteable terminal command for the active roadmap milestone. Optionally advance the step counter.",
+      "Suggest the next copy-pasteable command for the active roadmap milestone. Optionally advance the step counter.",
     inputSchema: {
-      advance: z
-        .boolean()
-        .default(false)
-        .describe("Advance step_index by one before suggesting."),
+      advance: z.boolean().default(false).describe("Advance step_index by one before suggesting."),
+    },
+    outputSchema: {
+      command: z.string(),
+      topic: z.string(),
+      step_index: z.number(),
+      total_steps: z.number(),
+      roadmap_name: z.string(),
+      roadmap_exists: z.boolean(),
+      flagged: z.array(z.string()),
+      review_due: z.number(),
+      criterion: z.string().nullable(),
+      already_verified: z.boolean(),
+      shell_warning: z.string().nullable(),
     },
   },
   async ({ advance }) => {
@@ -956,126 +814,63 @@ server.registerTool(
       activeRoadmap.step_index += 1;
       schedulePersist();
     }
-    const { command, rationale } = suggestCommand();
-    const danger = screenDanger(command);
+    const next = suggestCommand();
+    activeRoadmap.current_topic = next.topic;
+    const screening = screenCommand(next.command);
+    const counts = reviewCounts();
 
-    audioQueue.enqueue(
-      `Next up on ${activeRoadmap.roadmap_name}: ${rationale}. Try the suggested command.`
-    );
-    record({ kind: "concept", label: "Suggested command", detail: command, xpAwarded: 0 });
+    audioQueue.enqueue(`Next up on ${activeRoadmap.roadmap_name}: ${next.rationale}. Try the suggested command.`);
+    record({ kind: "concept", label: "Suggested command", detail: next.command, xpAwarded: 0, bin: binOf(next.command) });
 
-    return textResult(
-      [
-        "## ➡️ Next Roadmap Command",
-        rationale,
-        `Progress: \`${roadmapBar()}\``,
-        "",
-        "```bash\n" + command + "\n```",
-        danger.length
-          ? `\n⚠️ **Safety note:** flagged for _${danger.join(", ")}_. Run with \`dry_run: true\` first.`
-          : "",
-        "",
-        "Run it through `run_teaching_command` to get the full teaching card and earn XP.",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
-  }
-);
+    const text = [
+      "## ➡️ Next Roadmap Command",
+      next.rationale,
+      `Progress: \`${roadmapBar(activeRoadmap)}\``,
+      "",
+      "```bash\n" + next.command + "\n```",
+      next.substituted
+        ? "_(PowerShell equivalent, because this track is written for a POSIX shell and you are on Windows.)_"
+        : "",
+      next.note ? `> ${next.note}` : "",
+      next.criterion
+        ? `\n🔍 **Checkpoint:** this step passes when ${next.criterion}.` +
+          (next.alreadyVerified
+            ? " You have already passed it once, so re-passing pays nothing."
+            : ` Run the command yourself, then \`verify_step\` — that is what earns the ${XP_CHECKPOINT_PASS} XP.`)
+        : "\n_No checkpoint on this step, so it is worth attempt XP only._",
+      next.shellWarning ? `\n⚠️ **${next.shellWarning}**` : "",
+      next.matched
+        ? ""
+        : `\n⚠️ **${activeRoadmap.roadmap_name}** is not a known track, so this came from **${currentTrack().track.name}**. Run \`list_roadmaps\`.`,
+      screening.reasons.length
+        ? `\n⚠️ **Safety note:** flagged for _${screening.reasons.join(", ")}_.` +
+          (screening.blocked
+            ? " This will not execute through the tutor at all."
+            : " It will dry-run unless you pass `confirm_dangerous: true`.")
+        : "",
+      counts.due
+        ? `\n♻️ **${counts.due}** item${counts.due === 1 ? "" : "s"} due for review. \`review_due_items\` first pays better than new ground.`
+        : "",
+      "",
+      "Run it through `run_teaching_command` to get the full teaching card and earn XP.",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
-/* ---- configure_voice ----------------------------------------------- */
-server.registerTool(
-  "configure_voice",
-  {
-    title: "Configure Voice",
-    description: "Toggle tutor audio on/off and adjust the speech rate in words per minute.",
-    inputSchema: {
-      enabled: z.boolean().optional(),
-      words_per_minute: z.number().int().min(80).max(400).optional(),
-      test_phrase: z.string().optional().describe("Speak this immediately to test the setup."),
-    },
+    return result(text, {
+      command: next.command,
+      topic: next.topic,
+      step_index: activeRoadmap.step_index,
+      total_steps: activeRoadmap.total_steps,
+      roadmap_name: activeRoadmap.roadmap_name,
+      roadmap_exists: next.matched,
+      flagged: screening.reasons,
+      review_due: counts.due,
+      criterion: next.criterion,
+      already_verified: next.alreadyVerified,
+      shell_warning: next.shellWarning,
+    });
   },
-  async (args) => {
-    if (typeof args.enabled === "boolean") {
-      voice.enabled = args.enabled;
-      if (!voice.enabled) audioQueue.clear();
-    }
-    if (args.words_per_minute) voice.words_per_minute = args.words_per_minute;
-    schedulePersist();
-
-    const platform = os.platform();
-    const engine =
-      platform === "darwin"
-        ? "`say`"
-        : platform === "win32"
-        ? "PowerShell `System.Speech.Synthesis`"
-        : "`spd-say` (falls back to espeak/festival)";
-
-    if (voice.enabled) {
-      audioQueue.enqueue(
-        args.test_phrase ?? `Voice enabled at ${voice.words_per_minute} words per minute.`
-      );
-    }
-
-    return textResult(
-      [
-        "## 🔊 Voice Configuration",
-        `- Audio: **${voice.enabled ? "ON" : "OFF"}**`,
-        `- Rate: **${voice.words_per_minute} wpm**`,
-        `- Platform: **${platform}** → engine ${engine}`,
-        `- Queue depth: **${audioQueue.pending}**`,
-        "",
-        "_Speech is queued FIFO so lines never overlap, and a missing TTS binary degrades silently instead of crashing._",
-      ].join("\n")
-    );
-  }
-);
-
-/* ---- get_user_stats ------------------------------------------------ */
-server.registerTool(
-  "get_user_stats",
-  {
-    title: "Get User Stats",
-    description:
-      "Return the current player profile: XP, level, title, quiz streak, unlocked badges, and roadmap progress.",
-    inputSchema: {
-      speak: z.boolean().default(false).describe("Read the stats aloud."),
-    },
-  },
-  async ({ speak }) => {
-    const nextLevelAt = player.level * 100;
-    const summary = [
-      "# 🏆 Player Stats",
-      "",
-      `**${player.title}** · Level **${player.level}**`,
-      `XP: **${player.xp}** \`${xpBar()}\` (${nextLevelAt - player.xp} to level ${player.level + 1})`,
-      `Quiz streak: **${player.quizStreak}** 🔥 · Best: **${player.bestStreak}**`,
-      `Badges: ${player.badges.length ? player.badges.join(" · ") : "_none yet_"}`,
-      "",
-      "## 🗺️ Roadmap",
-      `${activeRoadmap.category} → **${activeRoadmap.roadmap_name}**`,
-      `Topic: ${activeRoadmap.current_topic}`,
-      `\`${roadmapBar()}\``,
-      "",
-      "## ⚙️ Session",
-      `- Teaching depth: **${skillLevel}**`,
-      `- Voice: **${voice.enabled ? "on" : "off"}** @ ${voice.words_per_minute} wpm`,
-      `- History entries: **${sessionHistory.length}**`,
-      "",
-      "## 🎖️ Title Ladder",
-      ...TITLES.map(
-        (t) =>
-          `- ${player.level >= t.minLevel ? "✅" : "🔒"} **${t.title}** · level ${t.minLevel}+`
-      ),
-    ].join("\n");
-
-    if (speak) {
-      audioQueue.enqueue(
-        `You are a ${player.title}, level ${player.level}, with ${player.xp} experience points and a quiz streak of ${player.quizStreak}.`
-      );
-    }
-    return textResult(summary);
-  }
 );
 
 /* ---- run_teaching_command ------------------------------------------ */
@@ -1084,67 +879,247 @@ server.registerTool(
   {
     title: "Run Teaching Command",
     description:
-      "Execute (or dry-run) a shell command and return a full teaching card: roadmap alignment, level-appropriate What/How/Trade-offs, a Mermaid flowchart, pitfalls, curated docs, and an active-recall quiz. Errors return a Tutor Hotfix Diagnostic instead of throwing.",
+      "Execute (or dry-run) a shell command and return a teaching card. Depth follows the session mode (drill / ride-along / focus): drill is the full card plus quiz and speech; quieter modes defer recall rather than dropping it. If the command is the current roadmap step and that step has a checkpoint, the outcome is verified on disk afterwards and XP is awarded for the verified outcome. Failures return a Hotfix Diagnostic instead of throwing.",
+    annotations: {
+      title: "Run Teaching Command",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       command: z.string().min(1).describe("The shell command to teach and optionally run."),
-      concept: z
-        .string()
-        .optional()
-        .describe("Concept label for the card, e.g. 'Filesystem navigation'."),
+      concept: z.string().optional().describe("Override the concept label on the card."),
       is_dangerous: z
         .boolean()
         .default(false)
-        .describe("Caller-asserted danger flag. Dangerous commands are forced into dry-run."),
-      dry_run: z
+        .describe("Caller-asserted danger flag. Forces a dry run; never authorises one."),
+      dry_run: z.boolean().default(false).describe("Explain without executing."),
+      confirm_dangerous: z
         .boolean()
         .default(false)
-        .describe("Explain without executing."),
+        .describe(
+          "Fallback confirmation for clients that cannot elicit input from the user. Where the client supports elicitation the human is asked directly and this flag is not sufficient on its own. Never authorises a catastrophic shape.",
+        ),
       cwd: z.string().optional().describe("Working directory for execution."),
+      timeout_ms: z
+        .number()
+        .int()
+        .min(1000)
+        .max(600_000)
+        .optional()
+        .describe(`Execution timeout. Defaults to ${DEFAULT_TIMEOUT_MS} ms.`),
+    },
+    outputSchema: {
+      command: z.string(),
+      executed: z.boolean(),
+      exit_code: z.number().nullable(),
+      duration_ms: z.number().nullable(),
+      truncated: z.boolean(),
+      timed_out: z.boolean(),
+      flagged: z.array(z.string()),
+      blocked: z.boolean(),
+      quiz_id: z.string(),
+      xp_awarded: z.number(),
+      confirmed_by: z.string().nullable(),
+      checkpoint: z
+        .object({
+          criterion: z.string(),
+          passed: z.boolean(),
+          first_pass: z.boolean(),
+          advanced: z.boolean(),
+        })
+        .nullable(),
+      player: z.object(PLAYER_OUT),
     },
   },
   async (args) => {
     const command = args.command.trim();
-    const detected = screenDanger(command);
-    const dangerReasons = args.is_dangerous
-      ? ["caller-flagged as dangerous", ...detected]
-      : detected;
-    const dryRun = args.dry_run || args.is_dangerous || detected.length > 0;
+    const bin = binOf(command);
+    const screening = screenCommand(command);
 
-    let outcome: ExecOutcome | null = null;
-    if (!dryRun) {
-      outcome = await runCommand(command, args.cwd);
+    // Order matters: the screen's own verdict decides, then the caller's flag
+    // can only ever make execution less likely, never more.
+    let executed = !args.dry_run && !args.is_dangerous;
+    let dryRunReason: string | null = args.dry_run
+      ? "requested"
+      : args.is_dangerous
+      ? "caller flagged it as dangerous"
+      : null;
+
+    let confirmedBy: "human" | "caller-flag" | null = null;
+
+    if (screening.blocked) {
+      executed = false;
+      dryRunReason = "the safety screen refuses this shape outright";
+    } else if (screening.reasons.length && executed) {
+      // Ask the person where we can. Only fall back to the caller's flag when
+      // the client genuinely cannot put a prompt in front of a human.
+      if (clientCanElicit()) {
+        const decision = await askHuman(command, screening.reasons);
+        if (decision.authorised) {
+          confirmedBy = decision.by;
+        } else {
+          executed = false;
+          dryRunReason = `flagged as destructive and ${decision.reason}`;
+        }
+      } else if (args.confirm_dangerous) {
+        confirmedBy = "caller-flag";
+      } else {
+        executed = false;
+        dryRunReason = "flagged as destructive and not confirmed";
+      }
     }
 
-    const concept = args.concept ?? `\`${guessConcept(command)}\` in ${activeRoadmap.current_topic}`;
-    const quiz = buildQuiz(command, outcome?.ok ?? true);
-    pendingQuiz = quiz;
+    if (executed && looksInteractive(command)) {
+      executed = false;
+      dryRunReason =
+        "this command waits for input or never exits, so it would only hit the timeout — run it in your own terminal";
+    }
 
-    // XP: +15 for a real execution (success or an instructive failure is still practice).
-    const xp = outcome ? awardXp(15) : null;
+    const outcome = executed
+      ? await runCommand(command, { cwd: args.cwd, timeoutMs: args.timeout_ms })
+      : null;
+
+    // Attempt XP follows the session mode. Exposure in ride-along pays little;
+    // focus pays nothing; drill still pays less than a verified checkpoint.
+    const xp: XpResult | null = outcome ? awardXp(commandXp(session.mode)) : null;
+    const day: DayResult | null = outcome ? touchDay() : null;
+    if (outcome) {
+      recordMastery(bin, { attempt: true, success: outcome.ok });
+      // Practised commands enter the review queue so they come back later.
+      ensureReviewItem("command", bin, command);
+    }
+
+    // Verify the outcome when this was the current step's command and that step
+    // has a checkpoint. Nothing is verified for a dry run: there is no outcome.
+    const suggestion = suggestCommand();
+    const checkpoint =
+      outcome && suggestion.step.verify && isSameCommand(command, suggestion.command)
+        ? await verifyCurrentStep(args.cwd)
+        : null;
+
+    // Where the bank has nothing about this command, ask the host model for a
+    // question and cache it, so the bank grows towards what this user practises.
+    // No sampling, a refusal or anything unparseable falls back to the bank.
+    const generated =
+      !bankCovers(bin) && samplingAvailable()
+        ? await generateQuestion({
+            bin,
+            command,
+            level: session.skillLevel,
+            topic: activeRoadmap.current_topic,
+            avoid: session.recentQuizIds,
+          })
+        : null;
+
+    const question =
+      generated ??
+      pickQuestion({
+        bin,
+        skillLevel: session.skillLevel,
+        recentIds: session.recentQuizIds,
+        salt: `${activeRoadmap.step_index}:${player.xp}`,
+      });
+    ensureReviewItem("quiz", question.id, question.question);
+
+    const policy = policyFor(session.mode);
+    const dangerous = Boolean(screening.reasons.length);
+    const askNow = policy.quiz;
+    const quiz = askNow ? openQuiz(ask(question, bin, { salt: String(quizCounter + 1) })) : null;
 
     record({
       kind: "command",
       label: command,
-      detail: dryRun
-        ? "dry run, not executed"
-        : outcome!.ok
-        ? "executed successfully (exit 0)"
-        : `failed (exit ${outcome!.code ?? "n/a"}), hotfix diagnostic issued`,
+      bin,
+      detail: !outcome
+        ? `not executed (${dryRunReason ?? "dry run"})`
+        : outcome.ok
+        ? `executed successfully (exit 0, ${outcome.durationMs} ms)`
+        : `failed (exit ${outcome.code ?? "n/a"}), hotfix diagnostic issued`,
       xpAwarded: xp?.awarded ?? 0,
     });
 
-    // Queue clean speech: narration, never raw stdout.
-    const spoken = dryRun
-      ? `Dry run for ${guessConcept(command)}. ${AUDIENCE_LENS[skillLevel].what} Here is the quiz: ${quiz.question}`
-      : outcome!.ok
-      ? `Command succeeded. ${concept}. You earned 15 experience points. Quiz time: ${quiz.question}`
-      : `The command failed. Do not worry, here is the hotfix diagnostic. ${quiz.question}`;
-    audioQueue.enqueue(spoken);
+    if (policy.speak) {
+      const spoken = !outcome
+        ? `Not executed. ${dryRunReason ?? "Dry run"}.` + (quiz ? ` Here is the quiz: ${quiz.question}` : "")
+        : outcome.ok
+        ? `Command succeeded. You earned ${xp?.awarded ?? 0} experience points.` +
+          (quiz ? ` Quiz time: ${quiz.question}` : "")
+        : `The command failed. Do not worry, here is the hotfix diagnostic.` +
+          (quiz ? ` ${quiz.question}` : "");
+      audioQueue.enqueue(spoken);
+    }
 
-    return textResult(
-      renderTeachingCard(command, outcome, dryRun, concept, quiz, xp, dangerReasons)
-    );
-  }
+    const counts = reviewCounts();
+    const progressChange = {
+      leveledUp: Boolean(xp?.leveledUp || checkpoint?.xp?.leveledUp),
+      titleChanged: Boolean(xp?.titleChanged || checkpoint?.xp?.titleChanged),
+      newBadges: [...(xp?.newBadges ?? []), ...(checkpoint?.xp?.newBadges ?? []), ...(day?.newBadges ?? [])],
+      streakMilestone: Boolean(day?.newDay && (day.dayStreak === 3 || day.dayStreak === 7 || day.dayStreak === 30)),
+    };
+
+    let text: string;
+    if (!shouldSurfaceCard(session.mode, dangerous)) {
+      text = [
+        `# 🥋 Miyagi · \`${command}\``,
+        "",
+        "_Focus mode: queued for review, nothing else. `quick_config` with `mode: \"ride-along\"` or `\"drill\"` when you have attention to spare._",
+        checkpoint ? "\n" + renderCheckpoint(checkpoint) : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    } else {
+      text = renderTeachingCard({
+        command,
+        outcome,
+        executed: Boolean(outcome),
+        dryRunReason,
+        concept: args.concept ?? null,
+        quiz: quiz ? { quiz, token: quiz.token } : null,
+        xp,
+        day,
+        screening,
+        skillLevel: session.skillLevel,
+        roadmap: activeRoadmap,
+        player,
+        streakLine: streakLine(),
+        reviewDue: counts.due,
+        surface: surfaceFor(session.mode, dangerous),
+        showXpFootnote: showsXpFootnote(session.mode, progressChange),
+      });
+    }
+
+    if (checkpoint && shouldSurfaceCard(session.mode, dangerous)) {
+      // Above the quiz, because whether the outcome exists is the headline.
+      const marker = "## ❓ Active Recall Quiz";
+      const block = renderCheckpoint(checkpoint) + "\n\n";
+      text = text.includes(marker) ? text.replace(marker, block + marker) : text + "\n\n" + block;
+    }
+
+    return result(text, {
+      command,
+      executed: Boolean(outcome),
+      exit_code: outcome?.code ?? null,
+      duration_ms: outcome?.durationMs ?? null,
+      truncated: outcome?.truncated ?? false,
+      timed_out: outcome?.timedOut ?? false,
+      flagged: screening.reasons,
+      blocked: screening.blocked,
+      quiz_id: quiz?.token ?? "",
+      xp_awarded: (xp?.awarded ?? 0) + (checkpoint?.xp?.awarded ?? 0),
+      confirmed_by: confirmedBy,
+      checkpoint: checkpoint
+        ? {
+            criterion: checkpoint.criterion,
+            passed: checkpoint.result.passed,
+            first_pass: checkpoint.firstPass,
+            advanced: checkpoint.advanced,
+          }
+        : null,
+      player: playerOut(),
+    });
+  },
 );
 
 /* ---- verify_quiz_answer -------------------------------------------- */
@@ -1152,110 +1127,606 @@ server.registerTool(
   "verify_quiz_answer",
   {
     title: "Verify Quiz Answer",
+    annotations: {
+      title: "Verify Quiz Answer",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     description:
-      "Evaluate the learner's answer to the most recent active-recall quiz. Updates streak, XP and badges, and speaks feedback.",
+      "Grade the learner's answer to a quiz. Updates streaks, XP, badges, per-command mastery and the spaced-repetition schedule. Answers the most recent question when no quiz_id is given.",
     inputSchema: {
-      answer: z
+      answer: z.string().min(1).describe("A letter (A-D) or the answer text."),
+      quiz_id: z
         .string()
-        .min(1)
-        .describe("The learner's answer, either a letter (A-D) or the answer text."),
+        .optional()
+        .describe("The quiz_id printed on the card. Defaults to the most recent question."),
+    },
+    outputSchema: {
+      correct: z.boolean(),
+      quiz_id: z.string().nullable(),
+      answer: z.string(),
+      xp_awarded: z.number(),
+      next_review_in: z.string().nullable(),
+      player: z.object(PLAYER_OUT),
     },
   },
-  async ({ answer }) => {
-    if (!pendingQuiz) {
-      return textResult(
-        "## ❓ No Active Quiz\nRun `run_teaching_command` first. Every teaching card ends with a question."
+  async ({ answer, quiz_id }) => {
+    const quiz = resolveQuiz(quiz_id);
+    if (!quiz) {
+      return result(
+        [
+          "## ❓ No Active Quiz",
+          quiz_id
+            ? `No open question matches \`${quiz_id}\`. It may have been answered already, or aged out.`
+            : "Run `run_teaching_command` or `review_due_items` first. Every card ends with a question.",
+        ].join("\n"),
+        {
+          correct: false,
+          quiz_id: quiz_id ?? null,
+          answer,
+          xp_awarded: 0,
+          next_review_in: null,
+          player: playerOut(),
+        },
       );
     }
 
-    const quiz = pendingQuiz;
+    openQuizzes.delete(quiz.token);
     const given = answer.trim();
-    const letter = given.replace(/[).\s]/g, "").toUpperCase();
-    let chosen: string | null = null;
-    if (/^[A-D]$/.test(letter)) {
-      chosen = quiz.choices[letter.charCodeAt(0) - 65] ?? null;
-    }
-    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9$?!#]/g, "");
-    const correct =
-      (chosen !== null && norm(chosen) === norm(quiz.answer)) ||
-      norm(given) === norm(quiz.answer);
+    const deterministic = grade(quiz, given);
+    let correct = deterministic.correct;
+    let modelReason: string | null = null;
 
-    let xp: XpResult;
-    const newBadges: string[] = [];
+    // Only ever upgrade. A learner who explains the idea correctly in their own
+    // words should not lose to a string comparison; a model must never be able
+    // to take away an answer that already matched, because that failure would
+    // be invisible to the learner and impossible to argue with.
+    if (!correct) {
+      const verdict = await gradeProse({
+        question: quiz.question,
+        expected: quiz.answer,
+        explanation: quiz.explanation,
+        given,
+      });
+      if (verdict?.correct) {
+        correct = true;
+        modelReason = verdict.reason;
+      }
+    }
+
+    // Answer latency is the cheap half of a real scheduler: a slow correct
+    // answer is weaker recall than a fast one and deserves a shorter interval.
+    const elapsedMs = Date.now() - Date.parse(quiz.askedAt);
+    const hesitant = Number.isFinite(elapsedMs) && elapsedMs > 45_000;
+
+    recordMastery(quiz.bin, { quiz: true, correct });
+    const scheduled = gradeReviewItem("quiz", quiz.id, correct, { hesitant });
+    const day = touchDay();
 
     if (correct) {
       player.quizStreak += 1;
       player.bestStreak = Math.max(player.bestStreak, player.quizStreak);
+      // Streak multiplier caps at 2x: past that, XP stops meaning practice and
+      // starts meaning "answered the easy ones in a row".
       const multiplier = 1 + Math.min(1, Math.floor(player.quizStreak / 3) * 0.25);
-      const amount = Math.round(25 * multiplier);
-      xp = awardXp(amount);
+      const base = quiz.review ? 30 : 25; // review is worth more; it is the harder recall
+      const amount = Math.round(base * multiplier);
+      const xp = awardXp(amount);
 
-      if (player.quizStreak >= 3 && addBadge("Sharpshooter 🔥")) newBadges.push("Sharpshooter 🔥");
-      if (player.quizStreak >= 5 && addBadge("Deadeye 🎯")) newBadges.push("Deadeye 🎯");
-      if (player.quizStreak >= 10 && addBadge("Unbreakable 💎")) newBadges.push("Unbreakable 💎");
+      const newBadges: string[] = [];
+      const badgeFor = (n: number, badge: string) => {
+        if (player.quizStreak >= n && !player.badges.includes(badge)) {
+          player.badges.push(badge);
+          newBadges.push(badge);
+        }
+      };
+      badgeFor(3, "Sharpshooter 🔥");
+      badgeFor(5, "Deadeye 🎯");
+      badgeFor(10, "Unbreakable 💎");
+      if (newBadges.length) schedulePersist();
 
       record({
-        kind: "quiz",
+        kind: quiz.review ? "review" : "quiz",
         label: quiz.question,
+        bin: quiz.bin,
+        correct: true,
         detail: `Correct (${quiz.answer}), streak ${player.quizStreak}, x${multiplier}`,
         xpAwarded: amount,
       });
 
       audioQueue.enqueue(
         `Correct! ${quiz.explanation} You earned ${amount} experience points. Your streak is ${player.quizStreak}.` +
-          (xp.leveledUp ? ` Level up! You are now a ${player.title}.` : "")
+          (xp.leveledUp ? ` Level up! You are now a ${player.title}.` : ""),
       );
 
       const lines = [
-        "# ✅ Correct!",
+        quiz.review ? "# ✅ Correct — review cleared" : "# ✅ Correct!",
         "",
         `**Answer:** ${quiz.answer}`,
+        modelReason ? `**Judged by meaning:** ${modelReason}` : "",
         `**Why:** ${quiz.explanation}`,
         "",
-        `+**${xp.awarded} XP** (base 25 × ${multiplier} streak multiplier)`,
-        `Streak: **${player.quizStreak}** 🔥 · Best: **${player.bestStreak}**`,
-        `**${player.title}** · Level **${player.level}** · ${player.xp} XP \`${xpBar()}\``,
-      ];
-      if (xp.leveledUp) lines.push("", `## 🎉 LEVEL UP → **${player.level}**`);
-      if (xp.titleChanged) lines.push(`New title unlocked: **${player.title}**`);
+        `+**${xp.awarded} XP** (base ${base} × ${multiplier} streak multiplier)`,
+        hesitant ? "_Took a while, so this comes back sooner than a fast answer would._" : "",
+        playerBlock(player, streakLine()),
+      ].filter(Boolean);
+      if (scheduled) {
+        lines.push(
+          "",
+          `♻️ Scheduled again in **${relative(scheduled.dueAt).replace(/^in /, "")}** (box ${scheduled.box} of ${REVIEW_INTERVALS_DAYS.length - 1}).`,
+        );
+      }
+      const note = xpFootnote(xp, day);
+      if (note) lines.push("", note);
       if (newBadges.length) lines.push(`Badges unlocked: ${newBadges.join(" · ")}`);
-      lines.push("", "_Keep going. Call `get_next_roadmap_command` for the next milestone._");
+      lines.push("", "_`get_next_roadmap_command` for new ground, `review_due_items` for what is due._");
 
-      pendingQuiz = null;
-      return textResult(lines.join("\n"));
+      return result(lines.join("\n"), {
+        correct: true,
+        quiz_id: quiz.token,
+        answer: given,
+        xp_awarded: xp.awarded,
+        next_review_in: scheduled?.dueAt ?? null,
+        player: playerOut(),
+      });
     }
 
     const lostStreak = player.quizStreak;
     player.quizStreak = 0;
-    xp = awardXp(5); // consolation XP for attempting
+    const xp = awardXp(5); // consolation XP for attempting
 
     record({
-      kind: "quiz",
+      kind: quiz.review ? "review" : "quiz",
       label: quiz.question,
+      bin: quiz.bin,
+      correct: false,
       detail: `Incorrect (answered "${given}", correct: ${quiz.answer}), streak reset from ${lostStreak}`,
       xpAwarded: 5,
     });
 
     audioQueue.enqueue(
-      `Not quite. The correct answer is ${quiz.answer}. ${quiz.explanation} Your streak resets, but you keep 5 experience points for trying.`
+      `Not quite. The correct answer is ${quiz.answer}. ${quiz.explanation} Your streak resets, but you keep 5 experience points for trying, and this one comes back in ten minutes.`,
     );
 
-    pendingQuiz = null;
-    return textResult(
-      [
-        "# ❌ Not Quite",
+    const lines = [
+      "# ❌ Not Quite",
+      "",
+      `**You answered:** ${given}`,
+      `**Correct answer:** ${quiz.answer}`,
+      `**Why:** ${quiz.explanation}`,
+      "",
+      `+**5 XP** for the attempt.` + (lostStreak ? ` Streak reset from **${lostStreak}** → 0.` : ""),
+      playerBlock(player, streakLine()),
+    ];
+    if (scheduled) {
+      lines.push(
         "",
-        `**You answered:** ${given}`,
-        `**Correct answer:** ${quiz.answer}`,
-        `**Why:** ${quiz.explanation}`,
+        `♻️ Back in the queue **${relative(scheduled.dueAt)}** (box 0). Missing it is how it gets scheduled, not a penalty.`,
+      );
+    }
+    const note = xpFootnote(xp, day);
+    if (note) lines.push("", note);
+    lines.push("", "_Say the answer out loud before you check next time. That is what makes recall stick._");
+
+    return result(lines.join("\n"), {
+      correct: false,
+      quiz_id: quiz.token,
+      answer: given,
+      xp_awarded: 5,
+      next_review_in: scheduled?.dueAt ?? null,
+      player: playerOut(),
+    });
+  },
+);
+
+/* ---- verify_step ---------------------------------------------------- *
+ * The honest scoreboard. XP used to be paid for a tool call returning, which
+ * meant the server had run the command and the learner may never have touched
+ * a keyboard. This runs a read-only probe and pays for the outcome.
+ * ------------------------------------------------------------------ */
+server.registerTool(
+  "verify_step",
+  {
+    title: "Verify Step",
+    description:
+      "Check whether the current roadmap step's intended outcome actually exists on disk, using a read-only probe. Passing awards XP once and advances the step; failing explains what is missing and leaves the step where it is.",
+    annotations: {
+      title: "Verify Step",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      cwd: z.string().optional().describe("Directory to check in. Defaults to the server's cwd."),
+    },
+    outputSchema: {
+      has_checkpoint: z.boolean(),
+      passed: z.boolean(),
+      criterion: z.string().nullable(),
+      first_pass: z.boolean(),
+      advanced: z.boolean(),
+      xp_awarded: z.number(),
+      step_index: z.number(),
+      total_steps: z.number(),
+      verified_steps: z.number(),
+      player: z.object(PLAYER_OUT),
+    },
+  },
+  async ({ cwd }) => {
+    const lookup = currentTrack();
+    const stepIndex = activeRoadmap.step_index;
+    const step = stepAt(lookup.track, stepIndex);
+
+    if (!step.verify) {
+      const gradeable = verifiableSteps(lookup.track);
+      const text = [
+        "## 🔍 No Checkpoint For This Step",
+        `Step ${stepIndex} of **${lookup.track.name}** (\`${step.command}\`) is informational: there is no outcome on disk to check.`,
         "",
-        `+**5 XP** for the attempt.` + (lostStreak ? ` Streak reset from **${lostStreak}** → 0.` : ""),
-        `**${player.title}** · Level **${player.level}** · ${player.xp} XP \`${xpBar()}\``,
+        gradeable
+          ? `${gradeable} of ${lookup.track.steps.length} steps in this track are checkpointed.`
+          : "This track has no checkpoints at all yet.",
         "",
-        "_Re-run the command and say the answer out loud before checking. That's what makes recall stick._",
-      ].join("\n")
+        "_Add one by authoring the track yourself — a `verify` command and a `describe` line is all it takes. `list_roadmaps` shows the shape._",
+      ].join("\n");
+      return result(text, {
+        has_checkpoint: false,
+        passed: false,
+        criterion: null,
+        first_pass: false,
+        advanced: false,
+        xp_awarded: 0,
+        step_index: stepIndex,
+        total_steps: activeRoadmap.total_steps,
+        verified_steps: verifiedCount(lookup.track.name),
+        player: playerOut(),
+      });
+    }
+
+    const outcome = await verifyCurrentStep(cwd);
+    if (!outcome) {
+      // Unreachable given the guard above, but returning a shaped answer beats
+      // throwing at a learner who did nothing wrong.
+      return result("## 🔍 Nothing to verify", {
+        has_checkpoint: false,
+        passed: false,
+        criterion: null,
+        first_pass: false,
+        advanced: false,
+        xp_awarded: 0,
+        step_index: stepIndex,
+        total_steps: activeRoadmap.total_steps,
+        verified_steps: verifiedCount(lookup.track.name),
+        player: playerOut(),
+      });
+    }
+
+    audioQueue.enqueue(
+      outcome.result.passed
+        ? outcome.firstPass
+          ? `Checkpoint passed. ${outcome.criterion}. You earned ${XP_CHECKPOINT_PASS} experience points for the outcome, not the attempt.`
+          : `Checkpoint still passes. Already credited.`
+        : `Checkpoint not passed. ${outcome.result.reason}`,
     );
-  }
+
+    const next = outcome.advanced ? suggestCommand() : null;
+    const text = [
+      `# 🔍 Checkpoint · ${lookup.track.name} step ${stepIndex}`,
+      "",
+      renderCheckpoint(outcome),
+      "",
+      `Progress: \`${roadmapBar(activeRoadmap)}\` · verified **${verifiedCount(lookup.track.name)}/${verifiableSteps(lookup.track)}** checkpointed steps`,
+      outcome.result.passed ? playerBlock(player, streakLine()) : "",
+      next
+        ? ["", "**Next up:**", "```bash\n" + next.command + "\n```", next.criterion ? `_Passes when: ${next.criterion}._` : ""]
+            .filter(Boolean)
+            .join("\n")
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return result(text, {
+      has_checkpoint: true,
+      passed: outcome.result.passed,
+      criterion: outcome.criterion,
+      first_pass: outcome.firstPass,
+      advanced: outcome.advanced,
+      xp_awarded: outcome.xp?.awarded ?? 0,
+      step_index: activeRoadmap.step_index,
+      total_steps: activeRoadmap.total_steps,
+      verified_steps: verifiedCount(lookup.track.name),
+      player: playerOut(),
+    });
+  },
+);
+
+/* ---- review_due_items ---------------------------------------------- *
+ * The feature the exported notes already recommended and the server did not
+ * have: XP that turns into retention rather than a number that goes up.
+ * ------------------------------------------------------------------ */
+server.registerTool(
+  "review_due_items",
+  {
+    title: "Review Due Items",
+    annotations: {
+      title: "Review Due Items",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    description:
+      "Start a spaced-repetition session: the questions and commands whose interval has elapsed, weakest and most overdue first. Answer each with verify_quiz_answer.",
+    inputSchema: {
+      limit: z.number().int().min(1).max(10).default(3).describe("How many questions to ask now."),
+      include_commands: z
+        .boolean()
+        .default(true)
+        .describe("Also list practised commands that are due for a re-run."),
+    },
+    outputSchema: {
+      asked: z.array(z.object({ quiz_id: z.string(), question: z.string() })),
+      commands_due: z.array(z.string()),
+      due_total: z.number(),
+      queue_total: z.number(),
+      next_due_at: z.string().nullable(),
+    },
+  },
+  async ({ limit, include_commands }) => {
+    const counts = reviewCounts();
+    const dueQuizzes = due("quiz", limit);
+    const dueCommands = include_commands ? due("command", 5) : [];
+
+    if (!dueQuizzes.length && !dueCommands.length) {
+      const next = nextDueAt();
+      const text = [
+        "## ♻️ Nothing Due",
+        counts.total
+          ? `The queue holds **${counts.total}** item${counts.total === 1 ? "" : "s"}, and the next one is due **${next ? relative(next) : "later"}**.`
+          : "The queue is empty. Run a few commands and answer their quizzes; anything you touch gets scheduled.",
+        "",
+        `Schedule: ${reviewLadder()}. A miss drops an item to box 0, not to zero progress.`,
+        "",
+        "_New ground is the right move right now: `get_next_roadmap_command`._",
+      ].join("\n");
+      return result(text, {
+        asked: [],
+        commands_due: [],
+        due_total: 0,
+        queue_total: counts.total,
+        next_due_at: next,
+      });
+    }
+
+    const asked: Array<{ quiz_id: string; question: string }> = [];
+    const blocks: string[] = [];
+
+    for (const item of dueQuizzes) {
+      const question = questionById(item.ref);
+      if (!question) continue; // A bank entry removed by an upgrade: skip, do not fail.
+      const open = openQuiz(ask(question, question.bins[0] ?? "shell", {
+        review: true,
+        salt: `review:${quizCounter + 1}`,
+      }));
+      asked.push({ quiz_id: open.token, question: open.question });
+      blocks.push(
+        [
+          `### Due ${relative(item.dueAt)} · box ${item.box} · ${item.reps} reps, ${item.lapses} lapses`,
+          quizBlock({ quiz: open, token: open.token }),
+        ].join("\n"),
+      );
+    }
+
+    const lines = [
+      "# ♻️ Spaced Repetition",
+      "",
+      `**${counts.due}** of ${counts.total} items are due. Asking ${asked.length} now.`,
+      `Correct answers are worth 30 XP before multipliers, more than a fresh quiz, because recalling something cold is the harder skill.`,
+      "",
+      ...blocks,
+    ];
+
+    if (dueCommands.length) {
+      lines.push(
+        "",
+        "## 🔁 Commands Due for a Re-run",
+        "Muscle memory decays like anything else. Re-run these through `run_teaching_command`:",
+        dueCommands
+          .map((c) => `- \`${c.label}\` — last practised ${relative(c.lastAt)}, box ${c.box}`)
+          .join("\n"),
+      );
+    }
+
+    lines.push("", `_Schedule: ${reviewLadder()}._`);
+
+    audioQueue.enqueue(
+      `Review time. ${counts.due} items are due. First question: ${asked[0]?.question ?? "none"}`,
+    );
+    record({
+      kind: "review",
+      label: "Review session started",
+      detail: `${asked.length} questions asked, ${counts.due} due`,
+      xpAwarded: 0,
+    });
+
+    return result(lines.join("\n"), {
+      asked,
+      commands_due: dueCommands.map((c) => c.label),
+      due_total: counts.due,
+      queue_total: counts.total,
+      next_due_at: nextDueAt(),
+    });
+  },
+);
+
+/* ---- get_user_stats ------------------------------------------------ */
+server.registerTool(
+  "get_user_stats",
+  {
+    title: "Get User Stats",
+    annotations: {
+      title: "Get User Stats",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    description:
+      "The player profile: XP, level, title, quiz and practice-day streaks, badges, roadmap position, per-command mastery, weak spots, and review queue state.",
+    inputSchema: {
+      speak: z.boolean().default(false).describe("Read the summary aloud."),
+      include_mastery: z.boolean().default(true).describe("Include the full per-command table."),
+    },
+    outputSchema: {
+      player: z.object(PLAYER_OUT),
+      roadmap: z.object({
+        category: z.string(),
+        name: z.string(),
+        topic: z.string(),
+        step_index: z.number(),
+        total_steps: z.number(),
+        exists: z.boolean(),
+      }),
+      streak: z.object({
+        day_streak: z.number(),
+        best_day_streak: z.number(),
+        total_days: z.number(),
+        state: z.string(),
+      }),
+      review: z.object({ total: z.number(), due: z.number(), next_due_at: z.string().nullable() }),
+      weak_spots: z.array(z.object({ bin: z.string(), rate: z.number().nullable(), attempts: z.number() })),
+      lifetime: z.object({
+        commands: z.number(),
+        quizzes: z.number(),
+        quizzes_correct: z.number(),
+        days: z.number(),
+      }),
+    },
+  },
+  async ({ speak, include_mastery }) => {
+    const entries = await readHistory();
+    const stats = summarise(entries);
+    const counts = reviewCounts();
+    const next = nextDueAt();
+    const lookup = currentTrack();
+    const weak = weakSpots();
+    const strong = strongSpots();
+    const rows = masteryRows().sort((a, b) => b.attempts + b.quizAttempts - (a.attempts + a.quizAttempts));
+
+    const pct = (r: number | null) => (r === null ? "—" : `${Math.round(r * 100)}%`);
+    const nextLevelAt = player.level * 100;
+
+    const lines = [
+      "# 🏆 Player Stats",
+      "",
+      `**${player.title}** · Level **${player.level}**`,
+      `XP: **${player.xp}** \`${xpBar(player.xp)}\` (${nextLevelAt - player.xp} to level ${player.level + 1})`,
+      streakLine(),
+      `Badges: ${player.badges.length ? player.badges.join(" · ") : "_none yet_"}`,
+      "",
+      "## 🗺️ Roadmap",
+      `${activeRoadmap.category} → **${activeRoadmap.roadmap_name}**${lookup.matched ? "" : " ⚠️ (not a known track)"}`,
+      `Topic: ${activeRoadmap.current_topic}`,
+      `\`${roadmapBar(activeRoadmap)}\``,
+      "",
+      "## ♻️ Review Queue",
+      `**${counts.due}** due now of ${counts.total} scheduled (${counts.dueQuiz} questions, ${counts.dueCommand} commands).`,
+      next ? `Next item due ${relative(next)}.` : "_Nothing scheduled ahead._",
+      "",
+      "## 📈 Lifetime",
+      `- Practice days: **${stats.days}** · first recorded ${relative(stats.firstAt)}`,
+      `- Commands practised: **${stats.commands}**`,
+      `- Quizzes: **${stats.quizzesCorrect}/${stats.quizzes}** correct${stats.quizzes ? ` (${Math.round((stats.quizzesCorrect / stats.quizzes) * 100)}%)` : ""}`,
+      `- Review sessions logged: **${stats.reviews}**`,
+      "",
+    ];
+
+    if (weak.length) {
+      lines.push(
+        "## 🎯 Weakest",
+        "Enough attempts to be a real signal, and still under 80%:",
+        weak.map((w) => `- \`${w.bin}\` — ${pct(w.rate)} over ${w.attempts + w.quizAttempts} attempts`).join("\n"),
+        "",
+      );
+    }
+    if (strong.length) {
+      lines.push(
+        "## 💪 Strongest",
+        strong.map((w) => `- \`${w.bin}\` — ${pct(w.rate)}`).join("\n"),
+        "",
+      );
+    }
+    if (include_mastery && rows.length) {
+      lines.push(
+        "## 📊 Per-command Mastery",
+        "| Command | Runs | Clean | Quizzes | Correct | Rate | Last |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        ...rows
+          .slice(0, 25)
+          .map(
+            (r) =>
+              `| \`${r.bin}\` | ${r.attempts} | ${r.successes} | ${r.quizAttempts} | ${r.quizCorrect} | ${pct(r.rate)} | ${relative(r.lastAt)} |`,
+          ),
+        "",
+      );
+    }
+
+    lines.push(
+      "## ⚙️ Session",
+      `- Teaching depth: **${session.skillLevel}**`,
+      `- Mode: **${policyFor(session.mode).label}**`,
+      `- Voice: **${voice.enabled ? "on" : "off"}** @ ${voice.words_per_minute} wpm`,
+      `- Profile: \`${profilePath()}\``,
+      `- History: \`${historyPath()}\` (${stats.total} events)`,
+      `- Checkpoints verified: **${verified.size}** across all tracks (${verifiedCount(lookup.track.name)} in this one)`,
+      `- Model assistance: **${samplingAvailable() ? "available" : "not offered by this client"}**` +
+        (generatedCount() ? ` · ${generatedCount()} generated questions in play (${cachedCount()} cached)` : ""),
+      trackShellWarning(lookup.track) ? `- ⚠️ ${trackShellWarning(lookup.track)}` : "",
+      "",
+      "## 🎖️ Title Ladder",
+      ...titleLadder().map(
+        (t) => `- ${player.level >= t.minLevel ? "✅" : "🔒"} **${t.title}** · level ${t.minLevel}+`,
+      ),
+    );
+
+    if (speak) {
+      audioQueue.enqueue(
+        `You are a ${player.title}, level ${player.level}, with ${player.xp} experience points. ` +
+          `Your practice streak is ${streak.dayStreak} days, and ${counts.due} items are due for review.` +
+          (weak.length ? ` Your weakest command right now is ${weak[0].bin}.` : ""),
+      );
+    }
+
+    return result(lines.join("\n"), {
+      player: playerOut(),
+      roadmap: {
+        category: activeRoadmap.category,
+        name: activeRoadmap.roadmap_name,
+        topic: activeRoadmap.current_topic,
+        step_index: activeRoadmap.step_index,
+        total_steps: activeRoadmap.total_steps,
+        exists: lookup.matched,
+      },
+      streak: {
+        day_streak: streak.dayStreak,
+        best_day_streak: streak.bestDayStreak,
+        total_days: streak.totalDays,
+        state: streakState(),
+      },
+      review: { total: counts.total, due: counts.due, next_due_at: next },
+      weak_spots: weak.map((w) => ({ bin: w.bin, rate: w.rate, attempts: w.attempts + w.quizAttempts })),
+      lifetime: {
+        commands: stats.commands,
+        quizzes: stats.quizzes,
+        quizzes_correct: stats.quizzesCorrect,
+        days: stats.days,
+      },
+    });
+  },
 );
 
 /* ---- export_roadmap_notes ------------------------------------------ */
@@ -1263,41 +1734,58 @@ server.registerTool(
   "export_roadmap_notes",
   {
     title: "Export Roadmap Notes",
+    annotations: {
+      title: "Export Roadmap Notes",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
-      "Write a clean ROADMAP_PROGRESS.md summary of the session: roadmap position, player stats, and every concept and command covered.",
+      "Write a ROADMAP_PROGRESS.md review sheet: roadmap position, player stats, mastery, what is due for review, and the practice log. Reads the durable history, so it is correct after a restart.",
     inputSchema: {
       output_path: z
         .string()
         .default("ROADMAP_PROGRESS.md")
         .describe("File path (relative paths resolve against the server's cwd)."),
       append: z.boolean().default(false).describe("Append instead of overwriting."),
+      scope: z
+        .enum(["session", "lifetime"])
+        .default("lifetime")
+        .describe("Log this session only, or everything on record."),
     },
   },
-  async ({ output_path, append }) => {
+  async ({ output_path, append, scope }) => {
     const target = path.isAbsolute(output_path)
       ? output_path
       : path.resolve(process.cwd(), output_path);
 
-    const commands = sessionHistory.filter((h) => h.kind === "command");
-    const quizzes = sessionHistory.filter((h) => h.kind === "quiz");
-    const concepts = sessionHistory.filter((h) => h.kind === "concept");
-    const correct = quizzes.filter((q) => q.detail.startsWith("Correct")).length;
+    await flushHistory();
+    const entries = await readHistory(
+      scope === "session" ? { since: session.startedAt } : {},
+    );
+    const stats = summarise(entries);
+    const commands = entries.filter((h) => h.kind === "command");
+    const quizzes = entries.filter((h) => h.kind === "quiz" || h.kind === "review");
+    const counts = reviewCounts();
+    const weak = weakSpots();
+    const next = suggestCommand();
 
     const md = [
       "# 🗺️ Roadmap Progress",
       "",
-      `> Generated by **miyagi** on ${new Date().toISOString()}`,
-      `> Session started: ${sessionStartedAt}`,
+      `> Generated by **miyagi ${VERSION}** on ${new Date().toISOString()}`,
+      `> Scope: **${scope}**${scope === "session" ? ` (session started ${session.startedAt})` : ""}`,
       "",
       "## Current Position",
       "",
-      `| Field | Value |`,
-      `| --- | --- |`,
+      "| Field | Value |",
+      "| --- | --- |",
       `| Category | ${activeRoadmap.category} |`,
       `| Roadmap | ${activeRoadmap.roadmap_name} |`,
       `| Topic | ${activeRoadmap.current_topic} |`,
       `| Step | ${activeRoadmap.step_index} / ${activeRoadmap.total_steps} |`,
-      `| Teaching depth | ${skillLevel} |`,
+      `| Teaching depth | ${session.skillLevel} |`,
       "",
       "## Player",
       "",
@@ -1305,35 +1793,52 @@ server.registerTool(
       `- **Level:** ${player.level}`,
       `- **XP:** ${player.xp}`,
       `- **Quiz streak:** ${player.quizStreak} (best ${player.bestStreak})`,
+      `- **Practice days:** ${streak.dayStreak} in a row, ${streak.totalDays} total (best ${streak.bestDayStreak})`,
       `- **Badges:** ${player.badges.length ? player.badges.join(", ") : "none yet"}`,
-      `- **Quiz accuracy:** ${quizzes.length ? `${correct}/${quizzes.length} (${Math.round((correct / quizzes.length) * 100)}%)` : "no quizzes answered"}`,
+      `- **Quiz accuracy (${scope}):** ${stats.quizzes ? `${stats.quizzesCorrect}/${stats.quizzes} (${Math.round((stats.quizzesCorrect / stats.quizzes) * 100)}%)` : "no quizzes answered"}`,
+      "",
+      "## Due for Review",
+      "",
+      counts.due
+        ? due(undefined, 20)
+            .map((r) => `- ${r.kind === "quiz" ? "❓" : "🔁"} ${r.label} _(box ${r.box}, ${r.lapses} lapses)_`)
+            .join("\n")
+        : "_Nothing due. " + (counts.total ? `Next item ${relative(nextDueAt())}.` : "Queue is empty.") + "_",
+      "",
+      "## Weak Spots",
+      "",
+      weak.length
+        ? weak
+            .map(
+              (w) =>
+                `- \`${w.bin}\` — ${Math.round((w.rate ?? 0) * 100)}% over ${w.attempts + w.quizAttempts} attempts`,
+            )
+            .join("\n")
+        : "_Not enough evidence yet. Three attempts at a command before it can be called a weakness._",
       "",
       "## Commands Practised",
       "",
       commands.length
         ? commands
-            .map((c) => `- \`${c.label}\`: ${c.detail}${c.xpAwarded ? ` _(+${c.xpAwarded} XP)_` : ""}`)
+            .map(
+              (c) =>
+                `- \`${c.label}\`: ${c.detail}${c.xpAwarded ? ` _(+${c.xpAwarded} XP)_` : ""} — ${c.day}`,
+            )
             .join("\n")
-        : "_No commands run this session._",
-      "",
-      "## Concepts Covered",
-      "",
-      concepts.length
-        ? concepts.map((c) => `- **${c.label}**: ${c.detail}`).join("\n")
-        : "_No concepts recorded._",
+        : "_No commands recorded in this scope._",
       "",
       "## Quiz Log",
       "",
       quizzes.length
-        ? quizzes.map((q) => `- ${q.detail.startsWith("Correct") ? "✅" : "❌"} ${q.label}\n  - ${q.detail}`).join("\n")
-        : "_No quizzes answered._",
+        ? quizzes.map((qz) => `- ${qz.correct ? "✅" : "❌"} ${qz.label}\n  - ${qz.detail}`).join("\n")
+        : "_No quizzes answered in this scope._",
       "",
       "## Next Up",
       "",
-      "```bash\n" + suggestCommand().command + "\n```",
+      "```bash\n" + next.command + "\n```",
       "",
       "---",
-      "_Review this file tomorrow before starting. Spaced repetition is where the XP turns into skill._",
+      `_Review this file before your next session. ${counts.due} item${counts.due === 1 ? "" : "s"} due; spaced repetition is where the XP turns into skill._`,
       "",
     ].join("\n");
 
@@ -1353,26 +1858,328 @@ server.registerTool(
           "1. Check the directory exists and is writable (`ls -ld`).",
           "2. Try an absolute path inside your home directory.",
           "3. The server's cwd is: `" + process.cwd() + "`",
-        ].join("\n")
+        ].join("\n"),
       );
     }
 
+    await persistNow();
     audioQueue.enqueue(
-      `Notes exported. You covered ${commands.length} commands and answered ${quizzes.length} quiz questions this session.`
+      `Notes exported. ${stats.commands} commands and ${stats.quizzes} quiz questions on record, across ${stats.days} days of practice.`,
     );
 
     return textResult(
       [
         "## 📝 Notes Exported",
-        `Wrote **${target}** (${append ? "appended" : "overwritten"}, ${md.length} bytes).`,
+        `Wrote **${target}** (${append ? "appended" : "overwritten"}, ${md.length} bytes, scope **${scope}**).`,
         "",
-        `- Commands practised: **${commands.length}**`,
-        `- Concepts covered: **${concepts.length}**`,
-        `- Quizzes: **${correct}/${quizzes.length}** correct`,
+        `- Commands practised: **${stats.commands}**`,
+        `- Quizzes: **${stats.quizzesCorrect}/${stats.quizzes}** correct`,
+        `- Practice days on record: **${stats.days}**`,
+        `- Due for review: **${counts.due}** of ${counts.total}`,
         `- Ending as: **${player.title}**, level **${player.level}**, ${player.xp} XP`,
-      ].join("\n")
+      ].join("\n"),
     );
-  }
+  },
+);
+
+/* ------------------------------------------------------------------ *
+ * Resources
+ *
+ * Everything above is also readable without a tool call, so a client can
+ * render progress in a sidebar rather than spending a turn asking for it.
+ * ------------------------------------------------------------------ */
+
+const json = (uri: string, data: unknown) => ({
+  contents: [{ uri, mimeType: "application/json", text: JSON.stringify(data, null, 2) }],
+});
+
+const markdown = (uri: string, text: string) => ({
+  contents: [{ uri, mimeType: "text/markdown", text }],
+});
+
+server.registerResource(
+  "profile",
+  "miyagi://profile",
+  {
+    title: "Player profile",
+    description: "XP, level, badges, streaks, mastery and the review queue, as saved on disk.",
+    mimeType: "application/json",
+  },
+  async (uri) => json(uri.href, snapshot()),
+);
+
+server.registerResource(
+  "roadmap",
+  "miyagi://roadmap",
+  {
+    title: "Active roadmap",
+    description: "The current track, position, and the next command in the sequence.",
+    mimeType: "application/json",
+  },
+  async (uri) => {
+    const lookup = currentTrack();
+    const next = suggestCommand();
+    return json(uri.href, {
+      category: activeRoadmap.category,
+      name: activeRoadmap.roadmap_name,
+      exists: lookup.matched,
+      topic: activeRoadmap.current_topic,
+      step_index: activeRoadmap.step_index,
+      total_steps: activeRoadmap.total_steps,
+      next_command: next.command,
+      steps: lookup.track.steps,
+    });
+  },
+);
+
+server.registerResource(
+  "review-queue",
+  "miyagi://review",
+  {
+    title: "Review queue",
+    description: "Every scheduled item with its box, due date and lapse count.",
+    mimeType: "application/json",
+  },
+  async (uri) =>
+    json(uri.href, {
+      counts: reviewCounts(),
+      next_due_at: nextDueAt(),
+      intervals_days: REVIEW_INTERVALS_DAYS,
+      items: review.map((r) => ({ ...r, due_now: isDue(r) })),
+    }),
+);
+
+server.registerResource(
+  "history",
+  "miyagi://history",
+  {
+    title: "Practice history",
+    description: "The durable append-only practice log, most recent 200 events.",
+    mimeType: "application/json",
+  },
+  async (uri) => {
+    const entries = await readHistory({ limit: 200 });
+    return json(uri.href, { stats: summarise(entries), entries });
+  },
+);
+
+server.registerResource(
+  "insights",
+  "miyagi://insights",
+  {
+    title: "Learning insights",
+    description:
+      "Whether this is working: practice cadence by week, first-sight versus review accuracy, and checkpoint pass rates.",
+    mimeType: "application/json",
+  },
+  async (uri) => json(uri.href, analyse(await readHistory())),
+);
+
+server.registerResource(
+  "getting-started",
+  "miyagi://getting-started",
+  {
+    title: "Getting started",
+    description: "How the tutor works, and the order to do things in.",
+    mimeType: "text/markdown",
+  },
+  async (uri) =>
+    markdown(
+      uri.href,
+      [
+        "# Getting started with miyagi",
+        "",
+        "**You run the commands.** This server drills, corrects, keeps score, and never does the work for you.",
+        "",
+        "## The loop",
+        "1. **`list_roadmaps`** — pick a track. Author your own by dropping JSON in `" + roadmapsDir() + "`.",
+        "2. **`get_next_roadmap_command`** — the next command, with the reason it comes next and the checkpoint it has to pass.",
+        "3. **Run it yourself**, or through `run_teaching_command`. Default mode is ride-along; `quick_config` with `mode: \"drill\"` is the full card, quiz, and voice.",
+        "4. **`verify_step`** — a read-only probe confirms the outcome exists on your machine. This is where the XP is: " +
+          `${XP_CHECKPOINT_PASS} for a verified outcome against up to ${XP_COMMAND_ATTEMPT} for an attempt (less in quieter modes).`,
+        "5. **`review_due_items`** — whatever you got wrong comes back on a spacing ladder until it sticks.",
+        "",
+        "## What is scored",
+        "- **Verified outcomes**, once each. Re-passing a checkpoint pays nothing.",
+        "- **Quiz answers**, with a streak multiplier. Review answers pay more than first sights.",
+        "- **Practice days**, as a separate consecutive-day streak.",
+        "",
+        "## Safety",
+        "Catastrophic commands never run. Destructive ones are explained and dry-run until you personally confirm them — where your client supports it, that means typing a word into a prompt, not a model setting a flag.",
+        "",
+        "## Where things live",
+        "- Profile: `" + profilePath() + "`",
+        "- Practice log: `" + historyPath() + "`",
+        "- Your tracks: `" + roadmapsDir() + "`",
+        "",
+        "Run `npx miyagi-mcp --doctor` if anything looks wrong.",
+      ].join("\n"),
+    ),
+);
+
+server.registerResource(
+  "roadmap-track",
+  new ResourceTemplate("miyagi://roadmaps/{name}", {
+    list: async () => ({
+      resources: allTracks().map((t) => ({
+        uri: `miyagi://roadmaps/${encodeURIComponent(t.name)}`,
+        name: t.name,
+        description: `${t.category} · ${t.steps.length} steps · ${t.source}`,
+        mimeType: "text/markdown",
+      })),
+    }),
+    complete: {
+      // Track-name completion, so a client can offer the real list rather than
+      // letting someone invent a name that silently falls back.
+      name: (value) =>
+        trackNames().filter((n) => n.toLowerCase().includes(String(value).toLowerCase())),
+    },
+  }),
+  {
+    title: "Roadmap track",
+    description: "One track's full step list, as markdown.",
+    mimeType: "text/markdown",
+  },
+  async (uri, variables) => {
+    const wanted = decodeURIComponent(String(variables.name ?? ""));
+    const lookup = findTrack(wanted);
+    if (!lookup.matched) {
+      return markdown(
+        uri.href,
+        [
+          `# No track called "${wanted}"`,
+          "",
+          "Available tracks:",
+          ...trackNames().map((n) => `- ${n}`),
+        ].join("\n"),
+      );
+    }
+    const t = lookup.track;
+    return markdown(
+      uri.href,
+      [
+        `# ${t.name}`,
+        "",
+        `**${t.category}** · ${t.steps.length} steps · ${t.source}`,
+        "",
+        t.description,
+        "",
+        ...t.steps.map(
+          (s, i) =>
+            `${i + 1}. **${s.topic}**\n   \`\`\`bash\n   ${s.command}\n   \`\`\`${s.note ? `\n   > ${s.note}` : ""}`,
+        ),
+      ].join("\n"),
+    );
+  },
+);
+
+/* ------------------------------------------------------------------ *
+ * Prompts
+ *
+ * A learner should not have to know tool names to start. These are the three
+ * things anyone actually wants: drill me, test what I have forgotten, and
+ * explain what just went wrong.
+ * ------------------------------------------------------------------ */
+
+const userMessage = (text: string) => ({
+  messages: [{ role: "user" as const, content: { type: "text" as const, text } }],
+});
+
+server.registerPrompt(
+  "drill",
+  {
+    title: "Drill me",
+    description: "Start a practice session on a track, one command at a time.",
+    argsSchema: {
+      roadmap: completable(
+        z.string().optional().describe("Track to drill. Defaults to the active one."),
+        (value) => trackNames().filter((n) => n.toLowerCase().includes(String(value ?? "").toLowerCase())),
+      ),
+      level: z.enum(["Junior", "Mid", "Senior"]).optional().describe("Teaching depth."),
+    },
+  },
+  ({ roadmap, level }) =>
+    userMessage(
+      [
+        "Be my coding tutor for this session, using the miyagi tools.",
+        roadmap ? `Track: "${roadmap}" (verify it exists with list_roadmaps first).` : "Use my active roadmap.",
+        level ? `Set my teaching depth to ${level} with quick_config.` : "",
+        "",
+        "Loop, one step at a time:",
+        "1. Call review_due_items first. Anything due gets cleared before new ground.",
+        "2. Call get_next_roadmap_command and show me the command with the reason it comes next.",
+        "3. Wait for me to say I have run it, or run it through run_teaching_command if I ask you to.",
+        "4. Teach from the card's tutor brief, then ask me the quiz and grade it with verify_quiz_answer.",
+        "",
+        "Rules: I run the commands. Do not answer the quiz for me, do not skip ahead, and stop after each step until I respond.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    ),
+);
+
+server.registerPrompt(
+  "review",
+  {
+    title: "Review what I've forgotten",
+    description: "Run a spaced-repetition session over everything that is due.",
+    argsSchema: {
+      count: z.string().optional().describe("How many questions to ask (default 3)."),
+    },
+  },
+  ({ count }) =>
+    userMessage(
+      [
+        `Run a spaced-repetition session with miyagi. Call review_due_items with limit ${count ?? 3}.`,
+        "Ask me each question one at a time, wait for my answer, and grade it with verify_quiz_answer using the quiz_id from the card.",
+        "After the questions, call get_user_stats and tell me plainly which commands I am weakest on and what I should drill next.",
+        "Do not give me the answers before I attempt them.",
+      ].join("\n"),
+    ),
+);
+
+server.registerPrompt(
+  "explain-last-error",
+  {
+    title: "Explain what just went wrong",
+    description: "Teach from a failing command instead of just fixing it.",
+    argsSchema: {
+      command: z.string().optional().describe("The command that failed, if you have it."),
+      error: z.string().optional().describe("The error output you saw."),
+    },
+  },
+  ({ command, error }) =>
+    userMessage(
+      [
+        "Something I ran failed and I want to understand it, not just have it fixed.",
+        command ? `Command: \`${command}\`` : "Ask me for the exact command if I have not given it.",
+        error ? `Error:\n${error}` : "",
+        "",
+        `Use run_teaching_command with dry_run: true${command ? "" : " once you have the command"} to get the teaching card and the hotfix diagnostic, then walk me down the troubleshooting ladder one rung at a time.`,
+        "Tell me what to change and why, but let me run it. Finish with the card's quiz.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    ),
+);
+
+server.registerPrompt(
+  "progress",
+  {
+    title: "Where am I?",
+    description: "Read back progress, weak spots and what to do next.",
+    argsSchema: {},
+  },
+  () =>
+    userMessage(
+      [
+        "Call get_user_stats and read the miyagi://review resource, then tell me:",
+        "- where I am on the roadmap and what is due for review,",
+        "- which commands I am measurably weakest on,",
+        "- and the single next thing I should do, with the command to run.",
+        "Be honest about thin evidence: do not call something a weakness off two attempts.",
+      ].join("\n"),
+    ),
 );
 
 /* ------------------------------------------------------------------ *
@@ -1382,23 +2189,54 @@ server.registerTool(
 process.on("uncaughtException", (e) => log("uncaughtException:", e));
 process.on("unhandledRejection", (e) => log("unhandledRejection:", e));
 
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    audioQueue.dispose();
+    void persistNow().finally(() => process.exit(0));
+  });
+}
+
 async function main(): Promise<void> {
   const restored = await hydrate();
+  if (restored) markReturning();
+  const tracks = await loadUserTracks();
+  const cachedQuestions = await loadGeneratedCache();
+
+  attachSampling(server);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Tell subscribed clients when saved state moves, so a sidebar reading the
+  // profile is not showing a level the learner passed twenty minutes ago.
+  onPersist(() => {
+    for (const uri of ["miyagi://profile", "miyagi://review", "miyagi://roadmap", "miyagi://insights"]) {
+      void server.server.sendResourceUpdated({ uri }).catch(() => {});
+    }
+  });
+
   log(
     restored
       ? `ready on stdio. Restored ${player.title}, level ${player.level}, ${player.xp} XP from ${profilePath()}`
       : `ready on stdio. New profile; progress will be saved to ${profilePath()}`,
   );
-  log(`platform ${os.platform()}, cwd ${process.cwd()}`);
+  log(
+    `platform ${os.platform()}, cwd ${process.cwd()}, ${allTracks().length} tracks ` +
+      `(${tracks.loaded} user-authored from ${tracks.dir}), ${reviewCounts().due} items due for review`,
+  );
+  if (tracks.skipped.length) log("skipped roadmap files:", tracks.skipped.join(", "));
+  log(
+    `shell ${hostShell()} via ${execShellName()}, ${cachedQuestions} cached generated questions, ` +
+      `${verified.size} verified checkpoints`,
+  );
+  log(`profile dir ${profileDir()}`);
+  const escape = posixEscapeHatch();
+  if (escape) log(escape);
 }
 
 /**
  * Only boot when run as a program. Without this guard, importing the module
  * (a test, a script) would connect a stdio transport and hang.
- */
-/**
+ *
  * Symlinks have to be resolved on both sides. npm installs a bin as a symlink
  * (`node_modules/.bin/miyagi-mcp` into the package), so `process.argv[1]` is
  * the link while `import.meta.url` is the real file. Comparing the two without
@@ -1414,11 +2252,25 @@ function canonicalPath(target: string): string {
 }
 
 const entryPoint = process.argv[1] ? canonicalPath(process.argv[1]) : "";
-const invokedDirectly = entryPoint !== "" && entryPoint === canonicalPath(fileURLToPath(import.meta.url));
+const invokedDirectly =
+  entryPoint !== "" && entryPoint === canonicalPath(fileURLToPath(import.meta.url));
 
 if (invokedDirectly) {
-  main().catch((err) => {
-    log("fatal:", err);
-    process.exit(1);
-  });
+  // `--doctor` is not MCP: there is no transport, so stdout is a person's
+  // terminal rather than a frame stream, and printing there is correct.
+  if (process.argv.slice(2).some((a) => a === "--doctor" || a === "doctor")) {
+    runDoctor()
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        log("doctor failed:", err);
+        process.exit(1);
+      });
+  } else if (process.argv.slice(2).some((a) => a === "--version" || a === "-v")) {
+    console.log(VERSION);
+  } else {
+    main().catch((err) => {
+      log("fatal:", err);
+      process.exit(1);
+    });
+  }
 }
