@@ -13,9 +13,11 @@ import { conceptsIn } from "../../src/changes.js";
 import type { FileChange } from "../../src/concepts.js";
 import type { Observation } from "../../src/observe.js";
 import * as engine from "./engine.js";
+import { parseTopic } from "./topics.js";
 import { explainPrompt, resolveProvider, type AiOptions, type Provider } from "./ai.js";
 
 const FEED_KEY = "miyagi.feed.v1";
+const TOPIC_KEY = "miyagi.topic.v1";
 const MAX_LESSONS = 25;
 const MAX_COMMANDS = 30;
 
@@ -33,6 +35,8 @@ interface CommandRow {
 interface SavedFeed {
   lessons: engine.LessonView[];
   explanations: Record<string, Explanation>;
+  /** Where each idea was last seen, so the dojo can point at real code. */
+  lastSeen?: Record<string, engine.Where>;
 }
 
 type Inbound =
@@ -44,6 +48,8 @@ type Inbound =
   | { type: "review" }
   | { type: "dojo" }
   | { type: "setDepth"; depth: engine.Level }
+  | { type: "setTopic"; topic: string }
+  | { type: "idea"; id: string }
   | { type: "command"; id: string }
   | { type: "openLink"; url: string }
   | { type: "copy"; text: string };
@@ -70,13 +76,19 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
   /** Question ids already asked in this review pass, so a miss is not re-asked at once. */
   private reviewed: string[] = [];
   private seenAssistant: Observation["source"] | null = null;
+  private lastSeen: Record<string, engine.Where> = {};
+  /** Lessons opened from the dojo. They live outside the feed. */
+  private readonly ideaCards = new Map<string, engine.CardView>();
+  private topic: engine.Topic | null;
 
   constructor(private readonly deps: PanelDeps) {
     const saved = deps.context.workspaceState.get<SavedFeed>(FEED_KEY);
     if (saved?.lessons) {
       this.lessons = saved.lessons;
       this.explanations = saved.explanations ?? {};
+      this.lastSeen = saved.lastSeen ?? {};
     }
+    this.topic = parseTopic(deps.context.globalState.get<string>(TOPIC_KEY));
   }
 
   /* ---- view lifecycle ------------------------------------------- */
@@ -138,10 +150,14 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
 
   private save(): void {
     const keys = new Set(this.lessons.flatMap((l) => l.cards.map((c) => c.key)));
-    for (const key of Object.keys(this.explanations)) if (!keys.has(key)) delete this.explanations[key];
+    for (const key of Object.keys(this.explanations)) {
+      // Dojo explanations belong to the idea, not to a lesson that can scroll away.
+      if (!keys.has(key) && !key.startsWith("dojo:")) delete this.explanations[key];
+    }
     void this.deps.context.workspaceState.update(FEED_KEY, {
       lessons: this.lessons,
       explanations: this.explanations,
+      lastSeen: this.lastSeen,
     } satisfies SavedFeed);
   }
 
@@ -156,6 +172,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
     this.post({
       type: "state",
       status,
+      topics: engine.TOPICS,
+      topic: this.topic,
       lessons: this.lessons,
       explanations: this.explanations,
       explaining: [...this.explaining.keys()],
@@ -184,6 +202,14 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
   private addLesson(lesson: engine.LessonView | null): number {
     if (!lesson) return 0;
     this.lessons = [lesson, ...this.lessons].slice(0, MAX_LESSONS);
+    for (const card of lesson.cards) {
+      this.lastSeen[card.conceptId] = {
+        root: card.root,
+        file: card.file,
+        otherFiles: card.otherFiles,
+        evidence: card.evidence,
+      };
+    }
     this.save();
     if (!this.view?.visible) {
       this.unseen += lesson.cards.length;
@@ -230,7 +256,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
     for (const controller of this.explaining.values()) controller.abort();
     this.explaining.clear();
     this.lessons = [];
-    this.explanations = {};
+    // Explanations written for a dojo idea are kept; they were not part of the feed.
+    for (const key of Object.keys(this.explanations)) if (!key.startsWith("dojo:")) delete this.explanations[key];
     this.commands.clear();
     this.commandTotal = 0;
     this.unseen = 0;
@@ -252,6 +279,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
   /* ---- messages from the webview -------------------------------- */
 
   private card(key: string): engine.CardView | undefined {
+    const idea = this.ideaCards.get(key);
+    if (idea) return idea;
     for (const lesson of this.lessons) {
       const card = lesson.cards.find((c) => c.key === key);
       if (card) return card;
@@ -281,7 +310,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
           return void (await this.pushState());
         }
         case "review": {
-          const quiz = await engine.nextReview(this.reviewed);
+          const quiz = await engine.nextReview(this.reviewed, this.topic);
           if (!quiz) this.reviewed = [];
           return this.post({ type: "review", quiz });
         }
@@ -290,6 +319,16 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
         case "setDepth":
           await engine.setDepth(message.depth);
           return void (await this.pushState());
+        case "setTopic":
+          this.topic = parseTopic(message.topic);
+          this.reviewed = [];
+          void this.deps.context.globalState.update(TOPIC_KEY, this.topic ?? undefined);
+          return void (await this.pushState());
+        case "idea": {
+          const card = await engine.ideaCard(message.id, this.lastSeen[message.id] ?? null);
+          if (card) this.ideaCards.set(card.key, card);
+          return this.post({ type: "idea", card });
+        }
         case "command":
           if (/^miyagi\.[A-Za-z]+$/.test(message.id)) await vscode.commands.executeCommand(message.id);
           return;
@@ -307,7 +346,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider {
 
   private async openFile(key: string): Promise<void> {
     const card = this.card(key);
-    if (!card) return;
+    if (!card || !card.file) return;
     const abs = path.isAbsolute(card.file) ? card.file : path.join(card.root, card.file);
     try {
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(abs));

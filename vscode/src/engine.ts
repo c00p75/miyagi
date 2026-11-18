@@ -42,6 +42,9 @@ import { ask, questionById, type AskedQuiz } from "../../src/quiz.js";
 import { flushHistory } from "../../src/history.js";
 import { contentFor } from "../../src/content.js";
 import { XP_CONCEPT_DISCOVERED, scoreQuizAnswer } from "../../src/scoring.js";
+import { TOPICS, topicOf, type Topic } from "./topics.js";
+
+export { TOPICS, type Topic };
 
 export type Level = ConceptLevel;
 
@@ -62,11 +65,14 @@ export interface CardView {
   pitfall: string;
   askTheAi: string;
   docs: { label: string; url: string };
-  status: "new" | "learning";
+  topic: Topic;
+  /** `locked`: in the pack, not yet seen in this learner's code. */
+  status: "new" | "learning" | "locked";
   belt: string;
   lapses: number;
-  /** Repository root, so the panel can open the file. */
+  /** Repository root, so the panel can open the file. Empty when no file is known. */
   root: string;
+  /** Where it was seen. Empty for an idea opened from the dojo that has no known file. */
   file: string;
   otherFiles: number;
   evidence: string;
@@ -119,6 +125,8 @@ export interface StatusView {
   dayStreak: number;
   quizStreak: number;
   dueQuestions: number;
+  /** Due questions per topic, for the filter. */
+  dueByTopic: Record<string, number>;
   /** Command drills belong to the terminal tracks; the panel only counts them. */
   dueCommands: number;
   discovered: number;
@@ -130,6 +138,7 @@ export interface DojoRowView {
   id: string;
   title: string;
   emoji: string;
+  topic: Topic;
   seen: boolean;
   box: number;
   belt: string;
@@ -170,6 +179,38 @@ function familiarity(id: string): Familiarity {
     seen: true,
     box: Math.max(...items.map((i) => i.box)),
     lapses: items.reduce((n, i) => n + i.lapses, 0),
+  };
+}
+
+export interface Where {
+  root: string;
+  file: string;
+  otherFiles: number;
+  evidence: string;
+}
+
+const NOWHERE: Where = { root: "", file: "", otherFiles: 0, evidence: "" };
+
+function buildCard(conceptId: string, key: string, f: Familiarity, where: Where, hasQuiz: boolean): CardView | null {
+  const c = conceptById(conceptId);
+  if (!c) return null;
+  return {
+    key,
+    conceptId,
+    title: c.title,
+    emoji: c.emoji,
+    hook: c.hook,
+    what: c.what,
+    lens: c.lens,
+    pitfall: c.pitfall,
+    askTheAi: c.askTheAi,
+    docs: c.docs,
+    topic: topicOf(conceptId),
+    status: f.seen ? "learning" : "new",
+    belt: beltForBox(f.box).name,
+    lapses: f.lapses,
+    ...where,
+    hasQuiz,
   };
 }
 
@@ -232,26 +273,15 @@ export function teach(input: TeachInput): Promise<LessonView | null> {
           xpAwarded: f.seen ? 0 : XP_CONCEPT_DISCOVERED,
         });
         taughtThisSession.add(s.id);
-        cards.push({
-          key: `${id}:${s.id}`,
-          conceptId: s.id,
-          title: c.title,
-          emoji: c.emoji,
-          hook: c.hook,
-          what: c.what,
-          lens: c.lens,
-          pitfall: c.pitfall,
-          askTheAi: c.askTheAi,
-          docs: c.docs,
-          status: f.seen ? "learning" : "new",
-          belt: beltForBox(f.box).name,
-          lapses: f.lapses,
-          root: input.root,
-          file: s.file,
-          otherFiles: s.files - 1,
-          evidence: s.evidence,
-          hasQuiz: Boolean(question),
-        });
+        cards.push(
+          buildCard(
+            s.id,
+            `${id}:${s.id}`,
+            f,
+            { root: input.root, file: s.file, otherFiles: s.files - 1, evidence: s.evidence },
+            Boolean(question),
+          )!,
+        );
       }
       // Known-cold ideas are named once per sitting, not on every edit.
       for (const s of ranked.solid) taughtThisSession.add(s.id);
@@ -273,6 +303,28 @@ export function teach(input: TeachInput): Promise<LessonView | null> {
     },
     { write: true },
   );
+}
+
+/**
+ * One idea's full lesson, opened from the dojo rather than from a change.
+ *
+ * Read-only: looking an idea up is not the same as meeting it in your own
+ * code, so nothing is queued, recorded or paid. A locked idea can be read but
+ * has no question until an assistant actually uses it for this learner.
+ */
+export function ideaCard(conceptId: string, where: Where | null = null): Promise<CardView | null> {
+  return run(() => {
+    const f = familiarity(conceptId);
+    const card = buildCard(
+      conceptId,
+      `dojo:${conceptId}`,
+      f,
+      where ?? NOWHERE,
+      f.seen && questionsForConcept(conceptId).length > 0,
+    );
+    if (card && !f.seen) card.status = "locked";
+    return card;
+  });
 }
 
 /** Test seam, and what "Clear the lesson feed" calls. */
@@ -323,7 +375,7 @@ export function quizForConcept(conceptId: string): Promise<QuizView | null> {
 }
 
 /** The next due question, most overdue first, or null when the queue is clear. */
-export function nextReview(skip: readonly string[] = []): Promise<QuizView | null> {
+export function nextReview(skip: readonly string[] = [], topic: Topic | null = null): Promise<QuizView | null> {
   return run(
     () => {
       const skipped = new Set(skip);
@@ -332,6 +384,8 @@ export function nextReview(skip: readonly string[] = []): Promise<QuizView | nul
         const question = questionById(item.ref);
         if (!question) continue;
         const bin = question.bins[0] ?? "shell";
+        // A topic narrows the pass to that shelf; terminal questions have none.
+        if (topic && !(isConceptBin(bin) && topicOf(bin.slice("concept:".length)) === topic)) continue;
         const about = isConceptBin(bin)
           ? conceptById(bin.slice("concept:".length))?.title ?? "Recall"
           : `\`${bin}\``;
@@ -408,6 +462,11 @@ export function status(): Promise<StatusView> {
   return run(() => {
     const counts = S.reviewCounts();
     const rows = dojoRows(familiarity);
+    const dueByTopic: Record<string, number> = Object.fromEntries(TOPICS.map((t) => [t, 0]));
+    for (const item of S.due("quiz", 500)) {
+      const bin = questionById(item.ref)?.bins[0] ?? "";
+      if (isConceptBin(bin)) dueByTopic[topicOf(bin.slice("concept:".length))] += 1;
+    }
     return {
       xp: S.player.xp,
       level: S.player.level,
@@ -416,6 +475,7 @@ export function status(): Promise<StatusView> {
       dayStreak: S.streak.dayStreak,
       quizStreak: S.player.quizStreak,
       dueQuestions: counts.dueQuiz,
+      dueByTopic,
       dueCommands: counts.dueCommand,
       discovered: rows.filter((r) => r.familiarity.seen).length,
       concepts: rows.length,
@@ -431,6 +491,7 @@ export function dojo(): Promise<DojoRowView[]> {
         id: r.id,
         title: r.title,
         emoji: r.emoji,
+        topic: topicOf(r.id),
         seen: r.familiarity.seen,
         box: r.familiarity.box,
         belt: beltForBox(r.familiarity.box).name,

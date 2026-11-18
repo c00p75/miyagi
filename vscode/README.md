@@ -26,6 +26,8 @@ Run **Miyagi: Set Up Everything for Me** at any time to do the same. It is safe 
 - **"Explain in my code".** One button asks an AI to explain the idea using the actual lines in your file, with line numbers.
 - **A question that comes back.** Each idea leaves one multiple-choice question. Answer it now, then again after 10 minutes, 1, 3, 7, 16 and 35 days. A belt per idea shows how firmly you hold it.
 - **The commands your assistant ran** (optional), with a short lesson for the common ones.
+- **Topics.** Pick Security, Backend and APIs, Data, Frontend or Tooling at the top of the panel to see and review only that shelf.
+- **A dojo you can browse.** Every idea is listed with its belt. Click one to read its lesson, see where it showed up in your code, and answer its question. Locked ideas can be read; their question unlocks when your assistant writes code that uses them.
 
 ## Who pays for the explanations
 

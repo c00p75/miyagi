@@ -13,7 +13,9 @@
 
   /** @type {any} */
   let state = null;
-  const ui = Object.assign({ tab: "now", open: {} }, vscode.getState() || {});
+  const ui = Object.assign({ tab: "now", open: {}, idea: null }, vscode.getState() || {});
+  /** The lesson opened from the dojo, when one is. */
+  let ideaCard = null;
   /** key -> { quiz, answer, picked } for card questions */
   const cardQuiz = {};
   /** key -> error string from the last explain attempt */
@@ -93,12 +95,25 @@
       .map((d) => `<option value="${d}"${d === s.depth ? " selected" : ""}>${d}</option>`)
       .join("");
     const streak = s.dayStreak > 1 ? ` · ${s.dayStreak}-day streak` : "";
+    const topics = [`<option value="">All topics</option>`]
+      .concat(
+        state.topics.map(
+          (/** @type {string} */ t) => `<option value="${esc(t)}"${t === state.topic ? " selected" : ""}>${esc(t)}</option>`,
+        ),
+      )
+      .join("");
     return `
       <header class="top">
         <div class="who">
           <span class="level">Level ${s.level}</span>
           <span class="rank">${esc(s.title)}</span>
-          <label class="depth">
+        </div>
+        <div class="filters">
+          <label>
+            <span class="sr">Topic</span>
+            <select data-change="topic" title="Show and review one topic">${topics}</select>
+          </label>
+          <label>
             <span class="sr">Explanation depth</span>
             <select data-change="depth" title="How deep explanations go">${depths}</select>
           </label>
@@ -109,13 +124,21 @@
   }
 
   function tabs() {
-    const due = state.status.dueQuestions;
+    const due = dueCount();
     const tab = (/** @type {string} */ id, /** @type {string} */ label, count = 0) => `
       <button role="tab" class="tab${ui.tab === id ? " on" : ""}" aria-selected="${ui.tab === id}" data-action="tab" data-tab="${id}">
         ${label}${count ? `<span class="count">${count}</span>` : ""}
       </button>`;
     return `<nav class="tabs" role="tablist">${tab("now", "Now")}${tab("review", "Review", due)}${tab("dojo", "Dojo")}</nav>`;
   }
+
+  /** Due questions, narrowed to the chosen topic when there is one. */
+  function dueCount() {
+    const s = state.status;
+    return state.topic ? s.dueByTopic[state.topic] || 0 : s.dueQuestions;
+  }
+
+  const inTopic = (/** @type {any} */ item) => !state.topic || item.topic === state.topic;
 
   function quizBlock(/** @type {any} */ entry, /** @type {string} */ scope, /** @type {string} */ key) {
     const { quiz, answer, picked } = entry;
@@ -149,11 +172,13 @@
     return `<div class="quiz"><p class="question">${inline(quiz.question)}</p><div class="choices">${choices}</div>${result}</div>`;
   }
 
-  function card(/** @type {any} */ c, /** @type {boolean} */ openByDefault) {
-    const isOpen = ui.open[c.key] ?? openByDefault;
+  function card(/** @type {any} */ c, /** @type {boolean} */ openByDefault, pinned = false) {
+    const isOpen = pinned || (ui.open[c.key] ?? openByDefault);
     const tag =
       c.status === "new"
         ? `<span class="tag new">New</span>`
+        : c.status === "locked"
+        ? `<span class="tag">Locked</span>`
         : `<span class="tag belt belt-${esc(c.belt)}">${esc(c.belt)} belt</span>`;
     const head = `
       <button class="card-head" data-action="toggle" data-key="${esc(c.key)}" aria-expanded="${isOpen}">
@@ -180,7 +205,7 @@
 
     const quiz = cardQuiz[c.key];
     const actions = [
-      !explanation && !busy
+      !explanation && !busy && c.file
         ? `<button class="primary" data-action="explain" data-key="${esc(c.key)}"${state.ai.label ? "" : ` title="${esc(state.ai.reason || "")}"`}>Explain in my code</button>`
         : "",
       c.hasQuiz && !quiz ? `<button data-action="quiz" data-key="${esc(c.key)}">Check yourself</button>` : "",
@@ -191,10 +216,18 @@
     return `
       <article class="card">
         ${head}
-        <div class="where">
+        ${
+          c.file
+            ? `<div class="where">
           <button class="link file" data-action="openFile" data-key="${esc(c.key)}" title="Open this file">${esc(c.file)}</button>${others}
           ${evidence}
-        </div>
+        </div>`
+            : `<p class="where muted">${
+                c.status === "locked"
+                  ? "Not seen in your code yet. Its question unlocks when your assistant writes code that uses it."
+                  : "Seen before this panel was installed, so there is no file to point at yet."
+              }</p>`
+        }
         <dl>
           <dt>What it is</dt><dd>${inline(c.what)}</dd>
           <dt>Know this</dt><dd>${inline(c.lens[state.status.depth] || c.lens.Junior)}</dd>
@@ -265,9 +298,14 @@
           <button class="primary" data-action="command" data-id="miyagi.explainChanges">Teach me my uncommitted changes</button>
         </div>`;
     } else {
-      body = lessons
+      const shown = lessons
+        .map((/** @type {any} */ l) => Object.assign({}, l, { cards: l.cards.filter(inTopic) }))
+        .filter((/** @type {any} */ l) => l.cards.length || (!state.topic && l.solid.length));
+      const hidden = lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0) -
+        shown.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
+      body = shown
         .map((/** @type {any} */ lesson, /** @type {number} */ i) => {
-          const found = lesson.discovered
+          const found = lesson.discovered && !state.topic
             ? `<span class="found">${plural(lesson.discovered, "new idea")} · +${lesson.xpAwarded} XP</span>`
             : "";
           return `
@@ -280,6 +318,9 @@
           </section>`;
         })
         .join("");
+      if (hidden) {
+        body += `<p class="muted">${plural(hidden, "card")} in other topics ${hidden === 1 ? "is" : "are"} hidden. <button class="link" data-action="allTopics">Show all topics</button></p>`;
+      }
       body += `<p class="tail"><button class="link" data-action="command" data-id="miyagi.clearFeed">Clear the feed</button></p>`;
     }
     return `${body}${commands()}${footer()}`;
@@ -287,13 +328,15 @@
 
   function reviewTab() {
     const s = state.status;
+    const due = dueCount();
+    const scope = state.topic ? ` in ${esc(state.topic)}` : "";
     if (review.quiz) {
       const next = review.answer
-        ? `<div class="actions"><button class="primary" data-action="nextReview">${s.dueQuestions ? "Next question" : "Finish"}</button></div>`
+        ? `<div class="actions"><button class="primary" data-action="nextReview">${due ? "Next question" : "Finish"}</button></div>`
         : "";
       return `
         <section class="review">
-          <h3><span>${inline(review.quiz.about)}</span><span class="muted">${plural(s.dueQuestions, "question")} due</span></h3>
+          <h3><span>${inline(review.quiz.about)}</span><span class="muted">${plural(due, "question")} due${scope}</span></h3>
           ${quizBlock(review, "review", "")}
           ${next}
         </section>`;
@@ -301,7 +344,7 @@
     const commandsDue = s.dueCommands
       ? `<p class="muted">${plural(s.dueCommands, "terminal drill")} also due. Those run in the Miyagi MCP tutor (<code>review_due_items</code>).</p>`
       : "";
-    if (review.asked && !s.dueQuestions) {
+    if (review.asked && !due) {
       return `
         <div class="empty">
           <h2>${review.cleared ? `${plural(review.cleared, "question")} cleared` : "Nothing is due"}</h2>
@@ -311,32 +354,48 @@
     }
     return `
       <div class="empty">
-        <h2>${s.dueQuestions ? `${plural(s.dueQuestions, "question")} due` : "Nothing is due"}</h2>
+        <h2>${due ? `${plural(due, "question")} due${scope}` : `Nothing is due${scope}`}</h2>
         <p>Each idea you were shown left one question behind. Answering it from memory, later, is the part that makes it stick.</p>
-        ${s.dueQuestions ? `<button class="primary" data-action="nextReview">Start review</button>` : ""}
+        ${due ? `<button class="primary" data-action="nextReview">Start review</button>` : ""}
         ${commandsDue}
       </div>`;
   }
 
   function dojoTab() {
-    if (!dojo) return `<div class="empty"><p class="muted">Loading…</p></div>`;
-    const seen = dojo.rows.filter((r) => r.seen);
-    const locked = dojo.rows.length - seen.length;
-    const rows = seen
-      .map((r) => {
-        const dots = dojo.belts.map((_, i) => (i <= r.box ? "●" : "○")).join("");
-        return `<tr>
-          <td><span aria-hidden="true">${esc(r.emoji)}</span> ${esc(r.title)}</td>
-          <td><span class="tag belt belt-${esc(r.belt)}">${esc(r.belt)}</span></td>
-          <td class="dots" aria-hidden="true">${dots}</td>
-        </tr>`;
-      })
-      .join("");
+    if (ui.idea) {
+      const back = `<p><button class="link" data-action="closeIdea">\u2190 All ideas</button></p>`;
+      if (!ideaCard || ideaCard.conceptId !== ui.idea) return `${back}<div class="empty"><p class="muted">Loading\u2026</p></div>`;
+      return `${back}<section class="lesson">${card(ideaCard, true, true)}</section>`;
+    }
+    if (!dojo) return `<div class="empty"><p class="muted">Loading\u2026</p></div>`;
+    const all = dojo.rows.filter(inTopic);
+    const seen = all.filter((r) => r.seen);
+    const locked = all.filter((r) => !r.seen);
+    const row = (/** @type {any} */ r) => {
+      const dots = dojo.belts.map((_, i) => (r.seen && i <= r.box ? "\u25cf" : "\u25cb")).join("");
+      const tag = r.seen
+        ? `<span class="tag belt belt-${esc(r.belt)}">${esc(r.belt)}</span>`
+        : `<span class="tag">Locked</span>`;
+      return `<li>
+        <button class="idea${r.seen ? "" : " locked"}" data-action="idea" data-id="${esc(r.id)}" title="Open this lesson">
+          <span class="idea-name"><span aria-hidden="true">${esc(r.emoji)}</span> ${esc(r.title)}</span>
+          ${tag}
+          <span class="dots" aria-hidden="true">${dots}</span>
+        </button>
+      </li>`;
+    };
+    const scope = state.topic ? ` in ${esc(state.topic)}` : "";
     return `
       <section class="dojo">
-        <h3><span>${seen.length} of ${dojo.rows.length} ideas found</span></h3>
-        ${seen.length ? `<table><tbody>${rows}</tbody></table>` : ""}
-        ${locked ? `<p class="muted">${locked} still locked. An idea unlocks when your assistant writes code that uses it, so the only way to find them is to build something.</p>` : ""}
+        <h3><span>${seen.length} of ${all.length} ideas found${scope}</span></h3>
+        <ul class="ideas">${seen.map(row).join("")}</ul>
+        ${
+          locked.length
+            ? `<h3><span class="muted">${locked.length} still locked</span></h3>
+               <ul class="ideas">${locked.map(row).join("")}</ul>
+               <p class="muted">You can read a locked idea now. Its question unlocks when your assistant writes code that uses it.</p>`
+            : ""
+        }
         <p class="muted">A belt moves up one colour each time you answer its question after a longer gap, and drops when you miss. It measures what you can recall, not how long the panel was open.</p>
       </section>`;
   }
@@ -353,7 +412,11 @@
   function setTab(/** @type {string} */ tab) {
     ui.tab = tab;
     remember();
-    if (tab === "dojo") send({ type: "dojo" });
+    if (tab === "dojo") {
+      // Clicking the tab again returns from a lesson to the list.
+      ui.idea = null;
+      send({ type: "dojo" });
+    }
     render();
   }
 
@@ -376,6 +439,18 @@
       }
       case "openFile":
         return send({ type: "openFile", key: d.key });
+      case "idea":
+        ui.idea = d.id || null;
+        remember();
+        send({ type: "idea", id: d.id });
+        return render();
+      case "closeIdea":
+        ui.idea = null;
+        remember();
+        send({ type: "dojo" });
+        return render();
+      case "allTopics":
+        return send({ type: "setTopic", topic: "" });
       case "explain":
         delete explainError[d.key || ""];
         return send({ type: "explain", key: d.key });
@@ -405,6 +480,11 @@
   app.addEventListener("change", (event) => {
     const el = /** @type {HTMLSelectElement} */ (event.target);
     if (el.dataset.change === "depth") send({ type: "setDepth", depth: el.value });
+    if (el.dataset.change === "topic") {
+      // A review in progress belongs to the old topic.
+      review = { asked: false, quiz: null, answer: null, picked: -1, cleared: 0 };
+      send({ type: "setTopic", topic: el.value });
+    }
   });
 
   window.addEventListener("message", (event) => {
@@ -432,6 +512,8 @@
         const entry = entries.find((e) => e.quiz && e.quiz.token === m.token);
         if (entry && m.answer) {
           entry.answer = m.answer;
+          // The belt on an open dojo lesson just changed.
+          if (ui.idea) send({ type: "idea", id: ui.idea });
           if (entry === review) review.cleared += 1;
         }
         break;
@@ -442,6 +524,9 @@
       case "dojo":
         dojo = { rows: m.rows, belts: m.belts };
         break;
+      case "idea":
+        ideaCard = m.card;
+        break;
     }
     render();
   });
@@ -449,4 +534,5 @@
   render();
   send({ type: "ready" });
   if (ui.tab === "dojo") send({ type: "dojo" });
+  if (ui.tab === "dojo" && ui.idea) send({ type: "idea", id: ui.idea });
 })();

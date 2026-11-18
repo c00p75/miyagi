@@ -2,7 +2,7 @@
  * Capture end to end: the hook is installed into a settings file, the script
  * it points at really runs, and what it writes is what the panel reads.
  */
-import { test } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -22,6 +22,23 @@ import {
 import { readObservations } from "../../src/observe.js";
 
 const dist = path.resolve(__dirname, "..", "dist");
+
+// These tests install, repair and remove hooks. The global scope is the
+// user's real home directory, so every test in this file runs against a
+// disposable one. Without this, a developer who has capture turned on gets
+// their real hook rewritten to point into a temp folder.
+const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+before(async () => {
+  const fake = await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-fakehome-"));
+  process.env.HOME = fake;
+  process.env.USERPROFILE = fake;
+  assert.equal(os.homedir(), fake, "the home directory must be redirected before any hook is touched");
+});
+after(() => {
+  process.env.HOME = realHome.HOME;
+  if (realHome.USERPROFILE === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = realHome.USERPROFILE;
+});
 
 test("enable installs a hook that records a Claude Code edit, and disable removes it", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-capture-"));
@@ -128,18 +145,17 @@ test("setup reports what it turned on and does not repeat itself", async () => {
   const work = path.join(root, "work");
   await fs.mkdir(work, { recursive: true });
   process.env.MIYAGI_HOME = path.join(root, "home");
-  // Setup writes to the global settings file, so point "home" somewhere disposable.
-  const realHome = process.env.HOME;
-  process.env.HOME = path.join(root, "userhome");
+  const home = os.homedir();
   try {
     const first = await setupCapture({ extensionDist: dist, cwd: work, clients: ["claude", "cursor"] });
     assert.deepEqual(first, { on: ["claude", "cursor"], changed: ["claude", "cursor"], problems: [] });
-    const written = JSON.parse(await fs.readFile(path.join(root, "userhome", ".claude", "settings.json"), "utf8"));
+    const written = JSON.parse(await fs.readFile(path.join(home, ".claude", "settings.json"), "utf8"));
     assert.equal(written.hooks.PostToolUse.length, 1);
     const again = await setupCapture({ extensionDist: dist, cwd: work, clients: ["claude", "cursor"] });
     assert.deepEqual(again, { on: ["claude", "cursor"], changed: [], problems: [] });
     assert.deepEqual(await setupCapture({ extensionDist: dist, cwd: work, clients: [] }), { on: [], changed: [], problems: [] });
   } finally {
-    process.env.HOME = realHome;
+    await fs.rm(path.join(home, ".claude"), { recursive: true, force: true });
+    await fs.rm(path.join(home, ".cursor"), { recursive: true, force: true });
   }
 });
