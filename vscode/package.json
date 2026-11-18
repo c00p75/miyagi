@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
@@ -131,6 +131,11 @@
         "category": "Miyagi"
       },
       {
+        "command": "miyagi.tour",
+        "title": "Tour the Ideas in This Codebase",
+        "category": "Miyagi"
+      },
+      {
         "command": "miyagi.weeklyReport",
         "title": "Show My Week",
         "category": "Miyagi"
@@ -138,6 +143,16 @@
       {
         "command": "miyagi.recap",
         "title": "Wrap Up This Session",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.shareWithTeam",
+        "title": "Share My Progress with My Team",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.teamReport",
+        "title": "Show Team Report",
         "category": "Miyagi"
       },
       {
@@ -390,6 +405,16 @@
           "minimum": 90,
           "maximum": 360,
           "description": "How fast Miyagi speaks."
+        },
+        "miyagi.team.folder": {
+          "type": "string",
+          "default": ".miyagi/team",
+          "description": "Where team summaries are written and read, relative to the repository. Sharing happens when you commit the file; Miyagi sends nothing anywhere."
+        },
+        "miyagi.team.name": {
+          "type": "string",
+          "default": "",
+          "description": "The name on the summary you share with your team."
         }
       }
     },
@@ -474,6 +499,21 @@
           "command": "miyagi.recap",
           "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
           "group": "1_teach@6"
+        },
+        {
+          "command": "miyagi.tour",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@7"
+        },
+        {
+          "command": "miyagi.shareWithTeam",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "4_team@1"
+        },
+        {
+          "command": "miyagi.teamReport",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "4_team@2"
         }
       ],
       "commandPalette": [

@@ -31,6 +31,8 @@ import { ignoreMatcher } from "./schedule.js";
 /** Long enough for an assistant's burst of edits to finish, short enough to feel live. */
 const QUIET_MS = 2_500;
 const OBSERVATION_POLL_MS = 4_000;
+/** While lessons are being held, how often git itself is asked whether HEAD has moved. */
+const HEAD_POLL_MS = 3_000;
 const IGNORED = /[\\/](\.git|node_modules|dist|build|out|\.next|\.venv|__pycache__|target|vendor)[\\/]/;
 /** In a folder without git there is no ignore file to trust, so only source-like files are read. */
 const SOURCE_FILE =
@@ -136,6 +138,7 @@ export class Watcher implements vscode.Disposable {
   private allRoots: string[] = [];
   private timer: NodeJS.Timeout | undefined;
   private poll: NodeJS.Timeout | undefined;
+  private headPoll: NodeJS.Timeout | undefined;
   private observedUntil = new Date().toISOString();
   private observationMtime = 0;
   private settings: WatchSettings = { enabled: true, muted: false, ignore: [], excludeRepos: [], holdSeconds: 0 };
@@ -300,10 +303,13 @@ export class Watcher implements vscode.Disposable {
   /**
    * A commit is the clearest sign an assistant has finished a piece of work.
    *
-   * It is noticed two ways, because either can be missing: the editor's git
-   * extension reports a new HEAD (when it is installed, enabled and has
-   * refreshed), and git itself rewrites `.git/logs/HEAD`, which the file
-   * watcher sees. Both end in `headMoved`, which acts once per commit.
+   * It is noticed three ways, because in practice each one is missing
+   * somewhere: the editor's git extension reports a new HEAD (when it is
+   * installed, enabled and has refreshed); git rewrites `.git/logs/HEAD`,
+   * which the file watcher sees in editors that watch `.git` at all; and,
+   * while anything is being held, git is simply asked every few seconds. The
+   * last is the one that works everywhere. All three end in `headMoved`, which
+   * acts once per commit.
    */
   private watchHeads(): void {
     const repos = this.git?.repositories ?? [];
@@ -355,6 +361,16 @@ export class Watcher implements vscode.Disposable {
     if (pending.timer) clearTimeout(pending.timer);
     pending.timer = setTimeout(() => this.release(root, "quiet"), this.settings.holdSeconds * 1000);
     this.held.set(root, pending);
+    this.headPoll ??= setInterval(() => {
+      if (!this.held.size) {
+        clearInterval(this.headPoll);
+        this.headPoll = undefined;
+        return;
+      }
+      for (const held of this.held.keys()) {
+        if (this.heads.has(held)) void headOf(held).then((commit) => this.headMoved(held, commit));
+      }
+    }, HEAD_POLL_MS);
   }
 
   /** Teaches what was held for a root. Does nothing when nothing is held. */
@@ -459,6 +475,7 @@ export class Watcher implements vscode.Disposable {
   dispose(): void {
     if (this.timer) clearTimeout(this.timer);
     if (this.poll) clearInterval(this.poll);
+    if (this.headPoll) clearInterval(this.headPoll);
     for (const pending of this.held.values()) clearTimeout(pending.timer);
     for (const head of this.heads.values()) head.subscription?.dispose();
     for (const d of this.disposables) d.dispose();

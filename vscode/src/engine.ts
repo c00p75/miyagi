@@ -42,6 +42,7 @@ import {
 import { ask, questionById, shuffleChoices, type AskedQuiz } from "../../src/quiz.js";
 import { flushHistory } from "../../src/history.js";
 import { contentFor } from "../../src/content.js";
+import { conceptFamiliarity } from "../../src/familiarity.js";
 import { XP_CONCEPT_DISCOVERED, scoreQuizAnswer } from "../../src/scoring.js";
 import {
   calibration,
@@ -233,17 +234,7 @@ function run<T>(work: () => T | Promise<T>, options: { write?: boolean } = {}): 
   return next;
 }
 
-function familiarity(id: string): Familiarity {
-  const items = questionsForConcept(id)
-    .map((q) => S.findReviewItem("quiz", q.id))
-    .filter((i): i is NonNullable<typeof i> => Boolean(i));
-  if (!items.length) return UNSEEN;
-  return {
-    seen: true,
-    box: Math.max(...items.map((i) => i.box)),
-    lapses: items.reduce((n, i) => n + i.lapses, 0),
-  };
-}
+const familiarity = conceptFamiliarity;
 
 /** Green belt and above have answered after a week's gap; they need a question, not a lecture. */
 function supportFor(f: Familiarity): CardView["support"] {
@@ -892,6 +883,15 @@ export async function excerptOfChange(root: string, file: string, added: string,
     if (wanted.has(line.trim())) hits.push(i);
   });
   return numbered(lines, hits.slice(0, 80), { context: 2, maxChars, withhold: holdsSecret });
+}
+
+/** A range of a file, such as one whole function, with its real line numbers. Zero-based, inclusive. */
+export async function excerptOfRange(root: string, file: string, start: number, end: number, maxChars = EXCERPT_MAX_CHARS): Promise<string | null> {
+  const lines = await readLines(root, file);
+  if (!lines || start < 0 || end < start) return null;
+  const hits: number[] = [];
+  for (let i = start; i <= Math.min(end, lines.length - 1); i++) hits.push(i);
+  return numbered(lines, hits, { context: 0, maxChars, withhold: holdsSecret });
 }
 
 /** The start of a file, for a model that needs to know what a project is. */

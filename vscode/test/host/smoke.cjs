@@ -20,7 +20,26 @@ const until = async (what, check, ms = 20000) => {
   }
 };
 
+/**
+ * Editors differ in whether they forward the test host's console to the
+ * terminal that launched them, so the verdict is also written to a file the
+ * runner reads.
+ */
 exports.run = async function run() {
+  const report = (text) => {
+    if (process.env.MIYAGI_SMOKE_RESULT) require("node:fs").writeFileSync(process.env.MIYAGI_SMOKE_RESULT, text);
+  };
+  try {
+    const line = await check();
+    report(line);
+    console.log(line);
+  } catch (err) {
+    report(`FAILED: ${err && err.stack ? err.stack : err}`);
+    throw err;
+  }
+};
+
+async function check() {
   const extension = vscode.extensions.getExtension("georgemsapenda.miyagi-vscode");
   assert.ok(extension, "the extension is installed in this host");
   const api = await extension.activate();
@@ -28,7 +47,7 @@ exports.run = async function run() {
   const commands = await vscode.commands.getCommands(true);
   for (const id of [
     "open", "openBeside", "setup", "review", "unaidedCheck", "recap", "pause", "resume", "explainChanges", "teachBranch", "projectMap",
-    "weeklyReport", "chooseAi", "enableCapture", "disableCapture", "moveToSide", "clearFeed", "settings", "doctor",
+    "weeklyReport", "tour", "shareWithTeam", "teamReport", "chooseAi", "enableCapture", "disableCapture", "moveToSide", "clearFeed", "settings", "doctor",
   ]) {
     assert.ok(commands.includes(`miyagi.${id}`), `command miyagi.${id} is registered`);
   }
@@ -70,8 +89,10 @@ exports.run = async function run() {
   await vscode.commands.executeCommand("miyagi.openBeside");
   await vscode.commands.executeCommand("miyagi.doctor");
   await vscode.commands.executeCommand("miyagi.weeklyReport");
+  await vscode.commands.executeCommand("miyagi.tour");
+  await vscode.commands.executeCommand("miyagi.teamReport");
   await vscode.commands.executeCommand("miyagi.unaidedCheck");
   await vscode.commands.executeCommand("miyagi.recap");
   await new Promise((r) => setTimeout(r, 1500));
-  console.log("MIYAGI SMOKE OK roots=" + JSON.stringify(api.roots()) + " folder=" + folder, vscode.env.appName, vscode.version, api.viewId(), JSON.stringify(lessons));
-};
+  return `MIYAGI SMOKE OK ${vscode.env.appName} ${vscode.version} view=${api.viewId()} lessons=${JSON.stringify(lessons)}`;
+}

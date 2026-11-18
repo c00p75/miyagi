@@ -44,7 +44,8 @@ import {
 import { aiIdeaCount, loadAiIdeas, loadOwnCards } from "./ideas.js";
 import { currentMeter, describeMeter, recordCall } from "./meter.js";
 import { projectMapPrompt } from "./prompts.js";
-import { chooseFiles, trackedFiles, weeklyReport } from "./reports.js";
+import { chooseFiles, practisedDays, trackedFiles, weekProgress, weeklyReport } from "./reports.js";
+import { buildSummary, fileNameFor, readSummaries, renderTour, teamReport, tourStops } from "./team.js";
 import { quietNow, tomorrowMorning, type QuietReason } from "./schedule.js";
 import { supportsSecondarySidebar } from "./docking.js";
 
@@ -583,6 +584,69 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
           const reason = err instanceof Error ? err.message : String(err);
           if (reason !== "cancelled") void vscode.window.showWarningMessage(`Miyagi could not write the map: ${reason}`);
         }
+      },
+    );
+  });
+
+  /* ---- team ------------------------------------------------------ */
+
+  /** The shared folder, inside the repository so that sharing is a commit. */
+  const teamFolder = (root: string) => {
+    const configured = config().get<string>("team.folder", ".miyagi/team").trim() || ".miyagi/team";
+    return path.isAbsolute(configured) ? configured : path.join(root, configured);
+  };
+
+  register("miyagi.shareWithTeam", async () => {
+    const root = await pickRepo("Share into which repository?");
+    if (!root) return void vscode.window.showInformationMessage("Miyagi needs an open git repository to share into.");
+    let name = config().get<string>("team.name", "").trim();
+    if (!name) {
+      const suggested = ((await run(root, "git", ["config", "user.name"])) ?? "").trim();
+      const typed = await vscode.window.showInputBox({
+        title: "Share my progress with my team",
+        prompt: "The name your teammates will see. It is saved in your settings for next time.",
+        value: suggested,
+      });
+      name = typed?.trim() ?? "";
+      if (!name) return;
+      await config().update("team.name", name, vscode.ConfigurationTarget.Global);
+    }
+    const [status, dojo] = await Promise.all([engine.status(), engine.dojo()]);
+    const summary = buildSummary({
+      name,
+      status,
+      dojo,
+      week: weekProgress(await practisedDays(), config().get<number>("weeklyGoalDays", 4)),
+    });
+    const folder = teamFolder(root);
+    const file = path.join(folder, fileNameFor(name));
+    await fsp.mkdir(folder, { recursive: true });
+    await fsp.writeFile(file, JSON.stringify(summary, null, 2) + "\n", "utf8");
+    const choice = await vscode.window.showInformationMessage(
+      `Miyagi wrote ${path.relative(root, file)}: ${summary.ideas.length} idea${summary.ideas.length === 1 ? "" : "s"} and their belts, nothing else. It reaches your team when you commit it.`,
+      "Open the file",
+      "Show team report",
+    );
+    if (choice === "Open the file") await vscode.window.showTextDocument(vscode.Uri.file(file));
+    if (choice === "Show team report") await vscode.commands.executeCommand("miyagi.teamReport");
+  });
+
+  register("miyagi.teamReport", async () => {
+    const root = await pickRepo("Team report for which repository?");
+    if (!root) return void vscode.window.showInformationMessage("Miyagi needs an open git repository for this.");
+    const { summaries, skipped } = await readSummaries(teamFolder(root));
+    await showMarkdown("reports", `team-${path.basename(root).replace(/[^\w.-]+/g, "-")}.md`, teamReport(summaries, skipped));
+  });
+
+  register("miyagi.tour", async () => {
+    const root = await pickRepo("Tour the ideas in which repository?");
+    if (!root) return void vscode.window.showInformationMessage("Miyagi needs an open git repository for this.");
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Miyagi: reading ${path.basename(root)} for the ideas it relies on` },
+      async () => {
+        const files = await trackedFiles(root);
+        const tour = await tourStops(root, files);
+        await showMarkdown("maps", `tour-${path.basename(root).replace(/[^\w.-]+/g, "-")}.md`, renderTour(path.basename(root), tour, files.length));
       },
     );
   });

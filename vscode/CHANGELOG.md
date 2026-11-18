@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- **Team mode, with no server.** Share a small summary (ideas and belts only) into a folder in your repository; a team report shows where the team is thin and who to ask.
+- **Tour the Ideas in This Codebase**: every idea a repository relies on, in learning order, with the files to start reading.
+- **Whole-function context.** Where a language server is running, explanations and exercises are given the function an idea sits in.
+
+### Fixed
+
+- **Commits are now noticed in every editor.** In VS Code neither the git extension nor the file watcher reported them, so held lessons waited for the quiet timer. While anything is held, git is asked directly.
+
+### Verified
+
+- Right-side docking in real VS Code (1.147), and the smoke test in VS Code, Cursor and Antigravity IDE.
+- The Ollama provider against a stand-in server speaking its API; the Gemini CLI flags against its own help.
+
 ## 0.3.0
 
 Built on what is known about how people learn, and about what goes wrong when an AI does the work: recalling beats rereading, mixed practice beats blocked practice, help that never fades becomes a crutch, and people who let an assistant answer for them retain least.

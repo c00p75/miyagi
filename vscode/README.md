@@ -5,8 +5,7 @@ A side panel that watches what your AI assistant builds and teaches you the few 
 Works in VS Code and its forks (Cursor, Antigravity, Windsurf), with any assistant that edits files in a git repository.
 
 <p>
-  <img src="media/screenshots/lesson.png" alt="A lesson card explaining password hashing, with an explanation of the learner's own code" width="380">
-  <img src="media/screenshots/review.png" alt="A review question answered correctly, scheduled to return in one day" width="380">
+  <img src="media/demo.gif" alt="A card for SQL built by gluing strings together; its question shown without choices; tapping how sure you are; the choices and a correct answer; explaining the code yourself with a nudge; and how often 'sure' turned out right" width="380">
 </p>
 
 ## Setup
@@ -62,11 +61,11 @@ You do, through an assistant you already use. Miyagi has no account, no API key 
 
 | Provider | How it is called | Tested |
 | --- | --- | --- |
-| Claude Code | The `claude` binary, headless, with the `haiku` model by default. Found on your PATH or inside the Claude Code editor extension. | Yes |
+| Claude Code | The `claude` binary, headless, with the `haiku` model by default. Found on your PATH or inside the Claude Code editor extension. | Yes, live |
 | Editor models | The chat models the editor offers to extensions (GitHub Copilot in VS Code). | Against a stub only |
-| Codex | `codex exec`, read-only. Found on your PATH or inside the OpenAI editor extension. | Flags checked, not run live |
-| Gemini CLI | `gemini -p` | Not tested |
-| Ollama | A model on your machine, over its local HTTP API. Nothing leaves the machine. | Not tested: no Ollama here |
+| Codex | `codex exec`, read-only. Found on your PATH or inside the OpenAI editor extension. | Flags checked; a live run needs a signed-in Codex |
+| Gemini CLI | `gemini -p`, with the prompt on stdin. | Flags confirmed against its help; not run live |
+| Ollama | A model on your machine, over its local HTTP API. Nothing leaves the machine. | Against a stand-in server speaking its API |
 | Your own command | Anything that reads a prompt on stdin and prints an answer, for example `llm -m gpt-4o-mini`. | Yes |
 
 In `auto` (the default) Miyagi uses the assistant it saw doing the work, else the first one it finds. Run **Miyagi: Choose Which AI Writes Explanations** to pick, or to turn AI off. Cards, questions and belts all work without any AI.
@@ -77,7 +76,7 @@ Each request is a separate, short-lived process: no tools, no project context, n
 
 ## Where the panel sits
 
-In VS Code 1.106 or newer the panel opens in the secondary side bar, on the right, by itself. Cursor, Antigravity and Windsurf keep that side bar for their own agent, so there Miyagi opens in the activity bar. Press the split icon on the panel's toolbar (**Miyagi: Open Beside the Editor**) to open it as a tab on the right instead.
+In VS Code 1.106 or newer the panel opens in the secondary side bar, on the right, by itself (checked in VS Code 1.147). Cursor, Antigravity and Windsurf keep that side bar for their own agent, so there Miyagi opens in the activity bar. Press the split icon on the panel's toolbar (**Miyagi: Open Beside the Editor**) to open it as a tab on the right instead.
 
 ## Keeping it out of the way
 
@@ -91,6 +90,14 @@ In VS Code 1.106 or newer the panel opens in the secondary side bar, on the righ
 While paused or quiet, changes are still read, so nothing is taught late as though it had just happened.
 
 Each learning behaviour has its own switch: `miyagi.recallFirst`, `miyagi.explainFirst`, `miyagi.fadeSupport`, `miyagi.mixTopicsInReview`, `miyagi.blackBeltNeedsTransfer`, `miyagi.weeklyGoalDays`, `miyagi.reviewAfterFirstCommit`.
+
+## For a team
+
+Miyagi has no server, so the shared place is your own repository.
+
+- **Miyagi: Share My Progress with My Team** writes one small file to `.miyagi/team/` (`miyagi.team.folder`). It holds the ideas you have met and your belt in each: no code, no file names, no answers. It reaches your team when you commit it.
+- **Miyagi: Show Team Report** reads that folder: who has shared, where the team is thin, who to ask about each idea, and which consequential ideas nobody has met. People are listed by name, not by score.
+- **Miyagi: Tour the Ideas in This Codebase** reads the repository and lists every idea it relies on, most consequential first and each after the one it builds on, with the files to start reading. A reading list for someone new. No AI involved.
 
 ## Your own ideas
 
@@ -138,11 +145,16 @@ It runs on Node.js if you have it and on the editor's own runtime if you do not 
 
 ## Limits
 
-- Built-in ideas are detected with patterns over added lines, for 32 ideas today. It will miss things. "Find ideas with AI" and idea packs widen that.
+- Built-in ideas are detected with patterns, for 32 ideas today. The patterns are applied with comments removed and across statements that span several lines, but this is not a parser and it will miss things. "Find ideas with AI" and idea packs widen that.
+- Where a language server is running, explanations and exercises are given the whole function an idea sits in. Without one, they get the lines around it.
 - Without command capture it cannot tell your typing from your assistant's; with it, lessons say which assistant made the change.
 - Everything an AI writes (explanations, risks, walkthroughs, found ideas) can be wrong. Each one names the model that wrote it.
 - "What the assistant said" reads Claude Code's session files, whose format is not documented and may change.
 - The first time a repository is seen, its existing uncommitted changes are treated as old. Run **Miyagi: Teach Me My Uncommitted Changes** to be taught those.
+
+## Not using VS Code?
+
+The same tutor runs in any terminal, including the one inside JetBrains IDEs: `npx miyagi-mcp watch`, `npx miyagi-mcp review`, `npx miyagi-mcp dojo`. It shares your progress with this panel.
 
 ## Development
 

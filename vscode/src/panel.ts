@@ -524,10 +524,59 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     return undefined;
   }
 
-  /** The learner's lines for a card: where the idea's pattern matches, else around the evidence. */
+  /**
+   * The function a card's evidence sits in, from the editor's own language
+   * server. A model that sees one whole function explains it far better than
+   * one shown six lines either side of a match, and a find-the-bug exercise
+   * cut mid-function is not an exercise. Null when no language server answers
+   * in time, the file has no symbols, or the function is too long to send.
+   */
+  private async enclosingFunction(card: engine.CardView): Promise<string | null> {
+    const needle = card.evidence.replace(/…$/, "").trim();
+    if (!needle || needle.startsWith("(")) return null;
+    const abs = path.isAbsolute(card.file) ? card.file : path.join(card.root, card.file);
+    try {
+      const uri = vscode.Uri.file(abs);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const at = doc.getText().indexOf(needle.slice(0, 60));
+      if (at < 0) return null;
+      const line = doc.positionAt(at).line;
+      const symbols = await Promise.race([
+        vscode.commands.executeCommand<vscode.DocumentSymbol[] | undefined>("vscode.executeDocumentSymbolProvider", uri),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 1_500)),
+      ]);
+      if (!Array.isArray(symbols)) return null;
+      const callable = new Set([
+        vscode.SymbolKind.Function,
+        vscode.SymbolKind.Method,
+        vscode.SymbolKind.Constructor,
+        vscode.SymbolKind.Variable,
+        vscode.SymbolKind.Constant,
+        vscode.SymbolKind.Property,
+      ]);
+      // The innermost callable that contains the line and is short enough to read.
+      let best: vscode.Range | null = null;
+      const visit = (list: readonly vscode.DocumentSymbol[]) => {
+        for (const symbol of list) {
+          if (!symbol.range || line < symbol.range.start.line || line > symbol.range.end.line) continue;
+          const length = symbol.range.end.line - symbol.range.start.line + 1;
+          if (callable.has(symbol.kind) && length >= 3 && length <= 70) best = symbol.range;
+          visit(symbol.children ?? []);
+        }
+      };
+      visit(symbols);
+      const range = best as vscode.Range | null;
+      return range ? await engine.excerptOfRange(card.root, card.file, range.start.line, range.end.line) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The learner's lines for a card: the enclosing function, else where the pattern matches, else around the evidence. */
   private async excerpt(card: engine.CardView): Promise<string | null> {
     if (!card.file) return null;
     return (
+      (await this.enclosingFunction(card)) ??
       (await engine.excerptFor(card.conceptId, card.root, card.file)) ??
       (card.evidence ? await engine.excerptOfChange(card.root, card.file, card.evidence.replace(/…$/, "")) : null)
     );

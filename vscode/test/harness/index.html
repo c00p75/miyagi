@@ -11,7 +11,10 @@
 <script src="mock.js"></script>
 <script>
 document.getElementById("theme").textContent = `:root{--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-sideBar-background:#181818;--vscode-editorWidget-background:#202020;--vscode-widget-border:#313131;--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#ccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-textLink-foreground:#4daafc;--vscode-textCodeBlock-background:#2b2b2b;--vscode-badge-background:#616161;--vscode-badge-foreground:#f8f8f8;--vscode-focusBorder:#0078d4;--vscode-font-family:-apple-system,BlinkMacSystemFont,sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;--vscode-dropdown-background:#313131;--vscode-dropdown-foreground:#ccc;--vscode-progressBar-background:#0078d4;--vscode-charts-green:#89d185;--vscode-charts-red:#f14c4c;--vscode-charts-yellow:#cca700;--vscode-textBlockQuote-background:#222222;--vscode-input-background:#313131;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c} body{background:#181818;max-width:400px}`;
-const scene = location.hash.slice(1) || "feed";
+// "#scene" or "#scene:step,step": steps are clicked in order after load, for
+// screenshots of a state that takes a few taps to reach. Steps: quiz, sure,
+// think, guess, answer<N>, scroll=<css selector>.
+const [scene, script = ""] = (location.hash.slice(1) || "feed").split(":");
 const M = window.MOCK, S = M.state, key = M.first, L = M.lessonId;
 const code = '2: export async function register(email, password) {\n3:   const hash = await bcrypt.hash(password, 12);\n4:   await db.users.insert({ email, hash });\n5: }';
 if (scene === "recall") {
@@ -35,11 +38,28 @@ window.acquireVsCodeApi = () => ({
     if (m.type === "ready") reply(S);
     if (m.type === "dojo") reply({ type: "dojo", rows: M.dojo, belts: M.belts, insight: M.insight });
     if (m.type === "quiz") reply({ type: "quiz", key: m.key, quiz: M.quiz });
+    if (m.type === "answer") reply({ type: "answered", token: m.token, answer: { token: m.token, correct: true, chosenIndex: m.index, answerIndex: m.index, explanation: "The database cannot tell your words from the user's, so a value pasted into the query text can change what the query does.", xpAwarded: 25, nextDueAt: new Date(Date.now() + 864e5).toISOString(), belt: "Yellow", leveledUp: false, title: "", newBadges: [], quizStreak: 1, confidentMiss: false, repaysMiss: false, needsTransfer: false, transferPassed: false } });
   },
 });
-window.addEventListener("load", () => setTimeout(() => {
-  if (scene === "recall") document.querySelector('[data-action="quiz"]').click();
-  setTimeout(() => { document.title = "ready:" + document.documentElement.scrollHeight; }, 150);
-}, 250));
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+window.addEventListener("load", async () => {
+  await pause(250);
+  if (scene === "recall" && !script) document.querySelector('[data-action="quiz"]').click();
+  for (const step of script.split(",").filter(Boolean)) {
+    const click = (sel) => { const el = document.querySelector(sel); if (el) el.click(); };
+    if (step === "quiz") click('[data-action="quiz"]');
+    else if (["sure", "think", "guess"].includes(step)) click(`[data-action="confidence"][data-level="${step}"]`);
+    else if (step.startsWith("answer")) click(`[data-action="answer"][data-index="${step.slice(6)}"]`);
+    else if (step.startsWith("scroll=")) {
+      const el = document.querySelector(decodeURIComponent(step.slice(7)));
+      // Headless screenshots of a scrolled page are unreliable, so the position
+      // is reported in the title and the capture is cropped to it instead.
+      if (el) window.__top = Math.round(el.getBoundingClientRect().top + window.scrollY);
+    }
+    await pause(120);
+  }
+  await pause(150);
+  document.title = "ready:" + document.documentElement.scrollHeight + ":" + (window.__top || 0);
+});
 </script>
 <script src="panel.js"></script></body></html>
