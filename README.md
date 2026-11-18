@@ -34,7 +34,7 @@ Since your last debrief, your assistant ran 7 commands and edited 3 files (+212 
 
 ❓ An API key was committed to git, then deleted in the next commit. What now?
 
-✨ 2 new techniques discovered · +10 XP      🥋 Dojo: 2/23 techniques discovered
+✨ 2 new techniques discovered · XP is earned by answering its question
 ```
 
 ## How it works
@@ -197,7 +197,7 @@ practice: *"Set my roadmap to Backend Developer and teach me `docker compose con
 | **Audio** | A non-blocking FIFO queue, so lines never talk over each other. Markdown, URLs and emoji are stripped before anything is spoken, and the OS engine is probed before it's called, so a missing binary goes quiet instead of taking the server down. On Windows one PowerShell is kept alive rather than paying ~1s of `Add-Type` startup per line. |
 | **Roadmap** | Six built-in tracks with 26 checkpointed steps, plus your own: any JSON file in `~/.miyagi/roadmaps/` becomes a track, and one named after a built-in shadows it. An unknown track name is *reported*, not silently swapped for Command Line Basics. Every track declares the shell it was written for. |
 | **Windows** | Tracks declare `posix` or `powershell`. On a mismatched host, a step with a PowerShell equivalent is substituted and labelled, then executed through `powershell.exe` — not `cmd.exe`. Checkpoints have PowerShell probes too. A step without an alternative gets an explicit warning instead of a command line that is known to fail. Silence was the bug. |
-| **Gamification** | 5 XP for a technique discovered in real code (once). Attempt XP follows the session mode (10 in drill, 3 in ride-along, 0 in focus), **30 for a verified outcome**, 25 per correct quiz (30 for a review — cold recall is the harder skill) with streak multipliers, `Level = floor(XP/100) + 1`, four titles, streak and practice-day badges. |
+| **Gamification** | Nothing for a technique merely appearing in code: XP is paid for recall and verified work, not exposure. Attempt XP follows the session mode (10 in drill, 3 in ride-along, 0 in focus), **30 for a verified outcome**, 25 per correct quiz (30 for a review — cold recall is the harder skill) with streak multipliers, `Level = floor(XP/100) + 1`, four titles, streak and practice-day badges. |
 | **Progress** | `~/.miyagi/profile.json` for state, plus an append-only `history.jsonl` for the practice log, so a note export after a restart describes what you actually did instead of an empty session. Saves *merge* with what is on disk, so two clients cannot roll each other's XP backwards: counters take the higher total, badges union, and verified checkpoints are never dropped. Parallel sessions that each earn XP from the same baseline keep the larger score, not the sum. |
 | **Safety** | Two tiers, screened independently of the caller: catastrophic shapes never run, destructive ones need a human's confirmation. Checkpoint probes are screened too — a "probe" that deletes something is not a probe, and a track file is where one would hide. |
 | **Notes** | `ROADMAP_PROGRESS.md` export with quiz accuracy, weak spots, what is due for review, and the full log — session-scoped or lifetime. |

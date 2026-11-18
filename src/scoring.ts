@@ -14,8 +14,17 @@
 
 import { awardXp, player, schedulePersist, type XpResult } from "./state.js";
 
-/** A technique seen for the first time. Small, once, and impossible to farm: it needs real code. */
-export const XP_CONCEPT_DISCOVERED = 5;
+/**
+ * A technique seen for the first time pays nothing.
+ *
+ * It used to pay 5. But the learner did nothing to earn it: their assistant
+ * wrote some code and a pattern matched. Paying for that rewards the amount of
+ * code an assistant produces, which is the opposite of what the tutor is for,
+ * and it let a level rise without a single question being answered. XP is now
+ * paid only for recall and for unaided work. The constant stays so the two
+ * callers read the same and the rule has one place to change.
+ */
+export const XP_CONCEPT_DISCOVERED = 0;
 
 /** First-sight recall. */
 export const XP_QUIZ = 25;

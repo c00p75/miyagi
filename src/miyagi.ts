@@ -2057,7 +2057,8 @@ function teachChanges(input: LessonInput) {
     }
     if (discovered) {
       lines.push(
-        `✨ **${discovered} new technique${discovered === 1 ? "" : "s"} discovered** · +${xp?.awarded ?? 0} XP`,
+        `✨ **${discovered} new technique${discovered === 1 ? "" : "s"} discovered**` +
+          (xp?.awarded ? ` · +${xp.awarded} XP` : " · XP is earned by answering its question"),
       );
     }
     lines.push(`🥋 Dojo: ${dojo}`);

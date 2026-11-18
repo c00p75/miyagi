@@ -84,7 +84,7 @@ test("a diff becomes a short lesson with the dangerous idea first", async () => 
     assert.equal(data.concepts.filter((c: any) => c.status === "new").length, 2, "limit was not respected");
     assert.ok(data.concepts.some((c: any) => c.status === "later"), "the overflow was dropped silently");
     assert.equal(data.new_concepts, 2);
-    assert.equal(data.xp_awarded, 10);
+    assert.equal(data.xp_awarded, 0, "an idea appearing in code is exposure, and exposure pays nothing");
     assert.ok(data.quiz_id.startsWith("c-sql-interpolation-"), "the question is not about the top idea");
 
     assert.match(text, /2 ideas worth owning/);
