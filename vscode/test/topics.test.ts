@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,10 +7,13 @@ import { CONCEPTS, detectConcepts } from "../../src/concepts.js";
 import { TOPICS, hasTopic, parseTopic, topicOf } from "../src/topics.js";
 import * as engine from "../src/engine.js";
 
+let scratch = "";
 before(async () => {
-  process.env.MIYAGI_HOME = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-topics-")), "home");
+  scratch = await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-topics-"));
+  process.env.MIYAGI_HOME = path.join(scratch, "home");
   engine.forgetSession();
 });
+after(() => fs.rm(scratch, { recursive: true, force: true }));
 
 test("every concept in the pack has been given a topic", () => {
   const missing = CONCEPTS.filter((c) => !hasTopic(c.id)).map((c) => c.id);

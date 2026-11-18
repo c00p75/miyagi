@@ -3,7 +3,7 @@
  * card's question is graded with the server's numbers, and what is written to
  * disk is the same profile the MCP server reads.
  */
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -31,9 +31,11 @@ before(async () => {
   process.env.MIYAGI_HOME = home;
 });
 
+after(() => fs.rm(path.dirname(home), { recursive: true, force: true }));
+
 const changes = () => [{ file: "auth.ts", concepts: detectConcepts("auth.ts", SOURCE) }];
 
-test("a change that uses an idea becomes one card and pays discovery XP once", async () => {
+test("a change that uses an idea becomes one card, and seeing it pays nothing", async () => {
   const lesson = await engine.teach({ changes: changes(), root: work, source: "auth.ts", limit: 2 });
   assert.ok(lesson, "expected a lesson");
   const card = lesson.cards.find((c) => c.conceptId === "password-hashing");
@@ -41,7 +43,8 @@ test("a change that uses an idea becomes one card and pays discovery XP once", a
   assert.equal(card.status, "new");
   assert.equal(card.file, "auth.ts");
   assert.equal(card.hasQuiz, true);
-  assert.equal(lesson.xpAwarded, lesson.discovered * 5);
+  assert.ok(lesson.discovered >= 1);
+  assert.equal(lesson.xpAwarded, 0, "XP is for recall, not for an idea appearing");
 
   const status = await engine.status();
   assert.equal(status.xp, lesson.xpAwarded);

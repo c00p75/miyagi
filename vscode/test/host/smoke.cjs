@@ -27,7 +27,7 @@ exports.run = async function run() {
 
   const commands = await vscode.commands.getCommands(true);
   for (const id of [
-    "open", "openBeside", "setup", "review", "pause", "resume", "explainChanges", "teachBranch", "projectMap",
+    "open", "openBeside", "setup", "review", "unaidedCheck", "recap", "pause", "resume", "explainChanges", "teachBranch", "projectMap",
     "weeklyReport", "chooseAi", "enableCapture", "disableCapture", "moveToSide", "clearFeed", "settings", "doctor",
   ]) {
     assert.ok(commands.includes(`miyagi.${id}`), `command miyagi.${id} is registered`);
@@ -52,7 +52,16 @@ exports.run = async function run() {
     path.join(folder, "auth.ts"),
     'import bcrypt from "bcrypt";\nexport const hash = (pw: string) => bcrypt.hash(pw, 12);\n',
   );
-  const lessons = await until("a lesson from the new file", () => (api.lessons().length ? api.lessons() : null));
+  // By default a change is held until a stopping point. Nothing yet:
+  await new Promise((r) => setTimeout(r, 6000));
+  assert.deepEqual(api.lessons(), [], "a card must not arrive mid-task");
+  // A commit is that stopping point.
+  const { execFileSync } = require("node:child_process");
+  const git = (...args) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t.t", "-c", "commit.gpgsign=false", ...args], { cwd: folder });
+  git("add", "-A");
+  git("commit", "-qm", "add auth");
+  const lessons = await until("a lesson once the change was committed", () => (api.lessons().length ? api.lessons() : null));
   assert.equal(lessons[0].source, "auth.ts");
   assert.ok(lessons[0].concepts.includes("password-hashing"), JSON.stringify(lessons));
 
@@ -61,6 +70,8 @@ exports.run = async function run() {
   await vscode.commands.executeCommand("miyagi.openBeside");
   await vscode.commands.executeCommand("miyagi.doctor");
   await vscode.commands.executeCommand("miyagi.weeklyReport");
+  await vscode.commands.executeCommand("miyagi.unaidedCheck");
+  await vscode.commands.executeCommand("miyagi.recap");
   await new Promise((r) => setTimeout(r, 1500));
   console.log("MIYAGI SMOKE OK roots=" + JSON.stringify(api.roots()) + " folder=" + folder, vscode.env.appName, vscode.version, api.viewId(), JSON.stringify(lessons));
 };

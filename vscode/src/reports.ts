@@ -165,3 +165,60 @@ export function chooseFiles(files: readonly string[], options: { tree: number; h
   }
   return { tree: [...tree].sort(), heads: ranked.filter((f) => fileInterest(f) > 0).slice(0, options.heads) };
 }
+
+/* ------------------------------------------------------------------ *
+ * The weekly goal
+ * ------------------------------------------------------------------ */
+
+export interface WeekProgress {
+  /** Distinct days practised since Monday. */
+  days: number;
+  goal: number;
+  /** Weeks in a row, before this one, that met the goal or missed it by a single day. */
+  weeksRunning: number;
+}
+
+function mondayOf(d: Date): Date {
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  out.setDate(out.getDate() - ((out.getDay() + 6) % 7));
+  return out;
+}
+
+const localDay = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/**
+ * A weekly goal instead of a daily streak.
+ *
+ * A streak punishes one missed day with the loss of everything, which teaches
+ * people to protect the number rather than to learn, and to stop altogether
+ * once it breaks. A week with a target of a few days has slack built in, and
+ * a past week still counts if it fell one day short: one free skip.
+ */
+export function weekProgress(days: readonly string[], goal: number, now: Date = new Date()): WeekProgress {
+  const target = Math.max(1, Math.min(7, Math.round(goal)));
+  const practised = new Set(days);
+  const count = (monday: Date) => {
+    let n = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(d.getDate() + i);
+      if (practised.has(localDay(d))) n++;
+    }
+    return n;
+  };
+  const thisMonday = mondayOf(now);
+  let weeksRunning = 0;
+  for (let back = 1; back <= 104; back++) {
+    const monday = new Date(thisMonday);
+    monday.setDate(monday.getDate() - back * 7);
+    if (count(monday) >= Math.max(1, target - 1)) weeksRunning++;
+    else break;
+  }
+  return { days: count(thisMonday), goal: target, weeksRunning };
+}
+
+/** The days on record, for `weekProgress`. */
+export async function practisedDays(): Promise<string[]> {
+  return [...new Set((await readHistory()).map((e) => e.day))];
+}

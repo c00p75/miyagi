@@ -1,0 +1,45 @@
+<!doctype html>
+<!--
+  The panel in a browser. Build with `npm run harness`, then open
+  http://localhost:8765/index.html#<scene> where scene is one of:
+  feed, recall, dojo, empty. The stub below answers the panel's messages
+  from mock.js the way the extension host would.
+-->
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style id="theme"></style>
+<link rel="stylesheet" href="panel.css"></head><body><div id="app"></div>
+<script src="mock.js"></script>
+<script>
+document.getElementById("theme").textContent = `:root{--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-sideBar-background:#181818;--vscode-editorWidget-background:#202020;--vscode-widget-border:#313131;--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#ccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-textLink-foreground:#4daafc;--vscode-textCodeBlock-background:#2b2b2b;--vscode-badge-background:#616161;--vscode-badge-foreground:#f8f8f8;--vscode-focusBorder:#0078d4;--vscode-font-family:-apple-system,BlinkMacSystemFont,sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;--vscode-dropdown-background:#313131;--vscode-dropdown-foreground:#ccc;--vscode-progressBar-background:#0078d4;--vscode-charts-green:#89d185;--vscode-charts-red:#f14c4c;--vscode-charts-yellow:#cca700;--vscode-textBlockQuote-background:#222222;--vscode-input-background:#313131;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c} body{background:#181818;max-width:400px}`;
+const scene = location.hash.slice(1) || "feed";
+const M = window.MOCK, S = M.state, key = M.first, L = M.lessonId;
+const code = '2: export async function register(email, password) {\n3:   const hash = await bcrypt.hash(password, 12);\n4:   await db.users.insert({ email, hash });\n5: }';
+if (scene === "recall") {
+  S.extras[key] = { followUps: [], attempt: { code }, hints: { nudge: "Which word on these lines decides how slow the scramble is?", by: "Claude Code (haiku)" },
+    contrast: { question: "Which one has the problem?", by: "Claude Code (haiku)", a: "const u = await db.user(id);\nif (!u) return null;\nreturn u.name;", b: "const u = db.user(id);\nif (!u) return null;\nreturn u.name;" } };
+  S.lessonExtras[L] = { turn: { by: "Claude Code (haiku)", task: "Reject passwords shorter than eight characters before they are hashed.", file: "src/api/auth.ts", done: "Registering with a short password returns an error.", hint: "Check before line 3." } };
+  S.heartbeat = { root: "shop-api", at: new Date().toISOString(), files: 2, taught: 0, held: true }; S.holding = true;
+}
+if (scene === "dojo") {
+  S.status.independence = { at: new Date(Date.now() - 6 * 864e5).toISOString(), asked: 10, correct: 7 };
+  M.insight = { verdict: "When you say you are sure, you are right 62% of the time. Feeling certain is not telling you much yet.",
+    calibration: [{ confidence: "sure", answers: 13, correct: 8, accuracy: 0.62 }, { confidence: "think", answers: 9, correct: 6, accuracy: 0.67 }, { confidence: "guess", answers: 3, correct: 1, accuracy: null }],
+    mistakes: [{ at: "", concept: "password-hashing", about: "Storing passwords as hashes", question: "Why are password hashing algorithms deliberately slow?", believed: "To give the database time to write the row", truth: "To make guessing many candidates expensive", why: "", confident: true }] };
+}
+if (scene === "empty") { S.lessons = []; S.status.dueQuestions = 6; S.commands = []; }
+const start = { tab: scene === "dojo" ? "dojo" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null };
+const reply = (m) => setTimeout(() => window.postMessage(m, "*"), 20);
+window.acquireVsCodeApi = () => ({
+  getState: () => start, setState: () => {},
+  postMessage: (m) => {
+    if (m.type === "ready") reply(S);
+    if (m.type === "dojo") reply({ type: "dojo", rows: M.dojo, belts: M.belts, insight: M.insight });
+    if (m.type === "quiz") reply({ type: "quiz", key: m.key, quiz: M.quiz });
+  },
+});
+window.addEventListener("load", () => setTimeout(() => {
+  if (scene === "recall") document.querySelector('[data-action="quiz"]').click();
+  setTimeout(() => { document.title = "ready:" + document.documentElement.scrollHeight; }, 150);
+}, 250));
+</script>
+<script src="panel.js"></script></body></html>

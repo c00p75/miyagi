@@ -162,7 +162,7 @@ export function ownQuestionPrompt(req: { title: string; file: string; excerpt: s
 /** Null unless there is a question, an answer and at least two distinct wrong answers. */
 export function parseOwnQuestion(text: string): OwnQuestion | null {
   const o = obj(extractJson(text));
-  const question = str(o.question, 400);
+  const question = str(o.question, 1_200);
   const answer = str(o.answer, 240);
   const explanation = str(o.explanation, 600);
   const seen = new Set([answer.toLowerCase()]);
@@ -638,4 +638,26 @@ export function parseYourTurn(text: string, known: readonly string[]): YourTurn 
   // A "task" that contains the code is the assistant doing it for them again.
   if (/```|;\s*\n|\n\s{2,}\S/.test(typeof o.task === "string" ? o.task : "")) return null;
   return { task, file, done: str(o.done, 300), hint: str(o.hint, 300) };
+}
+
+/**
+ * The same idea somewhere it was not learned. Recognising a thing in the file
+ * where you first met it is memory of the file; recognising it in another
+ * language is understanding of the idea.
+ */
+export function transferQuestionPrompt(req: { title: string; what: string; file: string; depth: Depth }): Prompt {
+  const ext = (req.file.split(".").pop() || "").toLowerCase();
+  return prompt([
+    `I learned the idea "${req.title}" (${req.what}) from a .${ext || "code"} file in my own project.`,
+    "Write one multiple-choice question that tests whether I can recognise or apply the same idea in a DIFFERENT language or framework.",
+    "",
+    "Rules:",
+    "- Put a snippet of 3 to 8 lines in the question, inside a code fence, in a language that is not the one above.",
+    "- Ask what is wrong with it, what it does, or what should change, such that only someone who understands the idea (not the syntax) can answer.",
+    "- One correct answer and three wrong answers of similar length. The correct answer must not be the longest.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"question": "text with a ``` fenced snippet", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "one or two sentences"}',
+  ]);
 }

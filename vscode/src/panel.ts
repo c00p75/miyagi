@@ -22,6 +22,18 @@ import { AudioQueue } from "../../src/tts.js";
 import * as engine from "./engine.js";
 import { resolveProvider, type AiOptions, type Prompt } from "./ai.js";
 import {
+  contrastPrompt,
+  hintPrompt,
+  parseContrast,
+  parseYourTurn,
+  traceQuestionPrompt,
+  transferQuestionPrompt,
+  whyQuestionPrompt,
+  yourTurnPrompt,
+  type Hint,
+  type YourTurn,
+} from "./prompts.js";
+import {
   bugDrillPrompt,
   explainPrompt,
   findIdeasPrompt,
@@ -42,7 +54,9 @@ import {
   type Verdict,
   type WalkStep,
 } from "./prompts.js";
-import { registerFound } from "./ideas.js";
+import { registerFound, registerOwnQuestion } from "./ideas.js";
+import { parseConfidence } from "./journal.js";
+import { practisedDays, weekProgress, type WeekProgress } from "./reports.js";
 import { currentMeter, describeMeter, recordCall, type Meter } from "./meter.js";
 import type { QuietReason } from "./schedule.js";
 import { assistantReasoning } from "./transcript.js";
@@ -53,6 +67,11 @@ const FEED_KEY = "miyagi.feed.v1";
 const TOPIC_KEY = "miyagi.topic.v1";
 const METER_KEY = "miyagi.meter.v1";
 const DEPTH_DISMISSED_KEY = "miyagi.depthSuggestionDismissed.v1";
+const MIRROR_KEY = "miyagi.mirror.v1";
+/** Questions in an unaided check. */
+const CHECK_LENGTH = 10;
+/** XP for a small change written without the assistant: more than any single answer. */
+const XP_YOUR_TURN = 40;
 const MAX_LESSONS = 25;
 const MAX_COMMANDS = 30;
 /** A change smaller than this is not worth a model call to look for ideas in. */
@@ -81,7 +100,13 @@ interface CardExtra {
   followUps: Array<{ question: string; answer: string; by: string }>;
   /** "Explain it yourself first": the code shown, then what they wrote and how it was judged. */
   attempt?: { code: string; text?: string; verdict?: Verdict; feedback?: string; by?: string };
-  bug?: BugDrill & { by: string };
+  /** The answer to a drill stays in the extension host until it is found. */
+  bug?: { lines: string[]; hint: string; by: string; wrong: number[]; found: boolean; bugLine?: number; explanation?: string };
+  contrast?: { question: string; a: string; b: string; by: string; picked?: "a" | "b"; flawed?: "a" | "b"; explanation?: string };
+  /** Help that stops short of the answer: a nudge, then a pointer. */
+  hints?: { nudge?: string; pointer?: string; by?: string };
+  /** A question the learner is writing, and what was wrong with the last attempt to save it. */
+  ownCard?: { saved?: string; problem?: string };
   /** The assistant's own words when it wrote the file, or a note that none were found. */
   why?: { text: string; at: string | null } | { missing: true };
 }
@@ -89,6 +114,19 @@ interface CardExtra {
 interface LessonExtra {
   risks?: { items: Risk[]; by: string };
   walk?: { steps: WalkStep[]; by: string };
+  /** A small follow-up change for the learner to write without the assistant. */
+  turn?: YourTurn & { by: string; verdict?: "done" | "nothing" | "assisted"; lines?: number; hintShown?: boolean };
+}
+
+/** How the learner uses their assistant, counted for one week. Described, never scored. */
+interface Mirror {
+  week: string;
+  /** Files an assistant changed, and the ones the learner then opened. */
+  changed: string[];
+  opened: string[];
+  cards: number;
+  explained: number;
+  attempted: number;
 }
 
 interface SavedFeed {
@@ -114,7 +152,18 @@ type Inbound =
   | { type: "walk"; lesson: string }
   | { type: "walkStep"; lesson: string; index: number }
   | { type: "quiz"; key: string }
-  | { type: "answer"; token: string; index: number }
+  | { type: "answer"; token: string; index: number; confidence?: string }
+  | { type: "hint"; key: string; step: Hint }
+  | { type: "practice"; key: string; kind: "why" | "trace" | "contrast" | "own" | "bug" | "transfer" }
+  | { type: "bugGuess"; key: string; line: number }
+  | { type: "bugReveal"; key: string }
+  | { type: "contrastPick"; key: string; pick: "a" | "b" }
+  | { type: "ownCard"; key: string; question: string; answer: string; wrong: string[]; why: string }
+  | { type: "turn"; lesson: string }
+  | { type: "turnDone"; lesson: string }
+  | { type: "turnHint"; lesson: string }
+  | { type: "check" }
+  | { type: "recap"; text: string }
   | { type: "review" }
   | { type: "dojo" }
   | { type: "setDepth"; depth: engine.Level }
@@ -135,6 +184,8 @@ export interface PanelDeps {
   quiet(): QuietReason;
   /** Called after every state push, for the status bar and reminders. */
   onStatus(status: engine.StatusView): void;
+  /** Are changes read and waiting for a stopping point? */
+  holding(): boolean;
 }
 
 const setting = <T>(key: string, fallback: T): T => vscode.workspace.getConfiguration("miyagi").get<T>(key, fallback);
@@ -174,6 +225,16 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private heartbeat: (Scan & { taught: number }) | null = null;
   private readonly baseline = new Map<string, number>();
   private aiIdeaCalls: number[] = [];
+  /** What a drill is hiding, by card. Never sent to the webview before it is found. */
+  private readonly secrets = new Map<string, { bugLine?: number; flawed?: "a" | "b"; explanation: string }>();
+  private week: { at: number; value: WeekProgress } | null = null;
+  /** An unaided check in progress. */
+  private check: { plan: string[]; asked: number; correct: number; token: string | null } | null = null;
+  /** A capped review, such as the three questions offered after the first commit of the day. */
+  private reviewCap: number | null = null;
+  /** Lines each file had added when a "your turn" task was proposed. */
+  private readonly turnBaselines = new Map<string, { lines: number; at: number }>();
+  private turnsProposed = 0;
   private lastDepth: engine.Level = "Junior";
 
   private readonly voice = { enabled: true, words_per_minute: 180 };
@@ -342,7 +403,61 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       quiet: quiet.quiet ? { why: quiet.why, until: quiet.why === "paused" ? quiet.until.toISOString() : null } : null,
       meter: describeMeter(this.meter()),
       findIdeas: setting<string>("ai.findIdeas", "off"),
+      recallFirst: setting("recallFirst", true),
+      explainFirst: setting("explainFirst", true),
+      fadeSupport: setting("fadeSupport", true),
+      holding: this.deps.holding(),
+      week: await this.weekNow(),
+      mirror: this.mirrorLine(),
+      check: this.check && { asked: this.check.asked, of: this.check.plan.length + this.check.asked },
+      turnsLeft: this.turnsProposed === 0,
     });
+  }
+
+  private async weekNow(): Promise<WeekProgress> {
+    // The history file is read at most once a minute, not on every redraw.
+    if (!this.week || Date.now() - this.week.at > 60_000) {
+      this.week = { at: Date.now(), value: weekProgress(await practisedDays(), setting("weeklyGoalDays", 4)) };
+    }
+    return this.week.value;
+  }
+
+  /* ---- the mirror ------------------------------------------------ */
+
+  private mirror(): Mirror {
+    const saved = this.deps.context.globalState.get<Mirror>(MIRROR_KEY);
+    const week = currentMeter(null).week;
+    return saved && saved.week === week && Array.isArray(saved.changed) && Array.isArray(saved.opened)
+      ? saved
+      : { week, changed: [], opened: [], cards: 0, explained: 0, attempted: 0 };
+  }
+
+  private reflect(change: (m: Mirror) => void): void {
+    const m = this.mirror();
+    change(m);
+    m.changed = [...new Set(m.changed)].slice(-600);
+    m.opened = [...new Set(m.opened)].filter((f) => m.changed.includes(f));
+    void this.deps.context.globalState.update(MIRROR_KEY, m);
+  }
+
+  /** Called when the learner brings a file to the front of the editor. */
+  opened(file: string): void {
+    if (this.mirror().changed.includes(file)) this.reflect((m) => m.opened.push(file));
+  }
+
+  /**
+   * One neutral sentence, or null when there is too little to say. It is a
+   * description of a habit, with no target attached: the point is for the
+   * learner to see it, not to be graded on it.
+   */
+  private mirrorLine(): string | null {
+    const m = this.mirror();
+    if (m.changed.length < 3) return null;
+    const first = `You opened ${m.opened.length} of the ${m.changed.length} files your assistant changed this week.`;
+    const second = m.cards
+      ? ` Of ${m.cards} card${m.cards === 1 ? "" : "s"}, you tried explaining ${m.attempted} yourself and asked for ${m.explained} explanation${m.explained === 1 ? "" : "s"}.`
+      : "";
+    return first + second;
   }
 
   private async resolveAi() {
@@ -437,6 +552,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         }),
       (text, by) => {
         this.explanations[key] = { text, by };
+        this.reflect((m) => m.explained++);
         this.save();
         if (setting("voice.autoRead", false)) this.speakText(text);
       },
@@ -513,8 +629,213 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         const feedback = parseAttemptFeedback(reply);
         if (!feedback) return "The AI's reply could not be read. Try again.";
         Object.assign(attempt, feedback, { by });
+        this.reflect((m) => m.attempted++);
       },
     );
+    // Their explanation first, then the model's, so the two can be compared.
+    if (attempt.verdict && !this.explanations[key]) await this.explain(key);
+  }
+
+  /** One rung of the ladder: a nudge, then a pointer. The full explanation is `explain`. */
+  private async hint(key: string, step: Hint): Promise<void> {
+    const card = this.card(key);
+    if (!card) return;
+    await this.ask(
+      `${key}|hint`,
+      async () => {
+        const excerpt = (this.extra(key).attempt?.code ?? (await this.excerpt(card))) || "";
+        if (!excerpt) return this.needsCode;
+        return hintPrompt({ step, title: card.title, file: card.file, excerpt, depth: (await engine.status()).depth });
+      },
+      (reply, by) => {
+        const hints = (this.extra(key).hints ??= {});
+        hints[step] = reply.slice(0, 500);
+        hints.by = by;
+      },
+    );
+  }
+
+  /** The other kinds of question: why, trace, and the same idea in another language. */
+  private async practiceQuestion(key: string, kind: "why" | "trace" | "transfer"): Promise<void> {
+    const card = this.card(key);
+    if (!card) return;
+    await this.ask(
+      `${key}|${kind}`,
+      async () => {
+        const depth = (await engine.status()).depth;
+        if (kind === "transfer") return transferQuestionPrompt({ title: card.title, what: card.what, file: card.file || "code", depth });
+        const excerpt = await this.excerpt(card);
+        if (!excerpt) return this.needsCode;
+        const req = { title: card.title, file: card.file, excerpt, depth };
+        return kind === "why" ? whyQuestionPrompt(req) : traceQuestionPrompt(req);
+      },
+      (reply) => {
+        const question = parseOwnQuestion(reply);
+        const quiz = question ? engine.quizFromOwnCode(card.conceptId, question, { transfer: kind === "transfer" }) : null;
+        if (!quiz) return "The AI's reply was not a usable question. Try again.";
+        this.post({ type: "quiz", key: `${key}|${kind}`, quiz });
+      },
+    );
+  }
+
+  private async contrast(key: string): Promise<void> {
+    const card = this.card(key);
+    if (!card) return;
+    await this.ask(
+      `${key}|contrast`,
+      async () => {
+        const excerpt = await this.excerpt(card);
+        if (!excerpt) return this.needsCode;
+        return contrastPrompt({ title: card.title, excerpt, depth: (await engine.status()).depth });
+      },
+      (reply, by) => {
+        const pair = parseContrast(reply);
+        // An unusable pair is dropped quietly: the learner asked for practice, not for an error.
+        if (!pair) return "That exercise did not come out usable. Try again, or pick another kind.";
+        this.secrets.set(`${key}|contrast`, { flawed: pair.flawed, explanation: pair.explanation });
+        this.extra(key).contrast = { question: pair.question, a: pair.a, b: pair.b, by };
+      },
+    );
+  }
+
+  private contrastPick(key: string, pick: "a" | "b"): void {
+    const exercise = this.extras[key]?.contrast;
+    const secret = this.secrets.get(`${key}|contrast`);
+    if (!exercise || !secret?.flawed || exercise.picked) return;
+    Object.assign(exercise, { picked: pick, flawed: secret.flawed, explanation: secret.explanation });
+    void this.pushState();
+  }
+
+  private bugGuess(key: string, line: number | null): void {
+    const drill = this.extras[key]?.bug;
+    const secret = this.secrets.get(`${key}|bug`);
+    if (!drill || !secret?.bugLine || drill.found) return;
+    if (line === null || line === secret.bugLine) {
+      Object.assign(drill, { found: true, bugLine: secret.bugLine, explanation: secret.explanation });
+    } else if (!drill.wrong.includes(line)) {
+      drill.wrong.push(line);
+    }
+    void this.pushState();
+  }
+
+  /** A question the learner wrote. No model involved. */
+  private async ownCard(key: string, input: { question: string; answer: string; wrong: string[]; why: string }): Promise<void> {
+    const card = this.card(key);
+    if (!card) return;
+    const result = await registerOwnQuestion({ conceptId: card.conceptId, title: card.title, topic: card.topic }, input);
+    if ("problem" in result) {
+      this.extra(key).ownCard = { problem: result.problem };
+    } else {
+      await engine.adopt(result.id);
+      this.extra(key).ownCard = { saved: result.id };
+    }
+    void this.pushState();
+  }
+
+  /* ---- your turn ------------------------------------------------- */
+
+  private async addedLines(root: string, file: string): Promise<number> {
+    const found = await gitChanges(root).catch(() => null);
+    return found?.kind === "working-tree" ? found.changes.find((c) => c.file === file)?.addedLines ?? 0 : 0;
+  }
+
+  /** Proposes one small change for the learner to write by hand. */
+  private async turn(id: string): Promise<void> {
+    const lesson = this.lesson(id);
+    if (!lesson) return;
+    let files: string[] = [];
+    await this.ask(
+      `${id}|turn`,
+      async () => {
+        const changed = await this.changedFiles(lesson);
+        if (!changed.length) return this.noChange;
+        files = changed.map((c) => c.file);
+        return yourTurnPrompt(changed, (await engine.status()).depth);
+      },
+      async (reply, by) => {
+        const task = parseYourTurn(reply, files);
+        if (!task) return "The AI's suggestion was not usable (it may have written the code for you). Try again.";
+        (this.lessonExtras[id] ??= {}).turn = { ...task, by };
+        this.turnBaselines.set(id, { lines: await this.addedLines(lesson.root, task.file), at: Date.now() });
+        this.turnsProposed++;
+      },
+    );
+  }
+
+  /**
+   * Checks the diff, never the learner's word and never the file's contents:
+   * did the file gain lines since the task was set, and did an assistant's
+   * hook report editing it in that time? Miyagi does not write the change, and
+   * does not judge whether it is correct. It only confirms who wrote it.
+   */
+  private async turnDone(id: string): Promise<void> {
+    const lesson = this.lesson(id);
+    const turn = this.lessonExtras[id]?.turn;
+    const baseline = this.turnBaselines.get(id);
+    if (!lesson || !turn || !baseline || turn.verdict === "done") return;
+    const abs = path.join(lesson.root, turn.file);
+    const edit = this.recentEdits.get(abs);
+    const gained = (await this.addedLines(lesson.root, turn.file)) - baseline.lines;
+    if (edit && edit.at > baseline.at) {
+      turn.verdict = "assisted";
+    } else if (gained <= 0) {
+      turn.verdict = "nothing";
+    } else {
+      turn.verdict = "done";
+      turn.lines = gained;
+      await engine.creditUnaided(turn.task, XP_YOUR_TURN);
+    }
+    void this.pushState();
+  }
+
+  /* ---- the unaided check ----------------------------------------- */
+
+  private async checkNext(): Promise<void> {
+    if (!this.check) {
+      const plan = await engine.checkPlan(CHECK_LENGTH);
+      if (!plan.length) return this.post({ type: "review", quiz: null });
+      this.check = { plan, asked: 0, correct: 0, token: null };
+    }
+    const next = this.check.plan.shift();
+    const quiz = next ? await engine.quizForCheck(next) : null;
+    if (!quiz) {
+      const result = await engine.recordCheck(this.check.asked, this.check.correct);
+      this.check = null;
+      this.post({ type: "review", quiz: null, checked: result });
+      return void this.pushState();
+    }
+    this.check.token = quiz.token;
+    this.check.asked++;
+    this.post({ type: "review", quiz });
+    void this.pushState();
+  }
+
+  /** What Miyagi saw today, to set beside what the learner remembers of it. No model call. */
+  private recap(text: string): void {
+    const today = new Date().toDateString();
+    const lessons = this.lessons.filter((l) => new Date(l.at).toDateString() === today);
+    this.post({
+      type: "recap",
+      wrote: text.trim().slice(0, 2_000),
+      files: [...new Set(lessons.flatMap((l) => l.files))].slice(0, 30),
+      ideas: [...new Set(lessons.flatMap((l) => l.cards.map((c) => `${c.emoji} ${c.title}`)))],
+      commands: this.commandTotal,
+    });
+  }
+
+  /** A short review, such as the three questions offered after the first commit of the day. */
+  beginCheck(): void {
+    this.post({ type: "startCheck" });
+  }
+
+  beginRecap(): void {
+    this.post({ type: "startRecap" });
+  }
+
+  startReview(cap: number | null): void {
+    this.reviewCap = cap;
+    this.reviewed = [];
+    this.post({ type: "tab", tab: "review" });
   }
 
   private async bug(key: string): Promise<void> {
@@ -530,7 +851,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       (reply, by) => {
         const drill = parseBugDrill(reply);
         if (!drill) return "The AI's reply was not a usable exercise. Try again.";
-        this.extra(key).bug = { ...drill, by };
+        this.secrets.set(`${key}|bug`, { bugLine: drill.bugLine, explanation: drill.explanation });
+        this.extra(key).bug = { lines: drill.lines, hint: drill.hint, by, wrong: [], found: false };
       },
     );
   }
@@ -801,6 +1123,11 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       };
     }
     this.save();
+    this.reflect((m) => {
+      m.cards += lesson.cards.length;
+      // Only files an assistant is known to have written belong in the mirror.
+      if (lesson.by) m.changed.push(...lesson.files.map((f) => path.join(lesson.root, f)));
+    });
     if (lesson.cards.length && !this.visible) {
       this.unseen += lesson.cards.length;
       this.badge();
@@ -857,6 +1184,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       const abs = path.isAbsolute(o.file) ? o.file : path.join(o.cwd, o.file);
       const at = Date.parse(o.at) || Date.now();
       this.recentEdits.set(abs, { source: o.source, session: o.session, at });
+      this.reflect((m) => m.changed.push(abs));
       // The git read often lands first. Credit the lesson it already made.
       const name = SOURCE_NAMES[o.source];
       for (const lesson of this.lessons) {
@@ -951,17 +1279,73 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         case "answer": {
           const questionId = engine.questionIdFor(message.token);
           if (questionId) this.reviewed.push(questionId);
-          const answer = await engine.answer(message.token, message.index);
+          const answer = await engine.answer(message.token, message.index, parseConfidence(message.confidence), {
+            // Without an AI there is nobody to write a transfer question, so nothing may wait on one.
+            blackBeltNeedsTransfer: setting("blackBeltNeedsTransfer", true) && Boolean((await this.resolveAi()).provider),
+          });
+          if (this.check && this.check.token === message.token && answer?.correct) this.check.correct++;
+          this.week = null;
           this.post({ type: "answered", token: message.token, answer });
           return void (await this.pushState());
         }
         case "review": {
-          const quiz = await engine.nextReview(this.reviewed, this.topic);
-          if (!quiz) this.reviewed = [];
+          if (this.check) return void (await this.checkNext());
+          if (this.reviewCap !== null && this.reviewCap <= 0) {
+            this.reviewCap = null;
+            this.reviewed = [];
+            return this.post({ type: "review", quiz: null });
+          }
+          const quiz = await engine.nextReview(this.reviewed, this.topic, setting("mixTopicsInReview", true));
+          if (!quiz) {
+            this.reviewed = [];
+            this.reviewCap = null;
+          } else if (this.reviewCap !== null) this.reviewCap--;
           return this.post({ type: "review", quiz });
         }
+        case "check":
+          this.check = null;
+          return void (await this.checkNext());
+        case "hint":
+          return void (await this.hint(message.key, message.step === "pointer" ? "pointer" : "nudge"));
+        case "practice":
+          if (message.kind === "own") return void (await this.ownQuiz(message.key));
+          if (message.kind === "bug") return void (await this.bug(message.key));
+          if (message.kind === "contrast") return void (await this.contrast(message.key));
+          if (message.kind === "why" || message.kind === "trace" || message.kind === "transfer") {
+            return void (await this.practiceQuestion(message.key, message.kind));
+          }
+          return;
+        case "bugGuess":
+          return this.bugGuess(message.key, Number(message.line));
+        case "bugReveal":
+          return this.bugGuess(message.key, null);
+        case "contrastPick":
+          return this.contrastPick(message.key, message.pick === "b" ? "b" : "a");
+        case "ownCard":
+          return void (await this.ownCard(message.key, {
+            question: String(message.question ?? ""),
+            answer: String(message.answer ?? ""),
+            wrong: Array.isArray(message.wrong) ? message.wrong.map(String) : [],
+            why: String(message.why ?? ""),
+          }));
+        case "turn":
+          return void (await this.turn(message.lesson));
+        case "turnDone":
+          return void (await this.turnDone(message.lesson));
+        case "turnHint": {
+          const turn = this.lessonExtras[message.lesson]?.turn;
+          if (turn) turn.hintShown = true;
+          return void (await this.pushState());
+        }
+        case "recap":
+          return this.recap(String(message.text ?? ""));
         case "dojo":
-          return this.post({ type: "dojo", rows: await engine.dojo(), belts: engine.BELT_NAMES });
+          return this.post({
+            type: "dojo",
+            rows: await engine.dojo(),
+            belts: engine.BELT_NAMES,
+            insight: await engine.insight(),
+          });
         case "setDepth":
           await engine.setDepth(message.depth);
           return void (await this.pushState());

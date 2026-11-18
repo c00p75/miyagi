@@ -41,7 +41,7 @@ import {
   type Client,
   type Scope,
 } from "./capture.js";
-import { aiIdeaCount, loadAiIdeas } from "./ideas.js";
+import { aiIdeaCount, loadAiIdeas, loadOwnCards } from "./ideas.js";
 import { currentMeter, describeMeter, recordCall } from "./meter.js";
 import { projectMapPrompt } from "./prompts.js";
 import { chooseFiles, trackedFiles, weeklyReport } from "./reports.js";
@@ -52,6 +52,9 @@ const WELCOMED_KEY = "miyagi.welcomed.v1";
 const PAUSED_KEY = "miyagi.pausedUntil.v1";
 const REMINDED_KEY = "miyagi.remindedOn.v1";
 const METER_KEY = "miyagi.meter.v1";
+const FIRST_COMMIT_KEY = "miyagi.firstCommitOfferedOn.v1";
+/** A test run is a stopping point: the assistant thinks it has finished something. */
+const TEST_COMMAND = /\b(npm (run )?test|pnpm (run )?test|yarn test|jest|vitest|pytest|go test|cargo test|rspec|phpunit|mvn test|gradle(w)? test)\b/;
 /** Fewer than this and a reminder is an interruption about nothing. */
 const REMIND_AT = 3;
 
@@ -186,6 +189,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   // must exist before anything is taught, or their questions have no lesson.
   const packs = await loadIdeaPacks().catch(() => []);
   await loadAiIdeas().catch(() => 0);
+  await loadOwnCards().catch(() => 0);
 
   /* ---- status bar ----------------------------------------------- */
 
@@ -255,14 +259,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     },
     quiet,
     onStatus: renderStatus,
+    holding: () => Boolean(watcher?.isHolding()),
   });
+
+  /**
+   * Opt-in: the first commit of the day is a moment the learner already stops
+   * at, so a short review is offered there and nowhere else. Three questions,
+   * once, and only if something is due.
+   */
+  const offerReviewAfterCommit = async () => {
+    if (!config().get<boolean>("reviewAfterFirstCommit", false) || quiet().quiet) return;
+    const today = new Date().toDateString();
+    if (context.globalState.get<string>(FIRST_COMMIT_KEY) === today) return;
+    await context.globalState.update(FIRST_COMMIT_KEY, today);
+    const due = (await engine.status()).dueQuestions;
+    if (!due) return;
+    const count = Math.min(3, due);
+    const choice = await vscode.window.showInformationMessage(
+      `First commit of the day. ${count === 1 ? "One quick question" : `${count} quick questions`} while it is fresh? About two minutes.`,
+      "Start",
+      "Not now",
+    );
+    if (choice === "Start") {
+      await vscode.commands.executeCommand(`${viewId}.focus`);
+      panel.startReview(count);
+    }
+  };
 
   watcher = new Watcher({
     onChanges: (root, source, changes) => void panel.teach(root, source, changes),
-    onObservations: (observations) => void panel.observed(observations),
+    onObservations: (observations) => {
+      if (observations.some((o) => o.kind === "command" && TEST_COMMAND.test(o.command))) watcher?.releaseAll("tests");
+      void panel.observed(observations);
+    },
     onRoots: () => void panel.pushState(),
     onScan: (scan) => panel.scanned(scan),
     onBaseline: (root, files) => panel.baselined(root, files),
+    onCommit: () => void offerReviewAfterCommit(),
   });
   const configureWatcher = () =>
     watcher?.configure({
@@ -270,6 +303,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       muted: quiet().quiet,
       ignore: config().get<string[]>("watch.ignore", []),
       excludeRepos: config().get<string[]>("watch.excludeRepositories", []),
+      holdSeconds:
+        config().get<string>("watch.teachAt", "breakpoints") === "breakpoints"
+          ? Math.max(5, config().get<number>("watch.quietSeconds", 60))
+          : 0,
     });
   configureWatcher();
 
@@ -284,6 +321,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       if (!e.affectsConfiguration("miyagi")) return;
       configureWatcher();
       void panel.pushState();
+    }),
+  );
+  // Which of the assistant's files the learner goes and looks at.
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor?.document.uri.scheme === "file") panel.opened(editor.document.uri.fsPath);
     }),
   );
   // Quiet hours begin and end without any event to hang them on.
@@ -397,8 +440,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       "Miyagi read the changes and found nothing new to teach: either none of its ideas appear, or you already hold them.",
     );
 
+  register("miyagi.unaidedCheck", async () => {
+    await open();
+    panel.beginCheck();
+  });
+  register("miyagi.recap", async () => {
+    await open();
+    panel.beginRecap();
+  });
+
   register("miyagi.explainChanges", async () => {
     await open();
+    // Asking is itself a stopping point: nothing should still be waiting for one.
+    watcher?.releaseAll("asked");
     const sets = (await watcher?.everything()) ?? [];
     let cards = 0;
     for (const set of sets) cards += await panel.teach(set.root, set.source, set.changes, true);

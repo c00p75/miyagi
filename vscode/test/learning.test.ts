@@ -29,9 +29,10 @@ before(async () => {
   process.env.HOME = path.join(root, "home");
   engine.forgetSession();
 });
-after(() => {
+after(async () => {
   process.env.HOME = realHome;
   clearRegisteredConcepts();
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 /* ---- the assistant's own words ---------------------------------- */

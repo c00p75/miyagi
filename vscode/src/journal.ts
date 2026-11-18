@@ -55,6 +55,16 @@ export interface Journal {
   /** Question ids whose next correct answer does not advance: the extra review. */
   owedReview: string[];
   mistakes: Mistake[];
+  /** Ideas for which a transfer question (same idea, different setting) was answered correctly. */
+  transfer: string[];
+  /** Unaided checks: a sitting of questions with every kind of help switched off. */
+  checks: Check[];
+}
+
+export interface Check {
+  at: string;
+  asked: number;
+  correct: number;
 }
 
 const MAX_ANSWERS = 3_000;
@@ -65,7 +75,7 @@ export function journalPath(): string {
 }
 
 export function emptyJournal(): Journal {
-  return { version: 1, answers: [], owedReview: [], mistakes: [] };
+  return { version: 1, answers: [], owedReview: [], mistakes: [], transfer: [], checks: [] };
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === "object" && !Array.isArray(v);
@@ -101,6 +111,13 @@ export function normaliseJournal(raw: unknown): Journal {
     answers: answers.slice(-MAX_ANSWERS),
     owedReview: (Array.isArray(raw.owedReview) ? raw.owedReview : []).filter((q): q is string => typeof q === "string").slice(-500),
     mistakes: mistakes.slice(-MAX_MISTAKES),
+    transfer: (Array.isArray(raw.transfer) ? raw.transfer : []).filter((t): t is string => typeof t === "string").slice(-500),
+    checks: (Array.isArray(raw.checks) ? raw.checks : [])
+      .filter(isObj)
+      .filter((c) => typeof c.at === "string" && Number.isInteger(c.asked) && Number.isInteger(c.correct))
+      .map((c) => ({ at: c.at as string, asked: c.asked as number, correct: Math.min(c.correct as number, c.asked as number) }))
+      .filter((c) => c.asked > 0)
+      .slice(-60),
   };
 }
 
@@ -168,6 +185,7 @@ export function recordAnswer(journal: Journal, g: Graded, now: Date = new Date()
       ];
   return {
     journal: {
+      ...journal,
       version: 1,
       answers: [...journal.answers, { at, question: g.question, concept: g.concept, confidence: g.confidence, correct: g.correct }].slice(-MAX_ANSWERS),
       owedReview: [...owed],
@@ -223,4 +241,16 @@ export function mistakesForReview(journal: Journal, limit = 30): Mistake[] {
   return [...journal.mistakes]
     .sort((a, b) => Number(b.confident) - Number(a.confident) || b.at.localeCompare(a.at))
     .slice(0, limit);
+}
+
+/** Days after which another unaided check is worth offering. */
+export const CHECK_EVERY_DAYS = 30;
+
+export function lastCheck(journal: Journal): Check | null {
+  return journal.checks.length ? journal.checks[journal.checks.length - 1] : null;
+}
+
+export function checkIsDue(journal: Journal, now: Date = new Date()): boolean {
+  const last = lastCheck(journal);
+  return !last || now.getTime() - Date.parse(last.at) > CHECK_EVERY_DAYS * 86_400_000;
 }

@@ -46,12 +46,17 @@ import { XP_CONCEPT_DISCOVERED, scoreQuizAnswer } from "../../src/scoring.js";
 import {
   calibration,
   calibrationVerdict,
+  checkIsDue,
+  emptyJournal,
+  lastCheck,
   loadJournal,
   mistakesForReview,
   recordAnswer,
   saveJournal,
   type CalibrationRow,
+  type Check,
   type Confidence,
+  type Journal,
   type Mistake,
 } from "./journal.js";
 import { TOPICS, orderByPrerequisite, prerequisiteOf, topicOf, type Topic } from "./topics.js";
@@ -81,7 +86,7 @@ export interface CardView {
   /** Security and data-loss ideas: the ones that hurt when misunderstood. */
   risk: boolean;
   /** Where the lesson came from: the built-in pack, a pack file, or a model. */
-  origin: "built-in" | "pack" | "ai";
+  origin: "built-in" | "pack" | "ai" | "own";
   /** The idea this one leans on, when the learner has not met it yet. */
   buildsOn: Chip | null;
   /** `locked`: in the pack, not yet seen in this learner's code. */
@@ -93,6 +98,8 @@ export interface CardView {
    * link and asks the hardest question the idea has.
    */
   support: "full" | "question-first" | "minimal";
+  /** At brown belt, with the transfer question still to pass. */
+  needsTransfer: boolean;
   belt: string;
   lapses: number;
   /** Repository root, so the panel can open the file. Empty when no file is known. */
@@ -146,6 +153,10 @@ export interface AnswerView {
   title: string;
   newBadges: string[];
   quizStreak: number;
+  /** Correct at brown belt, but black needs the idea shown in a different setting first. */
+  needsTransfer: boolean;
+  /** This was that transfer question, and it was answered correctly. */
+  transferPassed: boolean;
   /** They said they were sure, and it was wrong. This one gets an extra review. */
   confidentMiss: boolean;
   /** Correct, but it repays an earlier confident miss, so the belt holds. */
@@ -160,6 +171,10 @@ export interface StatusView {
   rank: string;
   /** A depth the answers so far suggest, when it differs from the current one. */
   suggestedDepth: Level | null;
+  /** The last unaided check, or null if none has been taken. */
+  independence: Check | null;
+  /** Enough belts are held, and enough time has passed, for an unaided check to be worth offering. */
+  checkDue: boolean;
   /** XP into the current level, 0-99. */
   intoLevel: number;
   dayStreak: number;
@@ -190,6 +205,13 @@ export interface DojoRowView {
  * ------------------------------------------------------------------ */
 
 let chain: Promise<unknown> = Promise.resolve();
+/** The panel's own journal, re-read with the profile before every operation. */
+let journal: Journal = emptyJournal();
+
+/** Ideas this many places from black belt need one more thing than a correct answer. */
+const BROWN_BOX = 4;
+/** Fewer ideas than this with a belt and an unaided check says nothing. */
+const MIN_FOR_CHECK = 5;
 
 /**
  * Every operation runs alone, after re-reading the profile. The reload is what
@@ -199,6 +221,7 @@ let chain: Promise<unknown> = Promise.resolve();
 function run<T>(work: () => T | Promise<T>, options: { write?: boolean } = {}): Promise<T> {
   const next = chain.then(async () => {
     await S.hydrate();
+    journal = await loadJournal();
     const out = await work();
     if (options.write) {
       await S.persistNow();
@@ -233,7 +256,7 @@ const RISK_WEIGHT = 85;
 
 function originOf(conceptId: string): CardView["origin"] {
   const origin = conceptOrigin(conceptId);
-  return origin === null ? "built-in" : origin === "ai" ? "ai" : "pack";
+  return origin === null ? "built-in" : origin === "ai" ? "ai" : origin === "own" ? "own" : "pack";
 }
 
 function unmetPrerequisite(conceptId: string): Chip | null {
@@ -318,6 +341,7 @@ function buildCard(conceptId: string, key: string, f: Familiarity, where: Where,
     buildsOn: unmetPrerequisite(conceptId),
     status: f.seen ? "learning" : "new",
     support: supportFor(f),
+    needsTransfer: f.seen && f.box === BROWN_BOX && !journal.transfer.includes(conceptId),
     belt: beltForBox(f.box).name,
     lapses: f.lapses,
     ...where,
@@ -466,14 +490,16 @@ export function forgetSession(): void {
 interface OpenQuiz {
   quiz: AskedQuiz;
   about: string;
+  /** Answering this correctly is what unlocks black belt for the idea. */
+  transfer?: boolean;
 }
 
 const open = new Map<string, OpenQuiz>();
 let quizCounter = 0;
 
-function openQuiz(quiz: AskedQuiz, about: string): QuizView {
+function openQuiz(quiz: AskedQuiz, about: string, flags: { transfer?: boolean } = {}): QuizView {
   const token = `q${++quizCounter}`;
-  open.set(token, { quiz, about });
+  open.set(token, { quiz, about, ...flags });
   // Bounded: a question nobody answered is not worth holding forever.
   if (open.size > 60) open.delete(open.keys().next().value as string);
   return { token, question: quiz.question, choices: quiz.choices, review: quiz.review, about };
@@ -515,6 +541,7 @@ export function quizForConcept(conceptId: string): Promise<QuizView | null> {
 export function quizFromOwnCode(
   conceptId: string,
   q: { question: string; answer: string; distractors: readonly string[]; explanation: string },
+  flags: { transfer?: boolean } = {},
 ): QuizView | null {
   const concept = conceptById(conceptId);
   if (!concept) return null;
@@ -531,6 +558,7 @@ export function quizFromOwnCode(
       askedAt: new Date().toISOString(),
     },
     concept.title,
+    flags,
   );
 }
 
@@ -547,7 +575,11 @@ let reviewsAsked = 0;
  * pattern of the last one; a question that arrives from somewhere else has to
  * be recalled cold.
  */
-export function nextReview(skip: readonly string[] = [], topic: Topic | null = null): Promise<QuizView | null> {
+export function nextReview(
+  skip: readonly string[] = [],
+  topic: Topic | null = null,
+  mix = true,
+): Promise<QuizView | null> {
   return run(
     () => {
       const skipped = new Set(skip);
@@ -568,7 +600,7 @@ export function nextReview(skip: readonly string[] = [], topic: Topic | null = n
         const inside = due.find((d) => d.inTopic);
         // Terminal questions have no topic and are never mixed in.
         const outside = due.find((d) => !d.inTopic && isConceptBin(d.bin));
-        const mixNow = reviewsAsked % MIX_EVERY === MIX_EVERY - 1;
+        const mixNow = mix && reviewsAsked % MIX_EVERY === MIX_EVERY - 1;
         if (inside && !(mixNow && outside)) pick = inside;
         else if (inside && outside) {
           pick = outside;
@@ -592,6 +624,11 @@ export function resetReviewMix(): void {
   reviewsAsked = 0;
 }
 
+/** Test seam: count a review as asked without consuming a question. */
+export function bumpReviewMixForTest(): void {
+  reviewsAsked++;
+}
+
 /** The question id behind a token, so a review pass can avoid repeating it. */
 export function questionIdFor(token: string): string | null {
   return open.get(token)?.quiz.id ?? null;
@@ -605,6 +642,7 @@ export function answer(
   token: string,
   choiceIndex: number,
   confidence: Confidence | null = null,
+  options: { blackBeltNeedsTransfer?: boolean } = {},
 ): Promise<AnswerView | null> {
   return run(
     async () => {
@@ -616,7 +654,7 @@ export function answer(
       const correct = chosen !== undefined && chosen === quiz.answer;
 
       const conceptId = isConceptBin(quiz.bin) ? quiz.bin.slice("concept:".length) : null;
-      const outcome = recordAnswer(await loadJournal(), {
+      const outcome = recordAnswer(journal, {
         question: quiz.id,
         concept: conceptId,
         about: entry.about,
@@ -627,12 +665,28 @@ export function answer(
         confidence,
         correct,
       });
-      await saveJournal(outcome.journal);
+      journal = outcome.journal;
+      const transferPassed = Boolean(entry.transfer && correct && conceptId);
+      if (transferPassed && conceptId && !journal.transfer.includes(conceptId)) {
+        journal = { ...journal, transfer: [...journal.transfer, conceptId] };
+      }
+      await saveJournal(journal);
+
+      // Black belt is not one more correct answer to a question seen five
+      // times. It also takes the idea recognised somewhere it was not learned.
+      const item = S.findReviewItem("quiz", quiz.id);
+      const needsTransfer = Boolean(
+        options.blackBeltNeedsTransfer &&
+          correct &&
+          conceptId &&
+          item?.box === BROWN_BOX &&
+          !journal.transfer.includes(conceptId),
+      );
 
       const elapsedMs = Date.now() - Date.parse(quiz.askedAt);
       // Slow recall holds its box. So does a correct answer that repays a
       // confident miss: sure-and-wrong has to be right twice to move on.
-      const hesitant = (Number.isFinite(elapsedMs) && elapsedMs > 45_000) || outcome.repaysMiss;
+      const hesitant = (Number.isFinite(elapsedMs) && elapsedMs > 45_000) || outcome.repaysMiss || needsTransfer;
 
       S.recordMastery(quiz.bin, { quiz: true, correct });
       const scheduled = S.gradeReviewItem("quiz", quiz.id, correct, { hesitant });
@@ -662,6 +716,8 @@ export function answer(
         title: S.player.title,
         newBadges: [...day.newBadges, ...score.newBadges, ...score.xp.newBadges],
         quizStreak: S.player.quizStreak,
+        needsTransfer,
+        transferPassed,
         confidentMiss: outcome.confidentMiss,
         repaysMiss: outcome.repaysMiss,
       };
@@ -689,6 +745,8 @@ export function status(): Promise<StatusView> {
       title: S.player.title,
       rank: rankForLevel(S.player.level),
       suggestedDepth: depthSuggestion(S.session.skillLevel, conceptAnswers()),
+      independence: lastCheck(journal),
+      checkDue: checkable().length >= MIN_FOR_CHECK && checkIsDue(journal),
       intoLevel: S.player.xp % 100,
       dayStreak: S.streak.dayStreak,
       quizStreak: S.player.quizStreak,
@@ -857,8 +915,93 @@ export interface InsightView {
   mistakes: Mistake[];
 }
 
-export async function insight(): Promise<InsightView> {
-  const journal = await loadJournal();
-  const rows = calibration(journal);
-  return { calibration: rows, verdict: calibrationVerdict(rows), mistakes: mistakesForReview(journal) };
+export function insight(): Promise<InsightView> {
+  return run(() => {
+    const rows = calibration(journal);
+    return { calibration: rows, verdict: calibrationVerdict(rows), mistakes: mistakesForReview(journal) };
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * The unaided check
+ *
+ * Practice with help overstates what someone can do without it. Once in a
+ * while the learner is asked a short run of questions on ideas they hold a
+ * belt for, with every kind of help switched off, and told the plain result.
+ * ------------------------------------------------------------------ */
+
+/** Ideas held firmly enough to be worth checking: answered correctly at least once after a gap. */
+function checkable(): string[] {
+  return dojoRows(familiarity)
+    .filter((r) => r.familiarity.seen && r.familiarity.box >= 1 && questionsForConcept(r.id).length > 0)
+    .map((r) => r.id);
+}
+
+/** Up to `limit` ideas for a check, weakest belts first so the result is not flattering. */
+export function checkPlan(limit = 10): Promise<string[]> {
+  return run(() =>
+    checkable()
+      .sort((a, b) => familiarity(a).box - familiarity(b).box || a.localeCompare(b))
+      .slice(0, limit),
+  );
+}
+
+/** One question of a check: the idea's hardest, whatever depth is set. */
+export function quizForCheck(conceptId: string): Promise<QuizView | null> {
+  return run(
+    () => {
+      const concept = conceptById(conceptId);
+      const question = concept ? pickConceptQuestion(conceptId, "Senior", S.session.recentQuizIds) : null;
+      if (!concept || !question) return null;
+      S.ensureReviewItem("quiz", question.id, question.question);
+      S.noteQuizAsked(question.id);
+      return openQuiz(ask(question, conceptBin(conceptId), { review: true, salt: String(quizCounter + 1) }), concept.title);
+    },
+    { write: true },
+  );
+}
+
+export function recordCheck(asked: number, correct: number): Promise<Check | null> {
+  return run(async () => {
+    if (asked <= 0) return null;
+    const check = { at: new Date().toISOString(), asked, correct: Math.min(correct, asked) };
+    journal = { ...journal, checks: [...journal.checks, check] };
+    await saveJournal(journal);
+    return check;
+  });
+}
+
+/**
+ * Puts a question the learner wrote themselves on the review schedule. It was
+ * registered as an idea of its own first (see ideas.ts); this is the step that
+ * makes it come back.
+ */
+export function adopt(conceptId: string): Promise<boolean> {
+  return run(
+    () => {
+      const concept = conceptById(conceptId);
+      const question = questionsForConcept(conceptId)[0];
+      if (!concept || !question) return false;
+      S.ensureReviewItem("quiz", question.id, question.question);
+      S.record({ kind: "concept", label: concept.title, bin: conceptBin(conceptId), detail: "question written by the learner (panel)", xpAwarded: 0 });
+      return true;
+    },
+    { write: true },
+  );
+}
+
+/**
+ * XP for something done without the assistant. Recorded as a checkpoint,
+ * because that is what it is: a verified outcome, not an attempt.
+ */
+export function creditUnaided(what: string, xp: number): Promise<number> {
+  return run(
+    () => {
+      S.touchDay();
+      const awarded = S.awardXp(xp).awarded;
+      S.record({ kind: "checkpoint", label: "Your turn", detail: `${what.slice(0, 200)} (panel, written unaided)`, xpAwarded: awarded, correct: true });
+      return awarded;
+    },
+    { write: true },
+  );
 }

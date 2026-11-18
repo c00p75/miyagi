@@ -148,3 +148,104 @@ export async function registerFound(ideas: readonly FoundIdea[]): Promise<Regist
 export function aiIdeaCount(): number {
   return saved.length;
 }
+
+/* ------------------------------------------------------------------ *
+ * Questions the learner wrote
+ *
+ * Writing a question is itself a way of learning the answer, and a card in
+ * someone's own words about their own project is one no pack can supply. Each
+ * is registered as a small idea of its own, tied to the idea it came from, and
+ * saved to `~/.miyagi/own-cards.json`.
+ * ------------------------------------------------------------------ */
+
+interface OwnSaved {
+  definition: ConceptDefinition;
+  topic: Topic;
+  from: string;
+  writtenAt: string;
+}
+
+let own: OwnSaved[] = [];
+
+export function ownCardsPath(): string {
+  return path.join(profileDir(), "own-cards.json");
+}
+
+async function writeOwn(): Promise<void> {
+  try {
+    const file = ownCardsPath();
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify({ version: 1, cards: own }, null, 2), "utf8");
+    await fs.rename(tmp, file);
+  } catch {
+    // The card still works until the editor restarts.
+  }
+}
+
+export async function loadOwnCards(): Promise<number> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(ownCardsPath(), "utf8"));
+  } catch {
+    own = [];
+    return 0;
+  }
+  const list = Array.isArray((raw as { cards?: unknown })?.cards) ? ((raw as { cards: OwnSaved[] }).cards as OwnSaved[]) : [];
+  const usable = list.filter((c) => c && typeof c === "object" && c.definition && typeof c.definition.id === "string");
+  const live = new Set(registerConcepts(usable.map((c) => c.definition), "own").added);
+  own = usable.filter((c) => live.has(c.definition.id)).slice(-300);
+  for (const c of own) assignTopic(c.definition.id, parseTopic(c.topic) ?? "Tooling");
+  return own.length;
+}
+
+export interface OwnQuestionInput {
+  question: string;
+  answer: string;
+  wrong: string[];
+  why: string;
+}
+
+/**
+ * Registers a learner's question. Returns the new idea's id, or the reason it
+ * was refused in words the learner can act on.
+ */
+export async function registerOwnQuestion(
+  from: { conceptId: string; title: string; topic: Topic },
+  input: OwnQuestionInput,
+): Promise<{ id: string } | { problem: string }> {
+  const question = input.question.trim();
+  const answer = input.answer.trim();
+  const wrong = input.wrong.map((w) => w.trim()).filter(Boolean);
+  if (question.length < 8) return { problem: "Write the question out in full." };
+  if (!answer) return { problem: "Give the correct answer." };
+  if (wrong.length < 2) return { problem: "Give at least two wrong answers. Good ones are what you might have believed before." };
+
+  const id = `own-${Date.now().toString(36)}`;
+  const definition: ConceptDefinition = {
+    id,
+    title: `Your question: ${from.title}`.slice(0, 80),
+    emoji: "✍️",
+    weight: 50,
+    patterns: [],
+    hook: question.slice(0, 200),
+    what: `A question you wrote yourself about ${from.title}.`.slice(0, 400),
+    lens: (input.why.trim() || `The answer is: ${answer}`).slice(0, 700),
+    pitfall: `Wrong answers you thought were worth listing: ${wrong.join("; ")}`.slice(0, 500),
+    questions: [{ question, answer, distractors: wrong.slice(0, 4), explanation: input.why.trim() || answer }],
+  };
+  const result = registerConcepts([definition], "own");
+  if (!result.added.includes(id)) {
+    const reason = result.rejected[0]?.reason ?? "it could not be saved";
+    // The mechanical checks are written for pack authors; say the common ones plainly.
+    if (/longest|longer/i.test(reason)) {
+      return { problem: "The correct answer is much longer than the wrong ones, which gives it away. Shorten it or lengthen the others." };
+    }
+    if (/duplicate|same|equal/i.test(reason)) return { problem: "Two of the answers are the same." };
+    return { problem: `That question was not accepted: ${reason}.` };
+  }
+  assignTopic(id, from.topic);
+  own = [...own, { definition, topic: from.topic, from: from.conceptId, writtenAt: new Date().toISOString() }].slice(-300);
+  await writeOwn();
+  return { id };
+}

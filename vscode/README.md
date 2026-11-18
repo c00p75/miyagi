@@ -20,28 +20,41 @@ There is nothing to configure. On first run Miyagi offers **Set up for me**, and
 
 Run **Miyagi: Set Up Everything for Me** at any time to do the same. It is safe to repeat. Capture is the only step that edits another tool's settings, which is why it waits for that click.
 
+## How it teaches
+
+Miyagi is built on what is known about how people learn, and about what goes wrong when an AI does the work for them.
+
+- **You recall before you recognise.** A question appears without its choices. You answer in your head, tap how sure you are, and then the choices appear.
+- **You explain before you are told.** "Explain in my code" asks what you think the lines do first, offers a nudge and then a pointer, and only then the full explanation. "Skip, just show me" is always there.
+- **Questions come back, mixed.** After 10 minutes, then 1, 3, 7, 16 and 35 days, and with about one in four from a different topic than the one you chose.
+- **Help fades.** From green belt the question comes first and the lesson waits behind a link.
+- **Being sure and wrong is tracked.** Those misses get an extra review, and the Dojo shows how often your "sure" turns out right.
+- **XP is for what you did.** Recalling an answer and writing code unaided pay. An idea appearing in your assistant's code pays nothing.
+- **It waits for a stopping point.** Cards are held until a commit, a test run or a pause, not dropped into the middle of a task.
+
+The research behind these choices: Dunlosky et al. (2013) on which study techniques work; Bastani et al. (PNAS, 2025) on answer-giving versus hint-giving AI tutors; Shen and Tamkin (2026, arXiv 2601.20245) on developers learning with AI assistance; Butler, Fazio and Marsh (2011) on confident errors.
+
 ## What you get
 
 **Without any AI**
 
-- **A card when it matters.** When new code relies on an idea such as password hashing, a React effect or a hard-coded secret, a card appears: what it is, what to know at your level, and how it goes wrong. At most two ideas per change; the rest are named and left for next time. Ideas that cost data or money when misunderstood carry a Risk tag.
-- **A question that comes back.** Each idea leaves one multiple-choice question. Answer it now, then again after 10 minutes, 1, 3, 7, 16 and 35 days. A belt per idea shows how firmly you hold it.
-- **Topics.** Pick Security, Backend and APIs, Data, Frontend or Tooling to see, be taught and review that shelf first.
-- **A dojo you can browse.** Every idea is listed with its belt. Click one to read its lesson and see where it showed up in your code. Locked ideas can be read; their question unlocks when your assistant writes code that uses them.
-- **What the assistant said.** Claude Code's own words from when it wrote a file, read from its session record.
-- **Your week.** A report of what you met, what stuck and what is slipping.
-- **The commands your assistant ran** (optional), with a short lesson for the common ones.
+- **A card when it matters.** When new code relies on an idea such as password hashing, a React effect or a hard-coded secret, a card appears: what it is, what to know at your level, and how it goes wrong. At most two ideas per change. Ideas that cost data or money when misunderstood carry a Risk tag.
+- **Review**, with a belt per idea showing how firmly you hold it, and a weekly goal instead of a streak.
+- **Topics.** Pick Security, Backend and APIs, Data, Frontend or Tooling to see and be taught that shelf first.
+- **A dojo you can browse**, with every idea, your mistakes and what is true, how well your confidence predicts being right, and your last unaided check.
+- **The unaided check.** About ten questions with every kind of help off.
+- **Write my own question** on any card.
+- **What the assistant said**: Claude Code's own words from when it wrote a file.
+- **Your week**, **wrap up this session**, and a line on how many of your assistant's files you actually opened.
 
 **With your own AI** (see the next section for who pays)
 
-- **Explain in my code**, and **ask a follow-up** underneath.
-- **Explain it yourself first.** Write what the lines do before reading any explanation, and have it judged.
-- **Quiz me on my code.** A question about your own lines, not a textbook example.
-- **Find the bug.** A copy of your code with one line changed. Your file is never touched.
-- **Walk me through this change.** Steps in the order the data flows, each highlighted in the editor.
-- **Check it for risks.** Up to three real risks in a change, with the line and the fix.
-- **How this project works.** A map of the repository: what it is, how a request travels, where things live.
-- **Find ideas with AI** (off by default). Lessons for ideas the built-in list does not know. These are marked as written by your AI.
+- **Explain in my code**, with the nudge and pointer before it and follow-up questions after.
+- **Practice**, one button per card: a why question, trace it by hand, spot the difference, find the bug, a question on your own lines. At brown belt, a transfer question in another language.
+- **Your turn.** A five-line follow-up to write without the assistant. Miyagi checks the diff to confirm who wrote it and never writes the code.
+- **Walk me through this change** and **check it for risks**.
+- **How this project works.** A map of the repository.
+- **Find ideas with AI** (off by default). Lessons for ideas the built-in list does not know, marked as written by your AI.
 
 ## Who pays for the explanations
 
@@ -68,6 +81,7 @@ In VS Code 1.106 or newer the panel opens in the secondary side bar, on the righ
 
 ## Keeping it out of the way
 
+- **Breakpoints** (`miyagi.watch.teachAt`): cards wait for a commit, a test run or `miyagi.watch.quietSeconds` of quiet. Set it to `immediately` to see them as changes land.
 - **Pause** from the toolbar or the status bar: 30 minutes, an hour, three hours, or until tomorrow morning.
 - **Quiet hours** (`miyagi.quietHours`, for example `22:00-07:00`): no cards, notifications or reminders.
 - **Ignore patterns** (`miyagi.watch.ignore`) and **excluded repositories** (`miyagi.watch.excludeRepositories`).
@@ -75,6 +89,8 @@ In VS Code 1.106 or newer the panel opens in the secondary side bar, on the righ
 - **Review reminder** (`miyagi.reviewReminder`): at most once a day when three or more questions are due, or off.
 
 While paused or quiet, changes are still read, so nothing is taught late as though it had just happened.
+
+Each learning behaviour has its own switch: `miyagi.recallFirst`, `miyagi.explainFirst`, `miyagi.fadeSupport`, `miyagi.mixTopicsInReview`, `miyagi.blackBeltNeedsTransfer`, `miyagi.weeklyGoalDays`, `miyagi.reviewAfterFirstCommit`.
 
 ## Your own ideas
 
@@ -137,6 +153,7 @@ npm install
 npm run typecheck
 npm test            # engine, providers, diff tracking and the hook, under node:test
 npm run test:host   # activates the extension inside a real editor and teaches from a file
+npm run harness     # the panel in a browser, with real engine data, at localhost:8765
 npm run package     # builds miyagi-vscode-<version>.vsix
 npm run release     # package, then publish to the VS Code Marketplace and Open VSX
 ```

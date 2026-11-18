@@ -18,13 +18,17 @@
 
   /** @type {any} */
   let state = null;
-  const ui = Object.assign({ tab: "now", open: {}, more: {}, idea: null }, vscode.getState() || {});
+  const ui = Object.assign({ tab: "now", open: {}, more: {}, practice: {}, lesson: {}, idea: null }, vscode.getState() || {});
   /** slot -> { quiz, answer, picked }. A slot is a card key, or `<key>|own` for a question about its code. */
   const quizzes = {};
   /** Text typed and not yet sent, by draft id, so a redraw does not eat it. */
   const drafts = {};
-  /** card key -> { wrong: number[], found: boolean } for "find the bug" */
-  const bugGuesses = {};
+  /** card key -> true while the "write my own question" form is open */
+  const writing = {};
+  /** The end-of-session recap: null, "writing", or what came back to compare. */
+  let recap = null;
+  /** The result of an unaided check that just finished. */
+  let checked = null;
   /** lesson id -> which walkthrough step is showing */
   const walkAt = {};
   let review = { asked: false, quiz: null, answer: null, picked: -1, cleared: 0 };
@@ -131,7 +135,11 @@
         ),
       )
       .join("");
-    const streak = s.dayStreak > 1 ? ` · ${s.dayStreak}-day streak` : "";
+    const w = state.week;
+    // A weekly target with slack in it, rather than a streak one missed day destroys.
+    const streak = w
+      ? ` · ${w.days} of ${w.goal} days this week${w.weeksRunning ? `, ${plural(w.weeksRunning, "week")} running` : ""}`
+      : "";
 
     let banner = "";
     if (state.quiet) {
@@ -181,8 +189,31 @@
 
   /* ---- questions ------------------------------------------------- */
 
+  const CONFIDENCE = [
+    ["sure", "Sure"],
+    ["think", "Think so"],
+    ["guess", "Guessing"],
+  ];
+
   function quizBlock(/** @type {any} */ entry, /** @type {string} */ scope, /** @type {string} */ slot, heading = "") {
     const { quiz, answer, picked } = entry;
+    const top = `${heading ? `<h4>${esc(heading)}</h4>` : ""}${
+      quiz.otherTopic ? `<p class="muted from-other">From another topic, mixed in on purpose.</p>` : ""
+    }<div class="question">${prose(quiz.question)}</div>`;
+
+    // Recall before recognition: the choices stay hidden until the learner has
+    // tried to answer in their head and said how sure they are. One tap.
+    if (state.recallFirst && !entry.confidence && !answer) {
+      const taps = CONFIDENCE.map(
+        ([level, label]) =>
+          `<button data-action="confidence" data-scope="${scope}" data-slot="${esc(slot)}" data-level="${level}">${label}</button>`,
+      ).join("");
+      return `<div class="quiz">${top}
+        <p class="muted">Answer it in your head first. Then: how sure are you?</p>
+        <div class="confidence">${taps}</div>
+      </div>`;
+    }
+
     const letters = "ABCDEFGH";
     const choices = quiz.choices
       .map((/** @type {string} */ choice, /** @type {number} */ i) => {
@@ -199,19 +230,23 @@
     if (answer) {
       const again = answer.nextDueAt ? ` · back in ${until(answer.nextDueAt)}` : "";
       const belt = answer.correct && answer.nextDueAt ? ` · ${esc(answer.belt)} belt` : "";
-      const extras = [
-        answer.leveledUp ? `Level up` : "",
-        ...(answer.newBadges || []).map((/** @type {string} */ b) => `Badge: ${esc(b)}`),
+      const notes = [
+        answer.confidentMiss ? "You were sure, and it was wrong. Those are the ones that come back, so this one gets an extra review." : "",
+        answer.repaysMiss ? "Right this time. You were sure and wrong on this one before, so the belt holds until you are right once more." : "",
+        answer.needsTransfer ? "One step from black belt. Black also needs this idea recognised somewhere you did not learn it: open it in the Dojo and take the transfer question." : "",
+        answer.transferPassed ? "That was the transfer question. The next correct review takes this idea to black belt." : "",
+        answer.leveledUp ? "Level up." : "",
+        ...(answer.newBadges || []).map((/** @type {string} */ b) => `Badge: ${b}`),
       ].filter(Boolean);
       result = `
         <div class="result ${answer.correct ? "ok" : "miss"}">
           <strong>${answer.correct ? "Correct" : "Not quite"}</strong>
           <span class="muted">+${answer.xpAwarded} XP${again}${belt}</span>
           <p>${inline(answer.explanation)}</p>
-          ${extras.map((e) => `<p class="extra">${e}</p>`).join("")}
+          ${notes.map((n) => `<p class="extra">${esc(n)}</p>`).join("")}
         </div>`;
     }
-    return `<div class="quiz">${heading ? `<h4>${esc(heading)}</h4>` : ""}<p class="question">${inline(quiz.question)}</p><div class="choices">${choices}</div>${result}</div>`;
+    return `<div class="quiz">${top}<div class="choices">${choices}</div>${result}</div>`;
   }
 
   /* ---- one card -------------------------------------------------- */
@@ -238,7 +273,8 @@
 
   function attemptBlock(/** @type {any} */ c) {
     const slot = `${c.key}|attempt`;
-    const attempt = (state.extras[c.key] || {}).attempt;
+    const extra = state.extras[c.key] || {};
+    const attempt = extra.attempt;
     if (!attempt) return problem(slot);
     if (attempt.verdict) {
       const label = { right: "You had it", partly: "Partly", wrong: "Not yet" }[attempt.verdict];
@@ -250,16 +286,35 @@
         <p class="by">Judged by ${esc(attempt.by)}</p>
       </div>`;
     }
+    // Help in three steps, smallest first. The full explanation is the last one.
+    const hints = extra.hints || {};
+    const hintSlot = `${c.key}|hint`;
+    const shown = [
+      hints.nudge ? `<div class="hint"><span class="muted">Nudge</span>${prose(hints.nudge)}</div>` : "",
+      hints.pointer ? `<div class="hint"><span class="muted">Pointer</span>${prose(hints.pointer)}</div>` : "",
+    ].join("");
+    const nextHint = busy(hintSlot)
+      ? ""
+      : !hints.nudge
+      ? `<button class="link" data-action="hint" data-key="${esc(c.key)}" data-step="nudge">Stuck? Get a nudge</button>`
+      : !hints.pointer
+      ? `<button class="link" data-action="hint" data-key="${esc(c.key)}" data-step="pointer">Point me at the line</button>`
+      : "";
     return `<div class="block">
-      <h4>Before reading an explanation</h4>
-      <p>What do these lines do? Say it in your own words; a sentence or two is enough.</p>
+      <h4>Your turn first</h4>
+      <p>What do you think these lines do? A sentence or two in your own words.</p>
       <pre><code>${esc(attempt.code)}</code></pre>
+      ${shown}${waiting(hintSlot)}${problem(hintSlot)}
       ${
         busy(slot)
           ? `<p class="asked">${esc(attempt.text)}</p>${waiting(slot)}`
           : `<form data-submit="attempt" data-key="${esc(c.key)}">
                <textarea data-draft="${esc(slot)}" rows="3" placeholder="These lines…" aria-label="Your explanation" maxlength="800">${esc(drafts[slot] || "")}</textarea>
-               <div class="actions"><button type="submit" class="primary">Check my explanation</button></div>
+               <div class="actions">
+                 <button type="submit" class="primary">Check my explanation</button>
+                 ${nextHint}
+                 <button type="button" class="link" data-action="explain" data-key="${esc(c.key)}">Skip, just show me</button>
+               </div>
              </form>`
       }
       ${problem(slot)}
@@ -270,24 +325,62 @@
     const slot = `${c.key}|bug`;
     const drill = (state.extras[c.key] || {}).bug;
     if (!drill) return waiting(slot) + problem(slot);
-    const guess = bugGuesses[c.key] || { wrong: [], found: false };
     const lines = drill.lines
       .map((/** @type {string} */ line, /** @type {number} */ i) => {
         const n = i + 1;
         let cls = "codeline";
-        if (guess.found && n === drill.bugLine) cls += " right";
-        else if (guess.wrong.includes(n)) cls += " wrong";
-        return `<button class="${cls}" data-action="bugGuess" data-key="${esc(c.key)}" data-line="${n}"${guess.found ? " disabled" : ""}><span class="ln">${n}</span><code>${esc(line) || " "}</code></button>`;
+        if (drill.found && n === drill.bugLine) cls += " right";
+        else if (drill.wrong.includes(n)) cls += " wrong";
+        return `<button class="${cls}" data-action="bugGuess" data-key="${esc(c.key)}" data-line="${n}"${drill.found ? " disabled" : ""}><span class="ln">${n}</span><code>${esc(line) || " "}</code></button>`;
       })
       .join("");
-    let below;
-    if (guess.found) {
-      below = `<div class="result ok"><strong>Line ${drill.bugLine}</strong> <span class="muted">${guess.wrong.length ? `found after ${plural(guess.wrong.length, "miss")}` : "found first time"}</span>${prose(drill.explanation)}</div>`;
-    } else {
-      below = `<p class="muted">${guess.wrong.length ? "Not that line. " + esc(drill.hint || "Look again at what each line assumes.") : "This is a copy of your code with one line changed. Click the line you think is wrong."}
-        <button class="link" data-action="bugReveal" data-key="${esc(c.key)}">Show me</button></p>`;
-    }
+    const below = drill.found
+      ? `<div class="result ok"><strong>Line ${drill.bugLine}</strong> <span class="muted">${drill.wrong.length ? `found after ${plural(drill.wrong.length, "miss")}` : "found"}</span>${prose(drill.explanation)}</div>`
+      : `<p class="muted">${drill.wrong.length ? "Not that line. " + esc(drill.hint || "Look again at what each line assumes.") : "This is a copy of your code with one line changed. Click the line you think is wrong."}
+          <button class="link" data-action="bugReveal" data-key="${esc(c.key)}">Show me</button></p>`;
     return `<div class="block"><h4>Find the bug</h4><div class="code">${lines}</div>${below}<p class="by">Exercise by ${esc(drill.by)}. Your real file was not changed.</p></div>`;
+  }
+
+  function contrastBlock(/** @type {any} */ c) {
+    const slot = `${c.key}|contrast`;
+    const x = (state.extras[c.key] || {}).contrast;
+    if (!x) return waiting(slot) + problem(slot);
+    const side = (/** @type {"a" | "b"} */ which) => {
+      let cls = "snippet";
+      if (x.picked) cls += which === x.flawed ? " right" : which === x.picked ? " wrong" : "";
+      return `<button class="${cls}" data-action="contrastPick" data-key="${esc(c.key)}" data-pick="${which}"${x.picked ? " disabled" : ""}>
+        <span class="letter">${which.toUpperCase()}</span><pre><code>${esc(x[which])}</code></pre></button>`;
+    };
+    const below = x.picked
+      ? `<div class="result ${x.picked === x.flawed ? "ok" : "miss"}"><strong>${x.picked === x.flawed ? "That is the one" : `It was ${x.flawed.toUpperCase()}`}</strong>${prose(x.explanation)}</div>`
+      : "";
+    return `<div class="block"><h4>${esc(x.question)}</h4>${side("a")}${side("b")}${below}<p class="by">Exercise by ${esc(x.by)}.</p></div>`;
+  }
+
+  function ownCardBlock(/** @type {any} */ c) {
+    const own = (state.extras[c.key] || {}).ownCard || {};
+    if (own.saved) {
+      return `<div class="block"><h4>Your question</h4><p>Saved. It will come back for review like any other, and it is listed in the Dojo.</p></div>`;
+    }
+    if (!writing[c.key]) return "";
+    const d = (/** @type {string} */ f) => `${c.key}|own.${f}`;
+    const field = (/** @type {string} */ f, /** @type {string} */ label, /** @type {string} */ hint) =>
+      `<label class="field"><span>${label}</span><input type="text" data-draft="${esc(d(f))}" value="${esc(drafts[d(f)] || "")}" placeholder="${esc(hint)}" maxlength="300"></label>`;
+    return `<div class="block">
+      <h4>Write your own question</h4>
+      <p class="muted">Writing the question is half the learning. Good wrong answers are things you might have believed.</p>
+      <form data-submit="ownCard" data-key="${esc(c.key)}">
+        ${field("question", "Question", "What happens if…")}
+        ${field("answer", "Correct answer", "")}
+        ${field("wrong1", "A wrong answer", "")}
+        ${field("wrong2", "Another wrong answer", "")}
+        ${field("wrong3", "One more (optional)", "")}
+        ${field("why", "Why (optional)", "One line you will thank yourself for")}
+        ${own.problem ? `<div class="note error"><p>${esc(own.problem)}</p></div>` : ""}
+        <div class="actions"><button type="submit" class="primary">Save question</button>
+        <button type="button" class="link" data-action="writeOwn" data-key="${esc(c.key)}">Cancel</button></div>
+      </form>
+    </div>`;
   }
 
   function whyBlock(/** @type {any} */ c) {
@@ -330,7 +423,9 @@
             : "Seen before this panel was installed, so there is no file to point at yet."
         }</p>`;
     const origin =
-      c.origin === "ai"
+      c.origin === "own"
+        ? `<p class="muted origin">You wrote this one.</p>`
+        : c.origin === "ai"
         ? `<p class="muted origin">This lesson was written by your AI from your code, not by Miyagi's authors. Check anything that matters.</p>`
         : c.origin === "pack"
         ? `<p class="muted origin">From one of your idea packs.</p>`
@@ -340,21 +435,56 @@
       : "";
 
     const idea = quizzes[c.key];
-    const own = quizzes[`${c.key}|own`];
     const extra = state.extras[c.key] || {};
     const explained = Boolean(state.explanations[c.key]) || busy(`${c.key}|explain`);
 
+    // Help that never fades becomes a crutch. From green belt up the question
+    // comes first and the lesson waits behind a link.
+    const faded = state.fadeSupport && c.status === "learning" && c.support !== "full" && !pinned;
+    const lessonOpen = !faded || ui.lesson[c.key];
+    const lesson = lessonOpen
+      ? `<dl>
+          <dt>What it is</dt><dd>${inline(c.what)}</dd>
+          <dt>Know this</dt><dd>${inline(c.lens[state.status.depth] || c.lens.Junior)}</dd>
+          <dt>How it bites</dt><dd>${inline(c.pitfall)}</dd>
+        </dl>`
+      : `<p class="faded">You hold a ${esc(c.belt)} belt in this, so the question comes first.
+          <button class="link" data-action="showLesson" data-key="${esc(c.key)}">Show the lesson</button></p>`;
+
+    const startExplain = state.explainFirst && !extra.attempt ? "attempt" : "explain";
     const primary = [
-      !explained && c.file ? `<button class="primary" data-action="explain" data-key="${esc(c.key)}">Explain in my code</button>` : "",
-      c.hasQuiz && !idea ? `<button data-action="quiz" data-key="${esc(c.key)}">Check yourself</button>` : "",
+      c.hasQuiz && !idea ? `<button class="${faded ? "primary" : ""}" data-action="quiz" data-key="${esc(c.key)}">Check yourself</button>` : "",
+      !explained && c.file && !(extra.attempt && !extra.attempt.verdict)
+        ? `<button class="${faded ? "" : "primary"}" data-action="${startExplain}" data-key="${esc(c.key)}">Explain in my code</button>`
+        : "",
+      c.file ? `<button data-action="practice" data-key="${esc(c.key)}" aria-expanded="${Boolean(ui.practice[c.key])}">Practice</button>` : "",
     ].join("");
+
+    // Every other way to practise lives behind that one button.
+    const kinds = [
+      ["why", "A why question"],
+      ["trace", "Trace it by hand"],
+      ["contrast", "Spot the difference"],
+      ["bug", "Find the bug"],
+      ["own", "Quiz me on my code"],
+    ]
+      .filter(([kind]) => !busy(`${c.key}|${kind === "own" ? "ownQuiz" : kind}`))
+      .map(([kind, label]) => `<button class="chip" data-action="practiceKind" data-key="${esc(c.key)}" data-kind="${kind}">${label}</button>`)
+      .join("");
+    const practice = ui.practice[c.key]
+      ? `<div class="practice"><span class="muted">Each one asks your AI for a fresh exercise on these lines.</span><div>${kinds}</div></div>`
+      : "";
+
+    const transfer = c.needsTransfer && !quizzes[`${c.key}|transfer`]
+      ? `<p class="builds-on">One step from black belt. Black needs this idea recognised somewhere you did not learn it.
+          ${busy(`${c.key}|transfer`) ? "" : `<button class="link" data-action="practiceKind" data-key="${esc(c.key)}" data-kind="transfer">Take the transfer question</button>`}</p>`
+      : "";
 
     const claude = state.capture.on.includes("Claude Code");
     const more = [
-      c.file && !extra.attempt ? `<button class="link" data-action="attempt" data-key="${esc(c.key)}">Explain it yourself first</button>` : "",
-      c.file && !own && !busy(`${c.key}|ownQuiz`) ? `<button class="link" data-action="ownQuiz" data-key="${esc(c.key)}">Quiz me on my code</button>` : "",
-      c.file && !extra.bug && !busy(`${c.key}|bug`) ? `<button class="link" data-action="bug" data-key="${esc(c.key)}">Find the bug</button>` : "",
+      !state.explainFirst && c.file && !extra.attempt ? `<button class="link" data-action="attempt" data-key="${esc(c.key)}">Explain it yourself first</button>` : "",
       c.file && claude && !extra.why ? `<button class="link" data-action="why" data-key="${esc(c.key)}">What the assistant said</button>` : "",
+      c.origin !== "own" && !(extra.ownCard || {}).saved ? `<button class="link" data-action="writeOwn" data-key="${esc(c.key)}">Write my own question</button>` : "",
       `<button class="link" data-action="speak" data-key="${esc(c.key)}">Read it aloud</button>`,
       `<button class="link" data-action="copy" data-text="${esc(c.askTheAi)}" title="${esc(c.askTheAi)}">Copy a question for your AI</button>`,
       `<button class="link" data-action="link" data-url="${esc(c.docs.url)}">${esc(c.docs.label)}</button>`,
@@ -362,26 +492,33 @@
       .filter(Boolean)
       .join("");
     const moreOpen = Boolean(ui.more[c.key]);
+    const asked = ["why", "trace", "transfer", "own"]
+      .map((kind) => {
+        const q = quizzes[`${c.key}|${kind}`];
+        const slot = `${c.key}|${kind === "own" ? "ownQuiz" : kind}`;
+        const heading = { why: "Why", trace: "Trace it", transfer: "The same idea, somewhere else", own: "About your code" }[kind];
+        return q ? quizBlock(q, "card", `${c.key}|${kind}`, heading) : waiting(slot) + problem(slot);
+      })
+      .join("");
 
     return `
       <article class="card">
         ${head}
         ${where}
-        <dl>
-          <dt>What it is</dt><dd>${inline(c.what)}</dd>
-          <dt>Know this</dt><dd>${inline(c.lens[state.status.depth] || c.lens.Junior)}</dd>
-          <dt>How it bites</dt><dd>${inline(c.pitfall)}</dd>
-        </dl>
-        ${origin}${buildsOn}
+        ${lesson}
+        ${origin}${buildsOn}${transfer}
+        ${idea ? quizBlock(idea, "card", c.key) : ""}
         ${attemptBlock(c)}
         ${explanationBlock(c)}
         ${whyBlock(c)}
-        ${idea ? quizBlock(idea, "card", c.key) : ""}
-        ${own ? quizBlock(own, "card", `${c.key}|own`, "About your code") : waiting(`${c.key}|ownQuiz`) + problem(`${c.key}|ownQuiz`)}
+        ${asked}
+        ${contrastBlock(c)}
         ${bugBlock(c)}
+        ${ownCardBlock(c)}
         ${primary ? `<div class="actions">${primary}</div>` : ""}
+        ${practice}
         <div class="more">
-          <button class="link disclose" data-action="more" data-key="${esc(c.key)}" aria-expanded="${moreOpen}">${moreOpen ? "Fewer options" : "More ways to learn this"}</button>
+          <button class="link disclose" data-action="more" data-key="${esc(c.key)}" aria-expanded="${moreOpen}">${moreOpen ? "Fewer options" : "More"}</button>
           ${moreOpen ? `<div class="more-list">${more}</div>` : ""}
         </div>
       </article>`;
@@ -432,6 +569,34 @@
     return `<div class="block risks"><h4>${plural(risks.items.length, "risk")} in this change</h4><ul>${items}</ul><p class="by">Found by ${esc(risks.by)}. Check each one against the code before acting on it.</p></div>`;
   }
 
+  function turnBlock(/** @type {any} */ lesson) {
+    const slot = `${lesson.id}|turn`;
+    const turn = (state.lessonExtras[lesson.id] || {}).turn;
+    if (!turn) return waiting(slot) + problem(slot);
+    const verdict = {
+      done: `<div class="result ok"><strong>Counted</strong> <span class="muted">+40 XP</span><p>You added ${plural(turn.lines || 0, "line")} to ${esc(turn.file)} without your assistant. Miyagi checked who wrote it, not whether it is right: run it and see.</p></div>`,
+      nothing: `<div class="result miss"><strong>Nothing new yet</strong><p>${esc(turn.file)} has no new lines since this was set. Save the file and try again.</p></div>`,
+      assisted: `<div class="result miss"><strong>Not counted</strong><p>Your assistant edited ${esc(turn.file)} after this was set, so it cannot count as written by you. That is fine; it just is not this exercise.</p></div>`,
+    }[turn.verdict] || "";
+    return `<div class="block turn">
+      <h4>Your turn: write this one yourself</h4>
+      <p>${inline(turn.task)}</p>
+      <p>${fileLink(lesson.root, turn.file, null)}</p>
+      ${turn.done ? `<p class="muted">You are done when: ${inline(turn.done)}</p>` : ""}
+      ${turn.hintShown && turn.hint ? `<div class="hint"><span class="muted">Hint</span><p>${inline(turn.hint)}</p></div>` : ""}
+      ${verdict}
+      ${
+        turn.verdict === "done"
+          ? ""
+          : `<div class="actions">
+               <button class="primary" data-action="turnDone" data-lesson="${esc(lesson.id)}">I have written it</button>
+               ${turn.hint && !turn.hintShown ? `<button class="link" data-action="turnHint" data-lesson="${esc(lesson.id)}">A hint</button>` : ""}
+             </div>`
+      }
+      <p class="by">Suggested by ${esc(turn.by)}. Close your assistant for this one; Miyagi checks the diff, and never writes the code.</p>
+    </div>`;
+  }
+
   function chips(/** @type {string} */ label, /** @type {any[]} */ items) {
     if (!items.length) return "";
     return `<p class="chips"><span class="muted">${label}</span> ${items
@@ -441,10 +606,11 @@
 
   function lessonSection(/** @type {any} */ lesson, /** @type {boolean} */ newest) {
     const extra = state.lessonExtras[lesson.id] || {};
-    const found = lesson.discovered && !state.topic ? `<span class="found">${plural(lesson.discovered, "new idea")} · +${lesson.xpAwarded} XP</span>` : "";
+    const found = lesson.discovered && !state.topic ? `<span class="found">${plural(lesson.discovered, "new idea")}${lesson.xpAwarded ? ` · +${lesson.xpAwarded} XP` : ""}</span>` : "";
     const tools = [
       !extra.walk && !busy(`${lesson.id}|walk`) ? `<button class="link" data-action="walk" data-lesson="${esc(lesson.id)}">Walk me through this change</button>` : "",
       !extra.risks && !busy(`${lesson.id}|risks`) ? `<button class="link" data-action="risks" data-lesson="${esc(lesson.id)}">Check it for risks</button>` : "",
+      !extra.turn && state.turnsLeft && !busy(`${lesson.id}|turn`) ? `<button class="link" data-action="turn" data-lesson="${esc(lesson.id)}">Your turn</button>` : "",
     ]
       .filter(Boolean)
       .join("");
@@ -455,6 +621,7 @@
         ${lesson.cards.map((/** @type {any} */ c) => card(c, newest)).join("")}
         ${walkBlock(lesson)}
         ${risksBlock(lesson)}
+        ${turnBlock(lesson)}
         ${tools ? `<div class="lesson-tools">${tools}</div>` : ""}
         ${chips("Also in there, for next time:", lesson.later)}
         ${chips("Already yours:", lesson.solid)}
@@ -473,6 +640,8 @@
     }
     const outcome = h.taught
       ? plural(h.taught, "idea") + " carded"
+      : h.held && state.holding
+      ? "waiting for a commit or a pause before teaching"
       : state.quiet
       ? "not shown while quiet"
       : busy(`${h.root}|findIdeas`)
@@ -518,6 +687,7 @@
       <footer>
         <p>${ai} <button class="link" data-action="command" data-id="miyagi.chooseAi">Change</button></p>
         <p>${esc(state.meter)}</p>
+        ${state.mirror ? `<p>${esc(state.mirror)}</p>` : ""}
         ${capture}
         <p>${state.watching ? watching : "Watching is turned off."} <button class="link" data-action="command" data-id="miyagi.settings">Settings</button></p>
       </footer>`;
@@ -580,15 +750,28 @@
     const due = dueCount();
     const scope = state.topic ? ` in ${esc(state.topic)}` : "";
     if (review.quiz) {
+      const inCheck = state.check;
       const next = review.answer
-        ? `<div class="actions"><button class="primary" data-action="nextReview">${due ? "Next question" : "Finish"}</button></div>`
+        ? `<div class="actions"><button class="primary" data-action="nextReview">${inCheck ? (inCheck.asked < inCheck.of ? "Next question" : "See the result") : due ? "Next question" : "Finish"}</button></div>`
         : "";
+      const right = inCheck ? `Unaided check: ${inCheck.asked} of ${inCheck.of}` : `${plural(due, "question")} due${scope}`;
       return `
         <section class="review">
-          <h3><span>${inline(review.quiz.about)}</span><span class="muted">${plural(due, "question")} due${scope}</span></h3>
+          ${inCheck ? `<p class="muted">No hints, no explanations, no AI. Just what you can recall.</p>` : ""}
+          <h3><span>${inline(review.quiz.about)}</span><span class="muted">${right}</span></h3>
           ${quizBlock(review, "review", "")}
           ${next}
         </section>`;
+    }
+    if (checked) {
+      const pct = Math.round((checked.correct / checked.asked) * 100);
+      return `
+        <div class="empty">
+          <h2>${checked.correct} of ${checked.asked} without help</h2>
+          <p>${pct >= 80 ? "What you hold belts for, you can produce on your own." : pct >= 50 ? "Some of what the belts say you know needs help to come out. The misses are back in your review queue." : "Most of this needed help to come out. That is what the check is for: the misses are back in your review queue."}</p>
+          <p class="muted">This is shown next to your belts in the Dojo. Another check is worth taking in about a month.</p>
+          <button data-action="tab" data-tab="dojo">Go to the Dojo</button>
+        </div>`;
     }
     const drills = s.dueCommands
       ? `<p class="muted">${plural(s.dueCommands, "terminal drill")} also due. Those run in the Miyagi MCP tutor (<code>review_due_items</code>).</p>`
@@ -637,6 +820,9 @@
       <section class="dojo">
         <h3><span>${seen.length} of ${all.length} ideas found${scope}</span></h3>
         <ul class="ideas">${seen.map(row).join("")}</ul>
+        ${independence()}
+        ${calibrationBlock()}
+        ${mistakesBlock()}
         ${
           locked.length
             ? `<h3><span class="muted">${locked.length} still locked</span></h3>
@@ -645,11 +831,92 @@
             : ""
         }
         <p class="muted">A belt moves up one colour each time you answer its question after a longer gap, and drops when you miss. It measures what you can recall, not how long the panel was open.</p>
+        ${recapBlock()}
         <p class="lesson-tools">
           <button class="link" data-action="command" data-id="miyagi.weeklyReport">Your week</button>
           <button class="link" data-action="command" data-id="miyagi.projectMap">How this project works</button>
         </p>
       </section>`;
+  }
+
+  function independence() {
+    const s = state.status;
+    const last = s.independence;
+    const line = last
+      ? `<p><strong>Without help: ${last.correct} of ${last.asked}</strong> <span class="muted">on ${esc(new Date(last.at).toLocaleDateString([], { month: "short", day: "numeric" }))}</span></p>`
+      : "";
+    const offer = s.checkDue
+      ? `<p>${last ? "It has been a month." : "You hold enough belts for an unaided check:"} about ten questions with every kind of help switched off, to see what you can do alone.
+          <button class="link" data-action="startCheck">Take the check</button></p>`
+      : last
+      ? `<p><button class="link" data-action="startCheck">Take the check again</button></p>`
+      : "";
+    return line || offer ? `<div class="block"><h4>On your own</h4>${line}${offer}</div>` : "";
+  }
+
+  function calibrationBlock() {
+    const insight = dojo && dojo.insight;
+    if (!insight || !insight.calibration.some((/** @type {any} */ r) => r.answers)) return "";
+    const names = { sure: "Sure", think: "Think so", guess: "Guessing" };
+    const rows = insight.calibration
+      .map((/** @type {any} */ r) => {
+        const pct = r.accuracy === null ? null : Math.round(r.accuracy * 100);
+        return `<div class="cal-row">
+          <span class="cal-name">${names[r.confidence]}</span>
+          ${pct === null ? `<span class="muted cal-wait">${r.answers ? `${plural(r.answers, "answer")} so far` : "none yet"}</span>` : `<progress max="100" value="${pct}" aria-label="${names[r.confidence]}: ${pct}% correct"></progress><span class="cal-pct">${pct}%</span>`}
+        </div>`;
+      })
+      .join("");
+    return `<div class="block"><h4>When you say you are sure</h4>
+      <p class="muted">How often each answer turned out right, by how sure you said you were.</p>
+      ${rows}
+      ${insight.verdict ? `<p>${esc(insight.verdict)}</p>` : `<p class="muted">A verdict needs at least five answers marked "Sure".</p>`}
+    </div>`;
+  }
+
+  function mistakesBlock() {
+    const insight = dojo && dojo.insight;
+    if (!insight || !insight.mistakes.length) return "";
+    const items = insight.mistakes
+      .slice(0, 12)
+      .map(
+        (/** @type {any} */ m) => `<li>
+          <p class="muted">${esc(m.about)}${m.confident ? ` <span class="tag risk">You were sure</span>` : ""}</p>
+          <p>${inline(m.question)}</p>
+          <p><span class="muted">You thought:</span> ${inline(m.believed)}</p>
+          <p><span class="muted">It is:</span> ${inline(m.truth)}</p>
+        </li>`,
+      )
+      .join("");
+    return `<details class="block mistakes"><summary>What you got wrong, and what is true (${insight.mistakes.length})</summary><ul>${items}</ul>
+      <p class="muted">Each of these is already back in your review queue. The ones you were sure about come first, because those return most often.</p></details>`;
+  }
+
+  function recapBlock() {
+    if (!recap) return `<p><button class="link" data-action="startRecap">Wrap up this session</button></p>`;
+    if (recap === "writing") {
+      return `<div class="block">
+        <h4>Before you look: what changed today, and why?</h4>
+        <p class="muted">One minute, from memory. Then Miyagi shows what it saw, to compare.</p>
+        <form data-submit="recap" data-key="session">
+          <textarea data-draft="session|recap" rows="4" placeholder="Today we…" aria-label="Your recap" maxlength="2000">${esc(drafts["session|recap"] || "")}</textarea>
+          <div class="actions"><button type="submit" class="primary">Compare</button>
+          <button type="button" class="link" data-action="skipRecap">Skip, just show me</button></div>
+        </form>
+      </div>`;
+    }
+    const seen = [
+      recap.ideas.length ? `<p><span class="muted">Ideas met:</span> ${recap.ideas.map(esc).join(", ")}</p>` : "",
+      recap.files.length ? `<p><span class="muted">Files changed:</span> ${recap.files.map(esc).join(", ")}</p>` : "",
+      recap.commands ? `<p><span class="muted">Commands your assistant ran:</span> ${recap.commands}</p>` : "",
+    ].join("");
+    return `<div class="block">
+      <h4>Today</h4>
+      ${recap.wrote ? `<p class="muted">You wrote</p><p class="asked">${esc(recap.wrote)}</p>` : ""}
+      <p class="muted">Miyagi saw</p>
+      ${seen || `<p>Nothing was carded today.</p>`}
+      <p class="muted">Anything in the second list that is not in the first is worth opening.</p>
+    </div>`;
   }
 
   /* ---- drawing --------------------------------------------------- */
@@ -698,8 +965,18 @@
     window.scrollTo(0, 0);
   }
 
+  function startCheck() {
+    ui.tab = "review";
+    remember();
+    checked = null;
+    review = { asked: true, quiz: null, answer: null, picked: -1, cleared: 0 };
+    send({ type: "check" });
+    render();
+  }
+
   function startReview() {
     ui.tab = "review";
+    checked = null;
     remember();
     review = { asked: true, quiz: null, answer: null, picked: -1, cleared: review.cleared };
     send({ type: "review" });
@@ -729,13 +1006,47 @@
       case "openAt":
         return send({ type: "openAt", root: d.root, file: d.file, line: d.line ? Number(d.line) : null });
       case "explain":
-      case "ownQuiz":
       case "attempt":
-      case "bug":
       case "why":
       case "speak":
       case "quiz":
         return send({ type: d.action, key });
+      case "hint":
+        return send({ type: "hint", key, step: d.step });
+      case "practice":
+        ui.practice[key] = !ui.practice[key];
+        remember();
+        return render();
+      case "practiceKind":
+        ui.practice[key] = false;
+        remember();
+        send({ type: "practice", key, kind: d.kind });
+        return render();
+      case "showLesson":
+        ui.lesson[key] = true;
+        remember();
+        return render();
+      case "writeOwn":
+        writing[key] = !writing[key];
+        return render();
+      case "contrastPick":
+        return send({ type: "contrastPick", key, pick: d.pick });
+      case "confidence": {
+        const entry = d.scope === "review" ? review : quizzes[d.slot || ""];
+        if (entry) entry.confidence = d.level;
+        return render();
+      }
+      case "turn":
+      case "turnDone":
+      case "turnHint":
+        return send({ type: d.action, lesson: d.lesson });
+      case "startCheck":
+        return startCheck();
+      case "startRecap":
+        recap = "writing";
+        return render();
+      case "skipRecap":
+        return send({ type: "recap", text: "" });
       case "risks":
       case "walk":
         return send({ type: d.action, lesson: d.lesson });
@@ -745,24 +1056,16 @@
         send({ type: "walkStep", lesson: d.lesson, index });
         return render();
       }
-      case "bugGuess": {
-        const drill = (state.extras[key] || {}).bug;
-        if (!drill) return;
-        const guess = (bugGuesses[key] = bugGuesses[key] || { wrong: [], found: false });
-        const line = Number(d.line);
-        if (line === drill.bugLine) guess.found = true;
-        else if (!guess.wrong.includes(line)) guess.wrong.push(line);
-        return render();
-      }
+      case "bugGuess":
+        return send({ type: "bugGuess", key, line: Number(d.line) });
       case "bugReveal":
-        bugGuesses[key] = Object.assign(bugGuesses[key] || { wrong: [] }, { found: true });
-        return render();
+        return send({ type: "bugReveal", key });
       case "answer": {
         const index = Number(d.index);
         const entry = d.scope === "review" ? review : quizzes[d.slot || ""];
         if (!entry || !entry.quiz || entry.answer) return;
         entry.picked = index;
-        send({ type: "answer", token: entry.quiz.token, index });
+        send({ type: "answer", token: entry.quiz.token, index, confidence: entry.confidence || null });
         return render();
       }
       case "startReview":
@@ -799,11 +1102,24 @@
     event.preventDefault();
     const form = /** @type {HTMLElement} */ (event.target);
     const key = form.dataset.key || "";
-    const draft = `${key}|${form.dataset.submit}`;
+    const kind = form.dataset.submit;
+    if (kind === "ownCard") {
+      const take = (/** @type {string} */ f) => (drafts[`${key}|own.${f}`] || "").trim();
+      return send({
+        type: "ownCard",
+        key,
+        question: take("question"),
+        answer: take("answer"),
+        wrong: [take("wrong1"), take("wrong2"), take("wrong3")].filter(Boolean),
+        why: take("why"),
+      });
+    }
+    const draft = `${key}|${kind}`;
     const text = (drafts[draft] || "").trim();
     if (!text) return;
     delete drafts[draft];
-    send({ type: form.dataset.submit === "attempt" ? "attemptSubmit" : "followUp", key, text });
+    if (kind === "recap") return send({ type: "recap", text });
+    send({ type: kind === "attempt" ? "attemptSubmit" : "followUp", key, text });
   });
 
   app.addEventListener("change", (event) => {
@@ -841,9 +1157,21 @@
       }
       case "review":
         review = { asked: true, quiz: m.quiz, answer: null, picked: -1, cleared: review.cleared };
+        if (m.checked) checked = m.checked;
         break;
       case "dojo":
-        dojo = { rows: m.rows, belts: m.belts };
+        dojo = { rows: m.rows, belts: m.belts, insight: m.insight };
+        break;
+      case "startCheck":
+        return startCheck();
+      case "startRecap":
+        ui.tab = "dojo";
+        ui.idea = null;
+        recap = "writing";
+        send({ type: "dojo" });
+        break;
+      case "recap":
+        recap = m;
         break;
       case "idea":
         ideaCard = m.card;

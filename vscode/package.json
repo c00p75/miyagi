@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
@@ -99,6 +99,11 @@
         "icon": "$(checklist)"
       },
       {
+        "command": "miyagi.unaidedCheck",
+        "title": "Take the Unaided Check",
+        "category": "Miyagi"
+      },
+      {
         "command": "miyagi.pause",
         "title": "Pause",
         "category": "Miyagi",
@@ -128,6 +133,11 @@
       {
         "command": "miyagi.weeklyReport",
         "title": "Show My Week",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.recap",
+        "title": "Wrap Up This Session",
         "category": "Miyagi"
       },
       {
@@ -191,12 +201,69 @@
           "default": [],
           "description": "Repositories to leave alone, by folder name or full path. Useful when one window holds several projects and only some are yours to learn."
         },
+        "miyagi.watch.teachAt": {
+          "type": "string",
+          "default": "breakpoints",
+          "enum": [
+            "breakpoints",
+            "immediately"
+          ],
+          "enumDescriptions": [
+            "Hold new cards until a commit, a test run, or a pause in the work.",
+            "Show a card as soon as a change is read."
+          ],
+          "description": "When a change becomes a card. A card that arrives mid-task interrupts the task and is read by nobody, so by default Miyagi waits for a stopping point."
+        },
+        "miyagi.watch.quietSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "maximum": 600,
+          "description": "With teaching at breakpoints: how many seconds without a change count as a pause."
+        },
         "miyagi.ideasPerChange": {
           "type": "number",
           "default": 2,
           "minimum": 1,
           "maximum": 5,
           "description": "The most ideas taught from one change. The rest are named and left for next time."
+        },
+        "miyagi.recallFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a question without its choices first. You answer in your head, tap how sure you are, and then the choices appear. Recalling an answer teaches more than recognising it."
+        },
+        "miyagi.explainFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "\"Explain in my code\" asks what you think the lines do before showing an explanation, with a nudge and a pointer on the way. \"Skip, just show me\" is always there."
+        },
+        "miyagi.fadeSupport": {
+          "type": "boolean",
+          "default": true,
+          "description": "From green belt up, show an idea's question first and keep its lesson behind a link."
+        },
+        "miyagi.mixTopicsInReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "With a topic chosen, still take about one review question in four from another topic. Mixed questions are harder and are remembered longer."
+        },
+        "miyagi.blackBeltNeedsTransfer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Before an idea reaches black belt, ask one question about it in a different language or framework. Needs an AI; without one this is skipped."
+        },
+        "miyagi.weeklyGoalDays": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 7,
+          "description": "How many days a week you aim to practise. Miyagi shows progress toward this instead of a daily streak, and a week that falls one day short still counts."
+        },
+        "miyagi.reviewAfterFirstCommit": {
+          "type": "boolean",
+          "default": false,
+          "description": "After your first commit of the day, offer up to three review questions. Once a day, and only if something is due."
         },
         "miyagi.notify": {
           "type": "string",
@@ -397,6 +464,16 @@
           "command": "miyagi.doctor",
           "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
           "group": "3_misc@2"
+        },
+        {
+          "command": "miyagi.unaidedCheck",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@5"
+        },
+        {
+          "command": "miyagi.recap",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@6"
         }
       ],
       "commandPalette": [
@@ -421,7 +498,8 @@
     "vscode:prepublish": "node esbuild.mjs --production",
     "publish:marketplace": "vsce publish --no-dependencies --packagePath miyagi-vscode-$npm_package_version.vsix",
     "publish:openvsx": "npx --yes ovsx publish miyagi-vscode-$npm_package_version.vsix",
-    "release": "npm run package && npm run publish:marketplace && npm run publish:openvsx"
+    "release": "npm run package && npm run publish:marketplace && npm run publish:openvsx",
+    "harness": "mkdir -p dist-test/harness && esbuild test/harness/mock.ts --bundle --platform=node --format=cjs --outfile=dist-test/harness/mock.cjs --log-level=error --log-override:empty-import-meta=silent && node dist-test/harness/mock.cjs dist-test/harness/mock.js && cp test/harness/index.html media/panel.css media/panel.js dist-test/harness/ && echo \"Serving on http://localhost:8765/index.html#feed\" && python3 -m http.server 8765 --directory dist-test/harness"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

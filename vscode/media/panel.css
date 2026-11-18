@@ -976,3 +976,173 @@ button.chip {
 .walk .actions {
   margin-top: 8px;
 }
+
+/* ---- recall first ----------------------------------------------- */
+
+.question p:last-child {
+  margin-bottom: 8px;
+}
+
+.question {
+  font-weight: 600;
+}
+
+.question pre {
+  font-weight: 400;
+}
+
+.confidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.confidence button {
+  flex: 1;
+  min-width: 80px;
+  border: 1px solid var(--border);
+}
+
+.from-other {
+  margin-bottom: 4px;
+  font-size: 0.92em;
+}
+
+.faded {
+  margin: 10px 0 0;
+  font-size: 0.92em;
+  color: var(--muted);
+}
+
+/* ---- hints, practice, exercises --------------------------------- */
+
+.hint {
+  margin-bottom: 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+}
+
+.hint > .muted {
+  display: block;
+  font-size: 0.85em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hint p {
+  margin: 2px 0 0;
+}
+
+.practice {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.92em;
+}
+
+.practice > div {
+  margin-top: 6px;
+}
+
+button.chip:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+.snippet {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--vscode-foreground);
+  text-align: left;
+}
+
+.snippet pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.snippet.right {
+  border-color: var(--ok);
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+
+.snippet.wrong {
+  border-color: var(--miss);
+  box-shadow: inset 3px 0 0 var(--miss);
+}
+
+.snippet:disabled {
+  cursor: default;
+}
+
+.turn {
+  border-left: 2px solid var(--ok);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.field {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.field > span {
+  display: block;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+/* ---- what the answers say --------------------------------------- */
+
+.cal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cal-name {
+  flex: 0 0 5.5em;
+}
+
+.cal-row progress {
+  flex: 1;
+  height: 8px;
+  margin: 0;
+  border-radius: 4px;
+}
+
+.cal-pct {
+  flex: 0 0 3em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-wait {
+  flex: 1;
+  font-size: 0.92em;
+}
+
+.mistakes summary {
+  cursor: pointer;
+}
+
+.mistakes ul {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mistakes li {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.mistakes li p {
+  margin: 2px 0 0;
+}

@@ -18,6 +18,7 @@
  */
 
 import * as vscode from "vscode";
+import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -35,13 +36,28 @@ const IGNORED = /[\\/](\.git|node_modules|dist|build|out|\.next|\.venv|__pycache
 const SOURCE_FILE =
   /\.(jsx?|tsx?|mjs|cjs|py|rb|go|rs|java|kt|php|cs|swift|vue|svelte|sql|css|scss|html|sh|ya?ml|toml|json|env|prisma)$|(^|[\\/])(Dockerfile|\.gitignore|\.env[^\\/]*)$/i;
 const MAX_PLAIN_FILE = 200_000;
+/** Files git rewrites when HEAD moves: the signs of a commit, a checkout or a pull. */
+const HEAD_MOVED = /[\\/]\.git[\\/](logs[\\/]HEAD|HEAD|ORIG_HEAD)$/;
+
+function headOf(root: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile("git", ["rev-parse", "HEAD"], { cwd: root, timeout: 10_000, windowsHide: true }, (err, stdout) =>
+      resolve(err ? null : String(stdout).trim() || null),
+    );
+  });
+}
 
 export interface Scan {
   root: string;
   at: string;
   /** Files with lines that were not there before. */
   files: number;
+  /** Read and understood, but held until the assistant reaches a stopping point. */
+  held: boolean;
 }
+
+/** Why held changes were released. */
+export type Breakpoint = "commit" | "quiet" | "tests" | "asked";
 
 export interface WatchEvents {
   onChanges(root: string, source: string, changes: FileChange[]): void;
@@ -51,6 +67,8 @@ export interface WatchEvents {
   onScan(scan: Scan): void;
   /** What was already uncommitted in a repository when it was first read. */
   onBaseline(root: string, files: number): void;
+  /** A commit landed in a watched repository. */
+  onCommit(root: string): void;
 }
 
 export interface WatchSettings {
@@ -62,10 +80,17 @@ export interface WatchSettings {
   ignore: readonly string[];
   /** Repository folder names (or full paths) to leave alone. */
   excludeRepos: readonly string[];
+  /**
+   * Seconds of quiet before held changes are taught. Zero teaches each burst
+   * as it lands. A card that arrives mid-task interrupts the task and is read
+   * by nobody, so by default changes wait for a commit or for the work to pause.
+   */
+  holdSeconds: number;
 }
 
 interface GitRepository {
   rootUri: vscode.Uri;
+  state?: { HEAD?: { commit?: string }; onDidChange?: vscode.Event<void> };
 }
 interface GitApi {
   repositories: GitRepository[];
@@ -113,7 +138,10 @@ export class Watcher implements vscode.Disposable {
   private poll: NodeJS.Timeout | undefined;
   private observedUntil = new Date().toISOString();
   private observationMtime = 0;
-  private settings: WatchSettings = { enabled: true, muted: false, ignore: [], excludeRepos: [] };
+  private settings: WatchSettings = { enabled: true, muted: false, ignore: [], excludeRepos: [], holdSeconds: 0 };
+  /** Changes read but not yet taught, by root. */
+  private readonly held = new Map<string, { changes: Map<string, FileChange>; timer: NodeJS.Timeout }>();
+  private readonly heads = new Map<string, { commit: string | undefined; subscription: vscode.Disposable | undefined }>();
   private ignored: (relativePath: string) => boolean = () => false;
   private git: GitApi | null = null;
   /** Resolved path of each root, and of each folder a file event came from. */
@@ -147,6 +175,12 @@ export class Watcher implements vscode.Disposable {
     const rootsChanged = settings.excludeRepos.join("\n") !== this.settings.excludeRepos.join("\n");
     this.settings = settings;
     this.ignored = ignoreMatcher(settings.ignore);
+    if (settings.holdSeconds <= 0) this.releaseAll("asked");
+    // A pause means what happens meanwhile is not taught later.
+    if (settings.muted) {
+      for (const pending of this.held.values()) clearTimeout(pending.timer);
+      this.held.clear();
+    }
     if (rootsChanged) void this.refreshRoots();
   }
 
@@ -227,6 +261,7 @@ export class Watcher implements vscode.Disposable {
     });
     this.realRoots.clear();
     for (const r of [...this.allRoots, ...folders]) this.realRoots.set(r, resolved(r));
+    this.watchHeads();
     this.events.onRoots(this.getRoots());
     // Baseline each repository now, so the first real edit is compared against
     // what was already there rather than taught as if it were all new.
@@ -236,6 +271,11 @@ export class Watcher implements vscode.Disposable {
   }
 
   private touched(uri: vscode.Uri, created: boolean): void {
+    if (uri.scheme === "file" && HEAD_MOVED.test(uri.fsPath)) {
+      const repo = this.owner(this.allRoots, uri.fsPath);
+      if (repo) void headOf(repo).then((commit) => this.headMoved(repo, commit));
+      return;
+    }
     if (!this.settings.enabled || uri.scheme !== "file" || IGNORED.test(uri.fsPath)) return;
     // The deepest repository wins: a nested repo's file belongs to the nested repo.
     const root = this.owner(this.roots, uri.fsPath);
@@ -257,11 +297,85 @@ export class Watcher implements vscode.Disposable {
     }, QUIET_MS);
   }
 
+  /**
+   * A commit is the clearest sign an assistant has finished a piece of work.
+   *
+   * It is noticed two ways, because either can be missing: the editor's git
+   * extension reports a new HEAD (when it is installed, enabled and has
+   * refreshed), and git itself rewrites `.git/logs/HEAD`, which the file
+   * watcher sees. Both end in `headMoved`, which acts once per commit.
+   */
+  private watchHeads(): void {
+    const repos = this.git?.repositories ?? [];
+    for (const [root, head] of this.heads) {
+      if (!this.allRoots.includes(root)) {
+        head.subscription?.dispose();
+        this.heads.delete(root);
+      }
+    }
+    for (const root of this.allRoots) {
+      if (this.heads.has(root)) continue;
+      const repo = repos.find((r) => r.rootUri.fsPath === root);
+      const entry = { commit: repo?.state?.HEAD?.commit, subscription: undefined as vscode.Disposable | undefined };
+      this.heads.set(root, entry);
+      entry.subscription = repo?.state?.onDidChange?.(() => this.headMoved(root, repo.state?.HEAD?.commit));
+      if (!entry.commit) void headOf(root).then((commit) => (entry.commit ??= commit ?? undefined));
+    }
+  }
+
+  private headMoved(root: string, commit: string | null | undefined): void {
+    const entry = this.heads.get(root);
+    if (!entry || !commit || commit === entry.commit) return;
+    const known = entry.commit !== undefined;
+    entry.commit = commit;
+    // The first value is the repository loading, not a commit.
+    if (!known) return;
+    this.release(root, "commit");
+    this.events.onCommit(root);
+  }
+
   private emit(root: string, fresh: FileChange[]): void {
     const kept = fresh.filter((c) => !this.ignored(c.file));
     if (!kept.length) return;
-    this.events.onScan({ root, at: new Date().toISOString(), files: kept.length });
-    if (!this.settings.muted) this.events.onChanges(root, describeFiles(kept.map((c) => c.file)), kept);
+    const hold = this.settings.holdSeconds > 0 && !this.settings.muted;
+    this.events.onScan({ root, at: new Date().toISOString(), files: kept.length, held: hold });
+    if (this.settings.muted) return;
+    if (!hold) return this.events.onChanges(root, describeFiles(kept.map((c) => c.file)), kept);
+
+    const pending = this.held.get(root) ?? { changes: new Map<string, FileChange>(), timer: undefined as unknown as NodeJS.Timeout };
+    for (const change of kept) {
+      const earlier = pending.changes.get(change.file);
+      pending.changes.set(
+        change.file,
+        earlier
+          ? { file: change.file, added: `${earlier.added}\n${change.added}`, addedLines: earlier.addedLines + change.addedLines }
+          : change,
+      );
+    }
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => this.release(root, "quiet"), this.settings.holdSeconds * 1000);
+    this.held.set(root, pending);
+  }
+
+  /** Teaches what was held for a root. Does nothing when nothing is held. */
+  release(root: string, _why: Breakpoint): void {
+    const pending = this.held.get(root);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.held.delete(root);
+    const changes = [...pending.changes.values()];
+    if (changes.length && !this.settings.muted) {
+      this.events.onChanges(root, describeFiles(changes.map((c) => c.file)), changes);
+    }
+  }
+
+  releaseAll(why: Breakpoint): void {
+    for (const root of [...this.held.keys()]) this.release(root, why);
+  }
+
+  /** Is anything read and waiting for a stopping point? */
+  isHolding(): boolean {
+    return this.held.size > 0;
   }
 
   private async scan(root: string): Promise<void> {
@@ -345,6 +459,8 @@ export class Watcher implements vscode.Disposable {
   dispose(): void {
     if (this.timer) clearTimeout(this.timer);
     if (this.poll) clearInterval(this.poll);
+    for (const pending of this.held.values()) clearTimeout(pending.timer);
+    for (const head of this.heads.values()) head.subscription?.dispose();
     for (const d of this.disposables) d.dispose();
   }
 }
