@@ -440,7 +440,7 @@
 
     // Help that never fades becomes a crutch. From green belt up the question
     // comes first and the lesson waits behind a link.
-    const faded = state.fadeSupport && c.status === "learning" && c.support !== "full" && !pinned;
+    const faded = state.fadeSupport && c.status === "learning" && (c.support === "question-first" || c.support === "minimal") && !pinned;
     const lessonOpen = !faded || ui.lesson[c.key];
     const lesson = lessonOpen
       ? `<dl>
