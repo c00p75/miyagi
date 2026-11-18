@@ -944,11 +944,21 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         change.added.split(/\r?\n/).slice(0, 60).map(scrub).join("\n");
       out.push({ file: change.file, excerpt });
     }
+    if (out.length) return out;
+    // Committed since, so git has no diff left to show. The code is still in
+    // the files, though: use each card's lines as they stand now.
+    const seen = new Set<string>();
+    for (const card of lesson.cards) {
+      if (!card.file || seen.has(card.file) || out.length >= 8) continue;
+      seen.add(card.file);
+      const excerpt = await this.excerpt(card);
+      if (excerpt) out.push({ file: card.file, excerpt });
+    }
     return out;
   }
 
   private readonly noChange =
-    "Miyagi no longer has the lines of this change. It was probably committed and then changed again.";
+    "Miyagi could not find the code for this change. The files it touched have probably been moved or deleted since.";
 
   private async risks(id: string): Promise<void> {
     const lesson = this.lesson(id);
