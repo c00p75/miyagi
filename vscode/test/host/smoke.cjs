@@ -26,7 +26,10 @@ exports.run = async function run() {
   const api = await extension.activate();
 
   const commands = await vscode.commands.getCommands(true);
-  for (const id of ["open", "setup", "moveToSide", "explainChanges", "review", "chooseAi", "enableCapture", "disableCapture", "clearFeed"]) {
+  for (const id of [
+    "open", "openBeside", "setup", "review", "pause", "resume", "explainChanges", "teachBranch", "projectMap",
+    "weeklyReport", "chooseAi", "enableCapture", "disableCapture", "moveToSide", "clearFeed", "settings", "doctor",
+  ]) {
     assert.ok(commands.includes(`miyagi.${id}`), `command miyagi.${id} is registered`);
   }
 
@@ -41,8 +44,8 @@ exports.run = async function run() {
   await until("the repository to be found", async () =>
     (await Promise.all(api.roots().map((r) => fs.realpath(r)))).includes(real),
   );
-  // Let the baseline read finish, so the next write is seen as new.
-  await new Promise((r) => setTimeout(r, 1500));
+  // The baseline read must finish first, or the new file is taken as part of it.
+  await until("the baseline read", () => api.ready());
   assert.deepEqual(api.lessons(), [], "nothing is taught from what was already there");
 
   await fs.writeFile(
@@ -53,8 +56,11 @@ exports.run = async function run() {
   assert.equal(lessons[0].source, "auth.ts");
   assert.ok(lessons[0].concepts.includes("password-hashing"), JSON.stringify(lessons));
 
-  // The view resolves and renders without throwing.
+  // The view resolves and renders without throwing, as a side bar view and as a tab.
   await vscode.commands.executeCommand("miyagi.open");
+  await vscode.commands.executeCommand("miyagi.openBeside");
+  await vscode.commands.executeCommand("miyagi.doctor");
+  await vscode.commands.executeCommand("miyagi.weeklyReport");
   await new Promise((r) => setTimeout(r, 1500));
-  console.log("MIYAGI SMOKE OK", vscode.env.appName, vscode.version, api.viewId(), JSON.stringify(lessons));
+  console.log("MIYAGI SMOKE OK roots=" + JSON.stringify(api.roots()) + " folder=" + folder, vscode.env.appName, vscode.version, api.viewId(), JSON.stringify(lessons));
 };

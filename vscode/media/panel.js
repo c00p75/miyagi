@@ -1,11 +1,16 @@
 // @ts-check
 /*
  * The panel's renderer. It holds no teaching logic: the extension host decides
- * what is taught and how answers are graded, and this file draws it.
+ * what is taught, how answers are graded and what any model is asked, and
+ * sends the whole state each time something changes. This file draws it.
  *
  * Everything is rendered from data through `esc`, and the page's CSP allows no
  * inline script or style, so text from a model or a source file can only ever
  * arrive as text.
+ *
+ * The only things kept here are the ones that belong to this view alone: which
+ * tab is showing, which cards are open, what is half-typed in a text box, and
+ * the questions currently on screen.
  */
 (function () {
   const vscode = acquireVsCodeApi();
@@ -13,18 +18,20 @@
 
   /** @type {any} */
   let state = null;
-  const ui = Object.assign({ tab: "now", open: {}, idea: null }, vscode.getState() || {});
-  /** The lesson opened from the dojo, when one is. */
-  let ideaCard = null;
-  /** key -> { quiz, answer, picked } for card questions */
-  const cardQuiz = {};
-  /** key -> error string from the last explain attempt */
-  const explainError = {};
-  /** key -> provider label while a request is in flight */
-  const explaining = {};
+  const ui = Object.assign({ tab: "now", open: {}, more: {}, idea: null }, vscode.getState() || {});
+  /** slot -> { quiz, answer, picked }. A slot is a card key, or `<key>|own` for a question about its code. */
+  const quizzes = {};
+  /** Text typed and not yet sent, by draft id, so a redraw does not eat it. */
+  const drafts = {};
+  /** card key -> { wrong: number[], found: boolean } for "find the bug" */
+  const bugGuesses = {};
+  /** lesson id -> which walkthrough step is showing */
+  const walkAt = {};
   let review = { asked: false, quiz: null, answer: null, picked: -1, cleared: 0 };
   /** @type {{rows: any[], belts: string[]} | null} */
   let dojo = null;
+  /** The lesson opened from the dojo, when one is. */
+  let ideaCard = null;
 
   const send = (/** @type {any} */ message) => vscode.postMessage(message);
   const remember = () => vscode.setState(ui);
@@ -51,17 +58,18 @@
   /** Paragraphs and fenced code. Enough for a short explanation, nothing more. */
   function prose(/** @type {string} */ text) {
     const out = [];
-    const parts = String(text).split(/```[a-zA-Z0-9]*\n?/);
-    parts.forEach((part, i) => {
-      if (i % 2 === 1) {
-        out.push(`<pre><code>${esc(part.replace(/\n$/, ""))}</code></pre>`);
-        return;
-      }
-      for (const para of part.split(/\n\s*\n/)) {
-        const trimmed = para.trim();
-        if (trimmed) out.push(`<p>${inline(trimmed).replace(/\n/g, "<br>")}</p>`);
-      }
-    });
+    String(text)
+      .split(/```[a-zA-Z0-9]*\n?/)
+      .forEach((part, i) => {
+        if (i % 2 === 1) {
+          out.push(`<pre><code>${esc(part.replace(/\n$/, ""))}</code></pre>`);
+          return;
+        }
+        for (const para of part.split(/\n\s*\n/)) {
+          const trimmed = para.trim();
+          if (trimmed) out.push(`<p>${inline(trimmed).replace(/\n/g, "<br>")}</p>`);
+        }
+      });
     return out.join("");
   }
 
@@ -86,51 +94,8 @@
   }
 
   const plural = (/** @type {number} */ n, /** @type {string} */ word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-  /* ---- pieces ---------------------------------------------------- */
-
-  function header() {
-    const s = state.status;
-    const depths = ["Junior", "Mid", "Senior"]
-      .map((d) => `<option value="${d}"${d === s.depth ? " selected" : ""}>${d}</option>`)
-      .join("");
-    const streak = s.dayStreak > 1 ? ` · ${s.dayStreak}-day streak` : "";
-    const topics = [`<option value="">All topics</option>`]
-      .concat(
-        state.topics.map(
-          (/** @type {string} */ t) => `<option value="${esc(t)}"${t === state.topic ? " selected" : ""}>${esc(t)}</option>`,
-        ),
-      )
-      .join("");
-    return `
-      <header class="top">
-        <div class="who">
-          <span class="level">Level ${s.level}</span>
-          <span class="rank">${esc(s.title)}</span>
-        </div>
-        <div class="filters">
-          <label>
-            <span class="sr">Topic</span>
-            <select data-change="topic" title="Show and review one topic">${topics}</select>
-          </label>
-          <label>
-            <span class="sr">Explanation depth</span>
-            <select data-change="depth" title="How deep explanations go">${depths}</select>
-          </label>
-        </div>
-        <progress max="100" value="${s.intoLevel}" aria-label="Progress to next level"></progress>
-        <div class="meta">${s.xp} XP${streak} · ${s.discovered} of ${s.concepts} ideas found</div>
-      </header>`;
-  }
-
-  function tabs() {
-    const due = dueCount();
-    const tab = (/** @type {string} */ id, /** @type {string} */ label, count = 0) => `
-      <button role="tab" class="tab${ui.tab === id ? " on" : ""}" aria-selected="${ui.tab === id}" data-action="tab" data-tab="${id}">
-        ${label}${count ? `<span class="count">${count}</span>` : ""}
-      </button>`;
-    return `<nav class="tabs" role="tablist">${tab("now", "Now")}${tab("review", "Review", due)}${tab("dojo", "Dojo")}</nav>`;
-  }
+  const list = (/** @type {string[]} */ items) =>
+    items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 
   /** Due questions, narrowed to the chosen topic when there is one. */
   function dueCount() {
@@ -139,8 +104,84 @@
   }
 
   const inTopic = (/** @type {any} */ item) => !state.topic || item.topic === state.topic;
+  const busy = (/** @type {string} */ slot) => state.busy[slot];
+  const failed = (/** @type {string} */ slot) => state.errors[slot];
 
-  function quizBlock(/** @type {any} */ entry, /** @type {string} */ scope, /** @type {string} */ key) {
+  function waiting(/** @type {string} */ slot) {
+    return busy(slot) ? `<div class="note busy"><span class="spinner" aria-hidden="true"></span>Asking ${esc(busy(slot))}…</div>` : "";
+  }
+
+  function problem(/** @type {string} */ slot) {
+    if (!failed(slot)) return "";
+    const choose = state.ai.label ? "" : ` <button class="link" data-action="command" data-id="miyagi.chooseAi">Choose an AI</button>`;
+    return `<div class="note error"><p>${esc(failed(slot))}${choose}</p></div>`;
+  }
+
+  /* ---- header ---------------------------------------------------- */
+
+  function header() {
+    const s = state.status;
+    const depths = ["Junior", "Mid", "Senior"]
+      .map((d) => `<option value="${d}"${d === s.depth ? " selected" : ""}>${d}</option>`)
+      .join("");
+    const topics = [`<option value="">All topics</option>`]
+      .concat(
+        state.topics.map(
+          (/** @type {string} */ t) => `<option value="${esc(t)}"${t === state.topic ? " selected" : ""}>${esc(t)}</option>`,
+        ),
+      )
+      .join("");
+    const streak = s.dayStreak > 1 ? ` · ${s.dayStreak}-day streak` : "";
+
+    let banner = "";
+    if (state.quiet) {
+      banner =
+        state.quiet.why === "paused"
+          ? `<div class="banner">Paused until ${esc(clock(state.quiet.until))}. <button class="link" data-action="command" data-id="miyagi.resume">Resume</button></div>`
+          : `<div class="banner">Quiet hours. Changes are still read; nothing new is shown until they end.</div>`;
+    } else if (s.suggestedDepth) {
+      const up = ["Junior", "Mid", "Senior"].indexOf(s.suggestedDepth) > ["Junior", "Mid", "Senior"].indexOf(s.depth);
+      banner = `<div class="banner">
+        ${up ? "You are answering most questions correctly." : "Most answers are missing at this depth."}
+        Try <strong>${esc(s.suggestedDepth)}</strong> explanations?
+        <button class="link" data-action="acceptDepth" data-depth="${esc(s.suggestedDepth)}">Switch</button>
+        <button class="link" data-action="dismissDepth" data-depth="${esc(s.depth)}&gt;${esc(s.suggestedDepth)}">No thanks</button>
+      </div>`;
+    }
+
+    return `
+      <header class="top">
+        <div class="who">
+          <span class="level">Level ${s.level}</span>
+          <span class="rank">${esc(s.rank)}</span>
+        </div>
+        <div class="filters">
+          <label>
+            <span class="sr">Topic</span>
+            <select data-change="topic" title="Show, teach first and review one topic">${topics}</select>
+          </label>
+          <label>
+            <span class="sr">Explanation depth</span>
+            <select data-change="depth" title="How deep explanations go">${depths}</select>
+          </label>
+        </div>
+        <progress max="100" value="${s.intoLevel}" aria-label="Progress to next level"></progress>
+        <div class="meta">${s.xp} XP${streak} · ${s.discovered} of ${s.concepts} ideas found</div>
+        ${banner}
+      </header>`;
+  }
+
+  function tabs() {
+    const tab = (/** @type {string} */ id, /** @type {string} */ label, count = 0) => `
+      <button role="tab" class="tab${ui.tab === id ? " on" : ""}" aria-selected="${ui.tab === id}" data-action="tab" data-tab="${id}">
+        ${label}${count ? `<span class="count">${count}</span>` : ""}
+      </button>`;
+    return `<nav class="tabs" role="tablist">${tab("now", "Now")}${tab("review", "Review", dueCount())}${tab("dojo", "Dojo")}</nav>`;
+  }
+
+  /* ---- questions ------------------------------------------------- */
+
+  function quizBlock(/** @type {any} */ entry, /** @type {string} */ scope, /** @type {string} */ slot, heading = "") {
     const { quiz, answer, picked } = entry;
     const letters = "ABCDEFGH";
     const choices = quiz.choices
@@ -150,100 +191,294 @@
           if (i === answer.answerIndex) cls += " right";
           else if (i === answer.chosenIndex) cls += " wrong";
         } else if (i === picked) cls += " pending";
-        return `<button class="${cls}" data-action="answer" data-scope="${scope}" data-key="${esc(key)}" data-index="${i}"${answer || picked >= 0 ? " disabled" : ""}>
+        return `<button class="${cls}" data-action="answer" data-scope="${scope}" data-slot="${esc(slot)}" data-index="${i}"${answer || picked >= 0 ? " disabled" : ""}>
           <span class="letter">${letters[i]}</span><span>${inline(choice)}</span></button>`;
       })
       .join("");
     let result = "";
     if (answer) {
       const again = answer.nextDueAt ? ` · back in ${until(answer.nextDueAt)}` : "";
+      const belt = answer.correct && answer.nextDueAt ? ` · ${esc(answer.belt)} belt` : "";
       const extras = [
-        answer.leveledUp ? `Level up: ${esc(answer.title)}` : "",
+        answer.leveledUp ? `Level up` : "",
         ...(answer.newBadges || []).map((/** @type {string} */ b) => `Badge: ${esc(b)}`),
       ].filter(Boolean);
       result = `
         <div class="result ${answer.correct ? "ok" : "miss"}">
           <strong>${answer.correct ? "Correct" : "Not quite"}</strong>
-          <span class="muted">+${answer.xpAwarded} XP${again}${answer.correct ? ` · ${esc(answer.belt)} belt` : ""}</span>
+          <span class="muted">+${answer.xpAwarded} XP${again}${belt}</span>
           <p>${inline(answer.explanation)}</p>
           ${extras.map((e) => `<p class="extra">${e}</p>`).join("")}
         </div>`;
     }
-    return `<div class="quiz"><p class="question">${inline(quiz.question)}</p><div class="choices">${choices}</div>${result}</div>`;
+    return `<div class="quiz">${heading ? `<h4>${esc(heading)}</h4>` : ""}<p class="question">${inline(quiz.question)}</p><div class="choices">${choices}</div>${result}</div>`;
+  }
+
+  /* ---- one card -------------------------------------------------- */
+
+  function explanationBlock(/** @type {any} */ c) {
+    const explanation = state.explanations[c.key];
+    const slot = `${c.key}|explain`;
+    if (!explanation) return waiting(slot) + problem(slot);
+    const extra = state.extras[c.key] || { followUps: [] };
+    const asked = extra.followUps
+      .map(
+        (/** @type {any} */ f) => `<div class="followup"><p class="asked">${esc(f.question)}</p>${prose(f.answer)}<p class="by">${esc(f.by)}</p></div>`,
+      )
+      .join("");
+    const draft = `${c.key}|followUp`;
+    const ask = busy(draft)
+      ? waiting(draft)
+      : `<form class="ask" data-submit="followUp" data-key="${esc(c.key)}">
+           <input type="text" data-draft="${esc(draft)}" value="${esc(drafts[draft] || "")}" placeholder="Ask a follow-up about this code" aria-label="Ask a follow-up question" maxlength="600">
+           <button type="submit">Ask</button>
+         </form>`;
+    return `<div class="mine"><h4>In your code</h4>${prose(explanation.text)}<p class="by">Written by ${esc(explanation.by)}</p>${asked}${ask}${problem(draft)}</div>`;
+  }
+
+  function attemptBlock(/** @type {any} */ c) {
+    const slot = `${c.key}|attempt`;
+    const attempt = (state.extras[c.key] || {}).attempt;
+    if (!attempt) return problem(slot);
+    if (attempt.verdict) {
+      const label = { right: "You had it", partly: "Partly", wrong: "Not yet" }[attempt.verdict];
+      return `<div class="block">
+        <h4>Your explanation</h4>
+        <p class="asked">${esc(attempt.text)}</p>
+        <p><span class="tag verdict-${esc(attempt.verdict)}">${label}</span></p>
+        ${prose(attempt.feedback)}
+        <p class="by">Judged by ${esc(attempt.by)}</p>
+      </div>`;
+    }
+    return `<div class="block">
+      <h4>Before reading an explanation</h4>
+      <p>What do these lines do? Say it in your own words; a sentence or two is enough.</p>
+      <pre><code>${esc(attempt.code)}</code></pre>
+      ${
+        busy(slot)
+          ? `<p class="asked">${esc(attempt.text)}</p>${waiting(slot)}`
+          : `<form data-submit="attempt" data-key="${esc(c.key)}">
+               <textarea data-draft="${esc(slot)}" rows="3" placeholder="These lines…" aria-label="Your explanation" maxlength="800">${esc(drafts[slot] || "")}</textarea>
+               <div class="actions"><button type="submit" class="primary">Check my explanation</button></div>
+             </form>`
+      }
+      ${problem(slot)}
+    </div>`;
+  }
+
+  function bugBlock(/** @type {any} */ c) {
+    const slot = `${c.key}|bug`;
+    const drill = (state.extras[c.key] || {}).bug;
+    if (!drill) return waiting(slot) + problem(slot);
+    const guess = bugGuesses[c.key] || { wrong: [], found: false };
+    const lines = drill.lines
+      .map((/** @type {string} */ line, /** @type {number} */ i) => {
+        const n = i + 1;
+        let cls = "codeline";
+        if (guess.found && n === drill.bugLine) cls += " right";
+        else if (guess.wrong.includes(n)) cls += " wrong";
+        return `<button class="${cls}" data-action="bugGuess" data-key="${esc(c.key)}" data-line="${n}"${guess.found ? " disabled" : ""}><span class="ln">${n}</span><code>${esc(line) || " "}</code></button>`;
+      })
+      .join("");
+    let below;
+    if (guess.found) {
+      below = `<div class="result ok"><strong>Line ${drill.bugLine}</strong> <span class="muted">${guess.wrong.length ? `found after ${plural(guess.wrong.length, "miss")}` : "found first time"}</span>${prose(drill.explanation)}</div>`;
+    } else {
+      below = `<p class="muted">${guess.wrong.length ? "Not that line. " + esc(drill.hint || "Look again at what each line assumes.") : "This is a copy of your code with one line changed. Click the line you think is wrong."}
+        <button class="link" data-action="bugReveal" data-key="${esc(c.key)}">Show me</button></p>`;
+    }
+    return `<div class="block"><h4>Find the bug</h4><div class="code">${lines}</div>${below}<p class="by">Exercise by ${esc(drill.by)}. Your real file was not changed.</p></div>`;
+  }
+
+  function whyBlock(/** @type {any} */ c) {
+    const why = (state.extras[c.key] || {}).why;
+    if (!why) return "";
+    if (why.missing) {
+      return `<div class="block"><h4>What the assistant said</h4><p class="muted">Nothing was found for this file. This reads Claude Code's own session record, so it only works for files Claude Code edited in a session that is still on this machine.</p></div>`;
+    }
+    return `<div class="block"><h4>What the assistant said when it wrote this</h4>${prose(why.text)}${why.at ? `<p class="by">${esc(clock(why.at))}, in its own words</p>` : ""}</div>`;
   }
 
   function card(/** @type {any} */ c, /** @type {boolean} */ openByDefault, pinned = false) {
     const isOpen = pinned || (ui.open[c.key] ?? openByDefault);
-    const tag =
+    const tags = [
       c.status === "new"
         ? `<span class="tag new">New</span>`
         : c.status === "locked"
         ? `<span class="tag">Locked</span>`
-        : `<span class="tag belt belt-${esc(c.belt)}">${esc(c.belt)} belt</span>`;
+        : `<span class="tag belt belt-${esc(c.belt)}">${esc(c.belt)} belt</span>`,
+      c.risk ? `<span class="tag risk" title="Misunderstanding this one costs data, money or a breach">Risk</span>` : "",
+    ].join("");
     const head = `
-      <button class="card-head" data-action="toggle" data-key="${esc(c.key)}" aria-expanded="${isOpen}">
+      <button class="card-head" data-action="toggle" data-key="${esc(c.key)}" aria-expanded="${isOpen}"${pinned ? " disabled" : ""}>
         <span class="emoji" aria-hidden="true">${esc(c.emoji)}</span>
         <span class="card-title">${esc(c.title)}</span>
-        ${tag}
+        <span class="tags">${tags}</span>
       </button>
       <p class="hook">${inline(c.hook)}</p>`;
     if (!isOpen) return `<article class="card closed">${head}</article>`;
 
     const others = c.otherFiles > 0 ? `<span class="muted"> and ${plural(c.otherFiles, "other file")}</span>` : "";
-    const evidence = c.evidence ? `<code class="evidence">${esc(c.evidence)}</code>` : "";
-    const explanation = state.explanations[c.key];
-    const busy = explaining[c.key];
-    const error = explainError[c.key];
-    let mine = "";
-    if (explanation) {
-      mine = `<div class="mine"><h4>In your code</h4>${prose(explanation.text)}<p class="by">Written by ${esc(explanation.by)}</p></div>`;
-    } else if (busy) {
-      mine = `<div class="mine busy"><span class="spinner" aria-hidden="true"></span>Asking ${esc(busy)}…</div>`;
-    } else if (error) {
-      mine = `<div class="mine error"><p>${esc(error)}</p><button class="link" data-action="command" data-id="miyagi.chooseAi">Choose an AI</button></div>`;
-    }
+    const where = c.file
+      ? `<div class="where">
+          <button class="link file" data-action="openFile" data-key="${esc(c.key)}" title="Open this file">${esc(c.file)}</button>${others}
+          ${c.evidence ? `<code class="evidence">${esc(c.evidence)}</code>` : ""}
+        </div>`
+      : `<p class="where muted">${
+          c.status === "locked"
+            ? "Not seen in your code yet. Its question unlocks when your assistant writes code that uses it."
+            : "Seen before this panel was installed, so there is no file to point at yet."
+        }</p>`;
+    const origin =
+      c.origin === "ai"
+        ? `<p class="muted origin">This lesson was written by your AI from your code, not by Miyagi's authors. Check anything that matters.</p>`
+        : c.origin === "pack"
+        ? `<p class="muted origin">From one of your idea packs.</p>`
+        : "";
+    const buildsOn = c.buildsOn
+      ? `<p class="builds-on">Builds on <button class="link" data-action="idea" data-id="${esc(c.buildsOn.id)}">${esc(c.buildsOn.emoji)} ${esc(c.buildsOn.title)}</button>, which you have not met yet.</p>`
+      : "";
 
-    const quiz = cardQuiz[c.key];
-    const actions = [
-      !explanation && !busy && c.file
-        ? `<button class="primary" data-action="explain" data-key="${esc(c.key)}"${state.ai.label ? "" : ` title="${esc(state.ai.reason || "")}"`}>Explain in my code</button>`
-        : "",
-      c.hasQuiz && !quiz ? `<button data-action="quiz" data-key="${esc(c.key)}">Check yourself</button>` : "",
-      `<button data-action="copy" data-text="${esc(c.askTheAi)}" title="${esc(c.askTheAi)}">Copy a question for your AI</button>`,
-      `<button class="link" data-action="link" data-url="${esc(c.docs.url)}">${esc(c.docs.label)}</button>`,
+    const idea = quizzes[c.key];
+    const own = quizzes[`${c.key}|own`];
+    const extra = state.extras[c.key] || {};
+    const explained = Boolean(state.explanations[c.key]) || busy(`${c.key}|explain`);
+
+    const primary = [
+      !explained && c.file ? `<button class="primary" data-action="explain" data-key="${esc(c.key)}">Explain in my code</button>` : "",
+      c.hasQuiz && !idea ? `<button data-action="quiz" data-key="${esc(c.key)}">Check yourself</button>` : "",
     ].join("");
+
+    const claude = state.capture.on.includes("Claude Code");
+    const more = [
+      c.file && !extra.attempt ? `<button class="link" data-action="attempt" data-key="${esc(c.key)}">Explain it yourself first</button>` : "",
+      c.file && !own && !busy(`${c.key}|ownQuiz`) ? `<button class="link" data-action="ownQuiz" data-key="${esc(c.key)}">Quiz me on my code</button>` : "",
+      c.file && !extra.bug && !busy(`${c.key}|bug`) ? `<button class="link" data-action="bug" data-key="${esc(c.key)}">Find the bug</button>` : "",
+      c.file && claude && !extra.why ? `<button class="link" data-action="why" data-key="${esc(c.key)}">What the assistant said</button>` : "",
+      `<button class="link" data-action="speak" data-key="${esc(c.key)}">Read it aloud</button>`,
+      `<button class="link" data-action="copy" data-text="${esc(c.askTheAi)}" title="${esc(c.askTheAi)}">Copy a question for your AI</button>`,
+      `<button class="link" data-action="link" data-url="${esc(c.docs.url)}">${esc(c.docs.label)}</button>`,
+    ]
+      .filter(Boolean)
+      .join("");
+    const moreOpen = Boolean(ui.more[c.key]);
 
     return `
       <article class="card">
         ${head}
-        ${
-          c.file
-            ? `<div class="where">
-          <button class="link file" data-action="openFile" data-key="${esc(c.key)}" title="Open this file">${esc(c.file)}</button>${others}
-          ${evidence}
-        </div>`
-            : `<p class="where muted">${
-                c.status === "locked"
-                  ? "Not seen in your code yet. Its question unlocks when your assistant writes code that uses it."
-                  : "Seen before this panel was installed, so there is no file to point at yet."
-              }</p>`
-        }
+        ${where}
         <dl>
           <dt>What it is</dt><dd>${inline(c.what)}</dd>
           <dt>Know this</dt><dd>${inline(c.lens[state.status.depth] || c.lens.Junior)}</dd>
           <dt>How it bites</dt><dd>${inline(c.pitfall)}</dd>
         </dl>
-        ${mine}
-        ${quiz ? quizBlock(quiz, "card", c.key) : ""}
-        <div class="actions">${actions}</div>
+        ${origin}${buildsOn}
+        ${attemptBlock(c)}
+        ${explanationBlock(c)}
+        ${whyBlock(c)}
+        ${idea ? quizBlock(idea, "card", c.key) : ""}
+        ${own ? quizBlock(own, "card", `${c.key}|own`, "About your code") : waiting(`${c.key}|ownQuiz`) + problem(`${c.key}|ownQuiz`)}
+        ${bugBlock(c)}
+        ${primary ? `<div class="actions">${primary}</div>` : ""}
+        <div class="more">
+          <button class="link disclose" data-action="more" data-key="${esc(c.key)}" aria-expanded="${moreOpen}">${moreOpen ? "Fewer options" : "More ways to learn this"}</button>
+          ${moreOpen ? `<div class="more-list">${more}</div>` : ""}
+        </div>
       </article>`;
   }
 
-  function chips(/** @type {string} */ label, /** @type {any[]} */ list) {
-    if (!list.length) return "";
-    return `<p class="chips"><span class="muted">${label}</span> ${list
-      .map((c) => `<span class="chip">${esc(c.emoji)} ${esc(c.title)}</span>`)
+  /* ---- a whole lesson -------------------------------------------- */
+
+  function fileLink(/** @type {string} */ root, /** @type {string} */ file, /** @type {number | null} */ line) {
+    if (!file) return "";
+    return `<button class="link file" data-action="openAt" data-root="${esc(root)}" data-file="${esc(file)}" data-line="${line || ""}">${esc(file)}${line ? `:${line}` : ""}</button>`;
+  }
+
+  function walkBlock(/** @type {any} */ lesson) {
+    const slot = `${lesson.id}|walk`;
+    const walk = (state.lessonExtras[lesson.id] || {}).walk;
+    if (!walk) return waiting(slot) + problem(slot);
+    const at = Math.max(0, Math.min(walk.steps.length - 1, walkAt[lesson.id] || 0));
+    const step = walk.steps[at];
+    return `<div class="block walk">
+      <h4>Step ${at + 1} of ${walk.steps.length}: ${esc(step.title)}</h4>
+      ${prose(step.text)}
+      <p>${fileLink(lesson.root, step.file, step.line)}</p>
+      <div class="actions">
+        <button data-action="walkTo" data-lesson="${esc(lesson.id)}" data-index="${at - 1}"${at === 0 ? " disabled" : ""}>Back</button>
+        <button class="primary" data-action="walkTo" data-lesson="${esc(lesson.id)}" data-index="${at + 1}"${at === walk.steps.length - 1 ? " disabled" : ""}>Next</button>
+        <span class="by">Walkthrough by ${esc(walk.by)}</span>
+      </div>
+    </div>`;
+  }
+
+  function risksBlock(/** @type {any} */ lesson) {
+    const slot = `${lesson.id}|risks`;
+    const risks = (state.lessonExtras[lesson.id] || {}).risks;
+    if (!risks) return waiting(slot) + problem(slot);
+    if (!risks.items.length) {
+      return `<div class="block"><h4>Risks</h4><p>${esc(risks.by)} found nothing risky in the lines of this change. That is a reading of these lines only, not a security review.</p></div>`;
+    }
+    const items = risks.items
+      .map(
+        (/** @type {any} */ r) => `<li>
+          <strong>${esc(r.title)}</strong>
+          <p>${inline(r.why)}</p>
+          ${r.fix ? `<p><span class="muted">Fix:</span> ${inline(r.fix)}</p>` : ""}
+          <p>${fileLink(lesson.root, r.file, r.line)}</p>
+        </li>`,
+      )
+      .join("");
+    return `<div class="block risks"><h4>${plural(risks.items.length, "risk")} in this change</h4><ul>${items}</ul><p class="by">Found by ${esc(risks.by)}. Check each one against the code before acting on it.</p></div>`;
+  }
+
+  function chips(/** @type {string} */ label, /** @type {any[]} */ items) {
+    if (!items.length) return "";
+    return `<p class="chips"><span class="muted">${label}</span> ${items
+      .map((c) => `<button class="chip" data-action="idea" data-id="${esc(c.id)}">${esc(c.emoji)} ${esc(c.title)}</button>`)
       .join("")}</p>`;
+  }
+
+  function lessonSection(/** @type {any} */ lesson, /** @type {boolean} */ newest) {
+    const extra = state.lessonExtras[lesson.id] || {};
+    const found = lesson.discovered && !state.topic ? `<span class="found">${plural(lesson.discovered, "new idea")} · +${lesson.xpAwarded} XP</span>` : "";
+    const tools = [
+      !extra.walk && !busy(`${lesson.id}|walk`) ? `<button class="link" data-action="walk" data-lesson="${esc(lesson.id)}">Walk me through this change</button>` : "",
+      !extra.risks && !busy(`${lesson.id}|risks`) ? `<button class="link" data-action="risks" data-lesson="${esc(lesson.id)}">Check it for risks</button>` : "",
+    ]
+      .filter(Boolean)
+      .join("");
+    return `
+      <section class="lesson">
+        <h3><span>From <strong>${esc(lesson.source)}</strong>${lesson.by ? `<span class="muted">, written by ${esc(lesson.by)}</span>` : ""}</span><span class="muted">${esc(clock(lesson.at))}</span></h3>
+        ${found}
+        ${lesson.cards.map((/** @type {any} */ c) => card(c, newest)).join("")}
+        ${walkBlock(lesson)}
+        ${risksBlock(lesson)}
+        ${tools ? `<div class="lesson-tools">${tools}</div>` : ""}
+        ${chips("Also in there, for next time:", lesson.later)}
+        ${chips("Already yours:", lesson.solid)}
+      </section>`;
+  }
+
+  /* ---- the Now tab ----------------------------------------------- */
+
+  function pulse() {
+    if (!state.watching) return `<p class="pulse">Watching is turned off in settings.</p>`;
+    const h = state.heartbeat;
+    if (!h) {
+      return state.repos.length + state.folders.length
+        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.</p>`
+        : "";
+    }
+    const outcome = h.taught
+      ? plural(h.taught, "idea") + " carded"
+      : state.quiet
+      ? "not shown while quiet"
+      : busy(`${h.root}|findIdeas`)
+      ? "nothing in the built-in list; asking your AI"
+      : "nothing new to teach";
+    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.</p>`;
   }
 
   function commands() {
@@ -268,63 +503,77 @@
     const ai = state.ai.label
       ? `Explanations are written by <strong>${esc(state.ai.label)}</strong>, on your account.`
       : esc(state.ai.reason || "No AI is set up for explanations.");
-    // Only shown when there is something left to turn on.
     const capture = state.capture.on.length
-      ? `<p>Capturing commands from ${state.capture.on.map(esc).join(" and ")}.</p>`
+      ? `<p>Capturing commands from ${esc(list(state.capture.on))}.</p>`
       : state.capture.available.length
-      ? `<p>Commands run by ${state.capture.available.map(esc).join(" and ")} are not captured yet. <button class="link" data-action="command" data-id="miyagi.setup">Set up for me</button></p>`
+      ? `<p>Commands run by ${esc(list(state.capture.available))} are not captured yet. <button class="link" data-action="command" data-id="miyagi.setup">Set up for me</button></p>`
       : "";
-    const repos = state.repos.length
-      ? state.watching
-        ? `Watching ${state.repos.map(esc).join(", ")}.`
-        : "Watching is turned off in settings."
-      : "No git repository is open, so there is nothing to watch.";
+    const places = state.repos.concat(state.folders);
+    const watching = !places.length
+      ? "Nothing is open to watch. Open a folder with code in it."
+      : places.length === 1
+      ? `Watching ${esc(places[0])}.`
+      : `<span title="${esc(places.join(", "))}">Watching ${places.length} projects.</span>`;
     return `
       <footer>
         <p>${ai} <button class="link" data-action="command" data-id="miyagi.chooseAi">Change</button></p>
+        <p>${esc(state.meter)}</p>
         ${capture}
-        <p>${repos}</p>
+        <p>${state.watching ? watching : "Watching is turned off."} <button class="link" data-action="command" data-id="miyagi.settings">Settings</button></p>
       </footer>`;
   }
 
-  function nowTab() {
-    const lessons = state.lessons;
-    let body;
-    if (!lessons.length) {
-      body = `
+  function emptyNow() {
+    const due = dueCount();
+    const s = state.status;
+    if (due) {
+      return `
         <div class="empty">
-          <h2>Nothing to teach yet</h2>
-          <p>When your assistant writes code that relies on an idea worth understanding, a card appears here. Your assistant is not told and is not slowed down.</p>
-          <button class="primary" data-action="command" data-id="miyagi.explainChanges">Teach me my uncommitted changes</button>
+          <h2>${plural(due, "question")} due</h2>
+          <p>Nothing new from your assistant right now, so this is the best use of two minutes: answer them from memory.</p>
+          <button class="primary" data-action="startReview">Start review</button>
         </div>`;
+    }
+    const skipped = state.skipped
+      ? `<p>${plural(state.skipped, "file")} already had uncommitted changes when this window opened. Miyagi treats those as old and has not taught them.</p>
+         <button class="primary" data-action="command" data-id="miyagi.explainChanges">Teach me those</button>`
+      : `<button data-action="command" data-id="miyagi.explainChanges">Teach me my uncommitted changes</button>`;
+    return `
+      <div class="empty">
+        <h2>${s.discovered ? "Nothing new right now" : "Nothing to teach yet"}</h2>
+        <p>When your assistant writes code that relies on an idea worth understanding, a card appears here. Your assistant is not told and is not slowed down.</p>
+        ${skipped}
+        ${s.discovered ? `<p><button class="link" data-action="tab" data-tab="dojo">Browse the ${plural(s.discovered, "idea")} you have found</button></p>` : ""}
+      </div>`;
+  }
+
+  function nowTab() {
+    const shown = state.lessons
+      .map((/** @type {any} */ l) => Object.assign({}, l, { cards: l.cards.filter(inTopic) }))
+      .filter((/** @type {any} */ l) => l.cards.length || (!state.topic && l.solid.length));
+    const total = state.lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
+    const visible = shown.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
+    let body = pulse();
+    if (!shown.length) {
+      body += emptyNow();
     } else {
-      const shown = lessons
-        .map((/** @type {any} */ l) => Object.assign({}, l, { cards: l.cards.filter(inTopic) }))
-        .filter((/** @type {any} */ l) => l.cards.length || (!state.topic && l.solid.length));
-      const hidden = lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0) -
-        shown.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
-      body = shown
-        .map((/** @type {any} */ lesson, /** @type {number} */ i) => {
-          const found = lesson.discovered && !state.topic
-            ? `<span class="found">${plural(lesson.discovered, "new idea")} · +${lesson.xpAwarded} XP</span>`
-            : "";
-          return `
-          <section class="lesson">
-            <h3><span>From <strong>${esc(lesson.source)}</strong></span><span class="muted">${esc(clock(lesson.at))}</span></h3>
-            ${found}
-            ${lesson.cards.map((/** @type {any} */ c) => card(c, i === 0)).join("")}
-            ${chips("Also in there, for next time:", lesson.later)}
-            ${chips("Already yours:", lesson.solid)}
-          </section>`;
-        })
-        .join("");
-      if (hidden) {
-        body += `<p class="muted">${plural(hidden, "card")} in other topics ${hidden === 1 ? "is" : "are"} hidden. <button class="link" data-action="allTopics">Show all topics</button></p>`;
+      const due = dueCount();
+      if (due) {
+        body += `<p class="nudge">${plural(due, "question")} due. <button class="link" data-action="startReview">Review now</button></p>`;
       }
+      body += shown.map((/** @type {any} */ l, /** @type {number} */ i) => lessonSection(l, i === 0)).join("");
+    }
+    if (total > visible) {
+      const hidden = total - visible;
+      body += `<p class="muted">${plural(hidden, "card")} in other topics ${hidden === 1 ? "is" : "are"} hidden. <button class="link" data-action="allTopics">Show all topics</button></p>`;
+    }
+    if (state.lessons.length) {
       body += `<p class="tail"><button class="link" data-action="command" data-id="miyagi.clearFeed">Clear the feed</button></p>`;
     }
     return `${body}${commands()}${footer()}`;
   }
+
+  /* ---- Review and Dojo ------------------------------------------- */
 
   function reviewTab() {
     const s = state.status;
@@ -341,15 +590,15 @@
           ${next}
         </section>`;
     }
-    const commandsDue = s.dueCommands
+    const drills = s.dueCommands
       ? `<p class="muted">${plural(s.dueCommands, "terminal drill")} also due. Those run in the Miyagi MCP tutor (<code>review_due_items</code>).</p>`
       : "";
     if (review.asked && !due) {
       return `
         <div class="empty">
-          <h2>${review.cleared ? `${plural(review.cleared, "question")} cleared` : "Nothing is due"}</h2>
+          <h2>${review.cleared ? `${plural(review.cleared, "question")} cleared` : `Nothing is due${scope}`}</h2>
           <p>Questions come back after 10 minutes, then 1, 3, 7, 16 and 35 days. Answering one after a longer gap is what moves its belt up.</p>
-          ${commandsDue}
+          ${drills}
         </div>`;
     }
     return `
@@ -357,25 +606,24 @@
         <h2>${due ? `${plural(due, "question")} due${scope}` : `Nothing is due${scope}`}</h2>
         <p>Each idea you were shown left one question behind. Answering it from memory, later, is the part that makes it stick.</p>
         ${due ? `<button class="primary" data-action="nextReview">Start review</button>` : ""}
-        ${commandsDue}
+        ${drills}
+        <p><button class="link" data-action="command" data-id="miyagi.weeklyReport">See how your week went</button></p>
       </div>`;
   }
 
   function dojoTab() {
     if (ui.idea) {
-      const back = `<p><button class="link" data-action="closeIdea">\u2190 All ideas</button></p>`;
-      if (!ideaCard || ideaCard.conceptId !== ui.idea) return `${back}<div class="empty"><p class="muted">Loading\u2026</p></div>`;
+      const back = `<p><button class="link" data-action="closeIdea">← All ideas</button></p>`;
+      if (!ideaCard || ideaCard.conceptId !== ui.idea) return `${back}<div class="empty"><p class="muted">Loading…</p></div>`;
       return `${back}<section class="lesson">${card(ideaCard, true, true)}</section>`;
     }
-    if (!dojo) return `<div class="empty"><p class="muted">Loading\u2026</p></div>`;
+    if (!dojo) return `<div class="empty"><p class="muted">Loading…</p></div>`;
     const all = dojo.rows.filter(inTopic);
     const seen = all.filter((r) => r.seen);
     const locked = all.filter((r) => !r.seen);
     const row = (/** @type {any} */ r) => {
-      const dots = dojo.belts.map((_, i) => (r.seen && i <= r.box ? "\u25cf" : "\u25cb")).join("");
-      const tag = r.seen
-        ? `<span class="tag belt belt-${esc(r.belt)}">${esc(r.belt)}</span>`
-        : `<span class="tag">Locked</span>`;
+      const dots = dojo.belts.map((_, i) => (r.seen && i <= r.box ? "●" : "○")).join("");
+      const tag = r.seen ? `<span class="tag belt belt-${esc(r.belt)}">${esc(r.belt)}</span>` : `<span class="tag">Locked</span>`;
       return `<li>
         <button class="idea${r.seen ? "" : " locked"}" data-action="idea" data-id="${esc(r.id)}" title="Open this lesson">
           <span class="idea-name"><span aria-hidden="true">${esc(r.emoji)}</span> ${esc(r.title)}</span>
@@ -397,53 +645,131 @@
             : ""
         }
         <p class="muted">A belt moves up one colour each time you answer its question after a longer gap, and drops when you miss. It measures what you can recall, not how long the panel was open.</p>
+        <p class="lesson-tools">
+          <button class="link" data-action="command" data-id="miyagi.weeklyReport">Your week</button>
+          <button class="link" data-action="command" data-id="miyagi.projectMap">How this project works</button>
+        </p>
       </section>`;
   }
+
+  /* ---- drawing --------------------------------------------------- */
 
   function render() {
     if (!state) {
       app.innerHTML = `<div class="empty"><p class="muted">Loading…</p></div>`;
       return;
     }
+    // A redraw replaces every element, including the one being typed in.
+    const active = /** @type {HTMLInputElement | null} */ (document.activeElement);
+    const focused = active && active.dataset ? active.dataset.draft : undefined;
+    const caret = focused && active ? [active.selectionStart, active.selectionEnd] : null;
+
     const body = ui.tab === "review" ? reviewTab() : ui.tab === "dojo" ? dojoTab() : nowTab();
     app.innerHTML = `${header()}${tabs()}<main role="tabpanel">${body}</main>`;
+
+    if (focused) {
+      const again = /** @type {HTMLInputElement | null} */ (
+        [...app.querySelectorAll("[data-draft]")].find((el) => /** @type {HTMLElement} */ (el).dataset.draft === focused)
+      );
+      if (again) {
+        again.focus();
+        if (caret && caret[0] !== null) again.setSelectionRange(caret[0], caret[1]);
+      }
+    }
   }
 
   function setTab(/** @type {string} */ tab) {
     ui.tab = tab;
-    remember();
     if (tab === "dojo") {
       // Clicking the tab again returns from a lesson to the list.
       ui.idea = null;
       send({ type: "dojo" });
     }
+    remember();
+    render();
+  }
+
+  function openIdea(/** @type {string} */ id) {
+    ui.tab = "dojo";
+    ui.idea = id;
+    remember();
+    send({ type: "idea", id });
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function startReview() {
+    ui.tab = "review";
+    remember();
+    review = { asked: true, quiz: null, answer: null, picked: -1, cleared: review.cleared };
+    send({ type: "review" });
     render();
   }
 
   /* ---- input ----------------------------------------------------- */
 
   app.addEventListener("click", (event) => {
-    const el = /** @type {HTMLElement | null} */ (
-      /** @type {HTMLElement} */ (event.target).closest("[data-action]")
-    );
+    const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-action]"));
     if (!el) return;
     const d = el.dataset;
+    const key = d.key || "";
     switch (d.action) {
       case "tab":
         return setTab(d.tab || "now");
-      case "toggle": {
-        const expanded = el.getAttribute("aria-expanded") === "true";
-        ui.open[d.key || ""] = !expanded;
+      case "toggle":
+        ui.open[key] = el.getAttribute("aria-expanded") !== "true";
         remember();
+        return render();
+      case "more":
+        ui.more[key] = !ui.more[key];
+        remember();
+        return render();
+      case "openFile":
+        return send({ type: "openFile", key });
+      case "openAt":
+        return send({ type: "openAt", root: d.root, file: d.file, line: d.line ? Number(d.line) : null });
+      case "explain":
+      case "ownQuiz":
+      case "attempt":
+      case "bug":
+      case "why":
+      case "speak":
+      case "quiz":
+        return send({ type: d.action, key });
+      case "risks":
+      case "walk":
+        return send({ type: d.action, lesson: d.lesson });
+      case "walkTo": {
+        const index = Number(d.index);
+        walkAt[d.lesson || ""] = index;
+        send({ type: "walkStep", lesson: d.lesson, index });
         return render();
       }
-      case "openFile":
-        return send({ type: "openFile", key: d.key });
-      case "idea":
-        ui.idea = d.id || null;
-        remember();
-        send({ type: "idea", id: d.id });
+      case "bugGuess": {
+        const drill = (state.extras[key] || {}).bug;
+        if (!drill) return;
+        const guess = (bugGuesses[key] = bugGuesses[key] || { wrong: [], found: false });
+        const line = Number(d.line);
+        if (line === drill.bugLine) guess.found = true;
+        else if (!guess.wrong.includes(line)) guess.wrong.push(line);
         return render();
+      }
+      case "bugReveal":
+        bugGuesses[key] = Object.assign(bugGuesses[key] || { wrong: [] }, { found: true });
+        return render();
+      case "answer": {
+        const index = Number(d.index);
+        const entry = d.scope === "review" ? review : quizzes[d.slot || ""];
+        if (!entry || !entry.quiz || entry.answer) return;
+        entry.picked = index;
+        send({ type: "answer", token: entry.quiz.token, index });
+        return render();
+      }
+      case "startReview":
+      case "nextReview":
+        return startReview();
+      case "idea":
+        return openIdea(d.id || "");
       case "closeIdea":
         ui.idea = null;
         remember();
@@ -451,23 +777,10 @@
         return render();
       case "allTopics":
         return send({ type: "setTopic", topic: "" });
-      case "explain":
-        delete explainError[d.key || ""];
-        return send({ type: "explain", key: d.key });
-      case "quiz":
-        return send({ type: "quiz", key: d.key });
-      case "answer": {
-        const index = Number(d.index);
-        const entry = d.scope === "review" ? review : cardQuiz[d.key || ""];
-        if (!entry || !entry.quiz || entry.answer) return;
-        entry.picked = index;
-        send({ type: "answer", token: entry.quiz.token, index });
-        return render();
-      }
-      case "nextReview":
-        review = { asked: true, quiz: null, answer: null, picked: -1, cleared: review.cleared };
-        send({ type: "review" });
-        return render();
+      case "acceptDepth":
+        return send({ type: "setDepth", depth: d.depth });
+      case "dismissDepth":
+        return send({ type: "dismissDepth", depth: d.depth });
       case "command":
         return send({ type: "command", id: d.id });
       case "link":
@@ -475,6 +788,22 @@
       case "copy":
         return send({ type: "copy", text: d.text });
     }
+  });
+
+  app.addEventListener("input", (event) => {
+    const el = /** @type {HTMLInputElement} */ (event.target);
+    if (el.dataset && el.dataset.draft) drafts[el.dataset.draft] = el.value;
+  });
+
+  app.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = /** @type {HTMLElement} */ (event.target);
+    const key = form.dataset.key || "";
+    const draft = `${key}|${form.dataset.submit}`;
+    const text = (drafts[draft] || "").trim();
+    if (!text) return;
+    delete drafts[draft];
+    send({ type: form.dataset.submit === "attempt" ? "attemptSubmit" : "followUp", key, text });
   });
 
   app.addEventListener("change", (event) => {
@@ -492,29 +821,21 @@
     switch (m.type) {
       case "state":
         state = m;
-        for (const key of Object.keys(explaining)) if (!m.explaining.includes(key)) delete explaining[key];
         break;
       case "tab":
+        if (m.tab === "review") return startReview();
         return setTab(m.tab);
-      case "explaining":
-        explaining[m.key] = m.by;
-        break;
-      case "explained":
-        delete explaining[m.key];
-        if (m.error) explainError[m.key] = m.error;
-        else if (state) state.explanations[m.key] = m.explanation;
-        break;
       case "quiz":
-        if (m.quiz) cardQuiz[m.key] = { quiz: m.quiz, answer: null, picked: -1 };
+        if (m.quiz) quizzes[m.key] = { quiz: m.quiz, answer: null, picked: -1 };
         break;
       case "answered": {
-        const entries = [review, ...Object.values(cardQuiz)];
+        const entries = [review, ...Object.values(quizzes)];
         const entry = entries.find((e) => e.quiz && e.quiz.token === m.token);
         if (entry && m.answer) {
           entry.answer = m.answer;
+          if (entry === review) review.cleared += 1;
           // The belt on an open dojo lesson just changed.
           if (ui.idea) send({ type: "idea", id: ui.idea });
-          if (entry === review) review.cleared += 1;
         }
         break;
       }

@@ -22,12 +22,26 @@ Run **Miyagi: Set Up Everything for Me** at any time to do the same. It is safe 
 
 ## What you get
 
-- **A card when it matters.** When new code relies on an idea such as password hashing, a React effect or a hard-coded secret, a card appears: what it is, what to know at your level, and how it goes wrong. At most two ideas per change; the rest are named and left for next time.
-- **"Explain in my code".** One button asks an AI to explain the idea using the actual lines in your file, with line numbers.
+**Without any AI**
+
+- **A card when it matters.** When new code relies on an idea such as password hashing, a React effect or a hard-coded secret, a card appears: what it is, what to know at your level, and how it goes wrong. At most two ideas per change; the rest are named and left for next time. Ideas that cost data or money when misunderstood carry a Risk tag.
 - **A question that comes back.** Each idea leaves one multiple-choice question. Answer it now, then again after 10 minutes, 1, 3, 7, 16 and 35 days. A belt per idea shows how firmly you hold it.
+- **Topics.** Pick Security, Backend and APIs, Data, Frontend or Tooling to see, be taught and review that shelf first.
+- **A dojo you can browse.** Every idea is listed with its belt. Click one to read its lesson and see where it showed up in your code. Locked ideas can be read; their question unlocks when your assistant writes code that uses them.
+- **What the assistant said.** Claude Code's own words from when it wrote a file, read from its session record.
+- **Your week.** A report of what you met, what stuck and what is slipping.
 - **The commands your assistant ran** (optional), with a short lesson for the common ones.
-- **Topics.** Pick Security, Backend and APIs, Data, Frontend or Tooling at the top of the panel to see and review only that shelf.
-- **A dojo you can browse.** Every idea is listed with its belt. Click one to read its lesson, see where it showed up in your code, and answer its question. Locked ideas can be read; their question unlocks when your assistant writes code that uses them.
+
+**With your own AI** (see the next section for who pays)
+
+- **Explain in my code**, and **ask a follow-up** underneath.
+- **Explain it yourself first.** Write what the lines do before reading any explanation, and have it judged.
+- **Quiz me on my code.** A question about your own lines, not a textbook example.
+- **Find the bug.** A copy of your code with one line changed. Your file is never touched.
+- **Walk me through this change.** Steps in the order the data flows, each highlighted in the editor.
+- **Check it for risks.** Up to three real risks in a change, with the line and the fix.
+- **How this project works.** A map of the repository: what it is, how a request travels, where things live.
+- **Find ideas with AI** (off by default). Lessons for ideas the built-in list does not know. These are marked as written by your AI.
 
 ## Who pays for the explanations
 
@@ -39,17 +53,59 @@ You do, through an assistant you already use. Miyagi has no account, no API key 
 | Editor models | The chat models the editor offers to extensions (GitHub Copilot in VS Code). | Against a stub only |
 | Codex | `codex exec`, read-only. Found on your PATH or inside the OpenAI editor extension. | Flags checked, not run live |
 | Gemini CLI | `gemini -p` | Not tested |
-| Your own command | Anything that reads a prompt on stdin and prints an answer: `llm -m gpt-4o-mini`, `ollama run llama3.2`. | Yes |
+| Ollama | A model on your machine, over its local HTTP API. Nothing leaves the machine. | Not tested: no Ollama here |
+| Your own command | Anything that reads a prompt on stdin and prints an answer, for example `llm -m gpt-4o-mini`. | Yes |
 
 In `auto` (the default) Miyagi uses the assistant it saw doing the work, else the first one it finds. Run **Miyagi: Choose Which AI Writes Explanations** to pick, or to turn AI off. Cards, questions and belts all work without any AI.
 
-Explanations are requested only when you press the button. Set `miyagi.ai.explain` to `auto` to get one for every card, at the cost of more usage.
+Nothing is sent to an AI unless you press a button, with two exceptions you have to turn on yourself: `miyagi.ai.explain: auto` (an explanation for every card) and `miyagi.ai.findIdeas` (ask your AI what is worth learning in a change, at most `miyagi.ai.findIdeasPerHour` times an hour). The footer of the panel shows how many AI calls Miyagi has made this week and roughly how many tokens.
 
 Each request is a separate, short-lived process: no tools, no project context, no saved session. It cannot reach the conversation your assistant is working in.
 
 ## Where the panel sits
 
-In VS Code 1.106 or newer the panel opens in the secondary side bar, on the right, by itself. Cursor, Antigravity and Windsurf keep that side bar for their own agent, so there Miyagi opens in the activity bar; run **Miyagi: Move Panel to Another Side Bar** or drag its icon to put it where you want.
+In VS Code 1.106 or newer the panel opens in the secondary side bar, on the right, by itself. Cursor, Antigravity and Windsurf keep that side bar for their own agent, so there Miyagi opens in the activity bar. Press the split icon on the panel's toolbar (**Miyagi: Open Beside the Editor**) to open it as a tab on the right instead.
+
+## Keeping it out of the way
+
+- **Pause** from the toolbar or the status bar: 30 minutes, an hour, three hours, or until tomorrow morning.
+- **Quiet hours** (`miyagi.quietHours`, for example `22:00-07:00`): no cards, notifications or reminders.
+- **Ignore patterns** (`miyagi.watch.ignore`) and **excluded repositories** (`miyagi.watch.excludeRepositories`).
+- **Notifications** (`miyagi.notify`): off, a badge (default), or a toast.
+- **Review reminder** (`miyagi.reviewReminder`): at most once a day when three or more questions are due, or off.
+
+While paused or quiet, changes are still read, so nothing is taught late as though it had just happened.
+
+## Your own ideas
+
+Put a JSON file in `~/.miyagi/ideas/` and its ideas are taught like the built-in ones:
+
+```json
+{
+  "name": "Our conventions",
+  "concepts": [
+    {
+      "id": "feature-flag",
+      "title": "Feature flags",
+      "patterns": ["isEnabled\\(['\"]", "useFlag\\("],
+      "hook": "Shipping the code is not the same as turning it on.",
+      "what": "A switch that turns a feature on for some users without a deploy.",
+      "lens": "The flag is checked at runtime, so the old path and the new path both have to keep working until the flag is removed.",
+      "pitfall": "The flag is never cleaned up, and a year later nobody knows which of forty flags are safe to delete.",
+      "questions": [
+        {
+          "question": "A flag has been on for everyone for six months. What should happen to it?",
+          "answer": "Remove the flag and the old code path",
+          "distractors": ["Leave it in case it is needed", "Turn it off to test the old path", "Rename it so it is clearer"],
+          "explanation": "A flag that is always on is dead code with a switch attached."
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Miyagi: Show Diagnostics** lists each pack and anything in it that was rejected, with the reason.
 
 ## Capturing commands (optional)
 
@@ -61,12 +117,15 @@ It runs on Node.js if you have it and on the editor's own runtime if you do not 
 
 - Reads: `git diff`, untracked files, and the file a card points at.
 - Writes: `~/.miyagi/` (your progress, shared with the [Miyagi MCP server](https://www.npmjs.com/package/miyagi-mcp) if you use it). If you turn on capture, one hook entry in `~/.claude/settings.json` or `~/.cursor/hooks.json`, merged with what is there. Never your workspace, unless you choose capture for "this project only".
-- Sends: nothing, except the excerpt in an "Explain in my code" request, which goes to the AI provider you chose. Secrets in that excerpt are redacted first.
+- Sends: nothing, except the lines included in a request you made to the AI provider you chose. Secrets in those lines are redacted first, and a line that holds a credential is withheld entirely.
+- No telemetry. The cost meter and the weekly report are computed and kept on your machine.
 
 ## Limits
 
-- Ideas are detected with patterns over added lines, for 23 ideas today. It will miss things, and it cannot tell your typing from your assistant's.
-- A folder that is not a git repository is only covered if command capture is on.
+- Built-in ideas are detected with patterns over added lines, for 32 ideas today. It will miss things. "Find ideas with AI" and idea packs widen that.
+- Without command capture it cannot tell your typing from your assistant's; with it, lessons say which assistant made the change.
+- Everything an AI writes (explanations, risks, walkthroughs, found ideas) can be wrong. Each one names the model that wrote it.
+- "What the assistant said" reads Claude Code's session files, whose format is not documented and may change.
 - The first time a repository is seen, its existing uncommitted changes are treated as old. Run **Miyagi: Teach Me My Uncommitted Changes** to be taught those.
 
 ## Development

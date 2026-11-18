@@ -9,6 +9,7 @@
  * - `claude`  Claude Code, run headless (`claude -p`)
  * - `codex`   Codex, run headless (`codex exec`)
  * - `gemini`  Gemini CLI, run headless (`gemini -p`)
+ * - `ollama`  a model running on this machine, for code that must not leave it
  * - `custom`  any command that reads stdin and prints an answer
  *
  * The headless runs are deliberately separate from the session doing the real
@@ -26,7 +27,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export type ProviderId = "editor" | "claude" | "codex" | "gemini" | "custom";
+export type ProviderId = "editor" | "claude" | "codex" | "gemini" | "ollama" | "custom";
 export type ProviderSetting = ProviderId | "auto" | "off";
 
 export interface Prompt {
@@ -61,6 +62,8 @@ export interface AiOptions {
   editor: EditorModels | null;
   /** Absolute paths of binaries shipped inside other editor extensions. */
   bundled: Partial<Record<"claude" | "codex" | "gemini", string[]>>;
+  /** Where a local Ollama server listens. Empty disables the check. */
+  ollamaUrl?: string;
   /** The assistant last seen working, from the hook log. Breaks ties in `auto`. */
   seen?: "claude-code" | "cursor" | "unknown" | null;
 }
@@ -210,7 +213,8 @@ const looksLikeBadFlag = (r: RunResult) =>
 function clean(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("the AI returned an empty answer");
-  return trimmed.length > 4_000 ? trimmed.slice(0, 4_000) + "…" : trimmed;
+  // Long enough for a project map or a walkthrough; each prompt asks for far less.
+  return trimmed.length > 12_000 ? trimmed.slice(0, 12_000) + "…" : trimmed;
 }
 
 function joined(prompt: Prompt): string {
@@ -300,6 +304,62 @@ export function customProvider(command: string): Provider {
   };
 }
 
+/* ---- Ollama: a model on this machine ----------------------------- */
+
+async function fetchJson(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Models an Ollama server has pulled. Empty when nothing is listening, quickly. */
+export async function ollamaModels(baseUrl: string, timeoutMs = 700): Promise<string[]> {
+  if (!/^https?:\/\//.test(baseUrl) || typeof fetch !== "function") return [];
+  try {
+    const body = (await fetchJson(`${baseUrl.replace(/\/$/, "")}/api/tags`, {}, timeoutMs)) as {
+      models?: Array<{ name?: unknown }>;
+    };
+    return (body.models ?? []).map((m) => m.name).filter((n): n is string => typeof n === "string");
+  } catch {
+    return [];
+  }
+}
+
+export function ollamaProvider(baseUrl: string, model: string): Provider {
+  return {
+    id: "ollama",
+    label: `Ollama (${model})`,
+    async run(prompt, signal) {
+      if (signal.aborted) throw new Error("cancelled");
+      try {
+        const body = (await fetchJson(
+          `${baseUrl.replace(/\/$/, "")}/api/generate`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model, system: prompt.system, prompt: prompt.user, stream: false }),
+          },
+          TIMEOUT_MS,
+          signal,
+        )) as { response?: unknown };
+        return clean(typeof body.response === "string" ? body.response : "");
+      } catch (err) {
+        if (signal.aborted) throw new Error("cancelled");
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    },
+  };
+}
+
 function pickEditorModel(models: readonly EditorModel[], wanted: string): EditorModel | null {
   if (!models.length) return null;
   if (wanted) {
@@ -364,6 +424,14 @@ export async function available(options: AiOptions): Promise<Available[]> {
   if (claude && !out.some((a) => a.id === "claude")) add(claudeProvider(claude, options.model), claude);
   if (codex) add(codexProvider(codex, options.model), codex);
   if (gemini) add(geminiProvider(gemini, options.model), gemini);
+  // Local models go last in `auto`: they are free and private, and on a
+  // laptop they are also the slowest and the least reliable at structured
+  // answers. Someone who wants one picks it.
+  if (options.ollamaUrl) {
+    const models = await ollamaModels(options.ollamaUrl);
+    const chosen = models.find((m) => m === options.model || m.split(":")[0] === options.model) ?? models[0];
+    if (chosen) add(ollamaProvider(options.ollamaUrl, chosen), `${options.ollamaUrl} (${models.length} model(s) pulled)`);
+  }
   if (options.customCommand.trim()) add(customProvider(options.customCommand), options.customCommand.trim());
   return out;
 }
@@ -381,7 +449,7 @@ export async function resolveProvider(options: AiOptions): Promise<Resolved> {
       : {
           provider: null,
           reason:
-            "No AI assistant was found. Install Claude Code, Codex or Gemini CLI, sign in to Copilot, or set miyagi.ai.customCommand.",
+            "No AI assistant was found. Install Claude Code, Codex, Gemini CLI or Ollama, sign in to Copilot, or set miyagi.ai.customCommand.",
         };
   }
   const match = found.find((a) => a.id === options.setting);
@@ -391,52 +459,8 @@ export async function resolveProvider(options: AiOptions): Promise<Resolved> {
     claude: "Claude Code was not found on this machine.",
     codex: "Codex was not found on this machine.",
     gemini: "Gemini CLI was not found on this machine.",
+    ollama: "No Ollama server with a pulled model was found. Start Ollama and run `ollama pull` for a model.",
     custom: "miyagi.ai.customCommand is empty.",
   };
   return { provider: null, reason: why[options.setting] };
-}
-
-/* ------------------------------------------------------------------ *
- * The one prompt
- * ------------------------------------------------------------------ */
-
-export interface ExplainRequest {
-  title: string;
-  what: string;
-  depth: "Junior" | "Mid" | "Senior";
-  file: string;
-  /** Numbered lines from the learner's file. Null when the file could not be read. */
-  excerpt: string | null;
-  evidence: string;
-}
-
-const DEPTH_NOTE: Record<ExplainRequest["depth"], string> = {
-  Junior: "They are new to programming. Use everyday words and define any term you cannot avoid.",
-  Mid: "They can read code but did not write this. Skip the basics and explain the mechanism.",
-  Senior: "They are experienced. Go straight to the design choice, its cost, and what to verify.",
-};
-
-export function explainPrompt(req: ExplainRequest): Prompt {
-  return {
-    system:
-      "You are Miyagi, a coding tutor. Explain one idea in the code the learner shows you, in plain language. Do not use tools. Do not offer to do anything else.",
-    user: [
-      "An AI assistant wrote the code below while I watched. Teach me one idea in it.",
-      "",
-      `Idea: ${req.title}`,
-      `In general: ${req.what}`,
-      `File: ${req.file}`,
-      "",
-      req.excerpt
-        ? "The relevant lines, with line numbers:\n```\n" + req.excerpt + "\n```"
-        : `The line that uses it: ${req.evidence || "(not available)"}`,
-      "",
-      "Rules:",
-      "- At most 110 words, in two short paragraphs. No headings, no lists, no greeting, no praise.",
-      "- Paragraph one: what these specific lines do. Quote a short fragment in backticks and give its line number.",
-      "- Paragraph two: why it is written this way, and the one thing I should check or could get wrong here.",
-      "- Talk about this code, not the idea in general. If the lines do not actually use the idea, say so in one sentence.",
-      `- ${DEPTH_NOTE[req.depth]}`,
-    ].join("\n"),
-  };
 }

@@ -32,17 +32,29 @@ import {
   beltForBox,
   conceptBin,
   conceptById,
+  conceptOrigin,
   isConceptBin,
   questionsForConcept,
   scrub,
   type ConceptHit,
   type ConceptLevel,
 } from "../../src/concepts.js";
-import { ask, questionById, type AskedQuiz } from "../../src/quiz.js";
+import { ask, questionById, shuffleChoices, type AskedQuiz } from "../../src/quiz.js";
 import { flushHistory } from "../../src/history.js";
 import { contentFor } from "../../src/content.js";
 import { XP_CONCEPT_DISCOVERED, scoreQuizAnswer } from "../../src/scoring.js";
-import { TOPICS, topicOf, type Topic } from "./topics.js";
+import {
+  calibration,
+  calibrationVerdict,
+  loadJournal,
+  mistakesForReview,
+  recordAnswer,
+  saveJournal,
+  type CalibrationRow,
+  type Confidence,
+  type Mistake,
+} from "./journal.js";
+import { TOPICS, orderByPrerequisite, prerequisiteOf, topicOf, type Topic } from "./topics.js";
 
 export { TOPICS, type Topic };
 
@@ -66,8 +78,21 @@ export interface CardView {
   askTheAi: string;
   docs: { label: string; url: string };
   topic: Topic;
+  /** Security and data-loss ideas: the ones that hurt when misunderstood. */
+  risk: boolean;
+  /** Where the lesson came from: the built-in pack, a pack file, or a model. */
+  origin: "built-in" | "pack" | "ai";
+  /** The idea this one leans on, when the learner has not met it yet. */
+  buildsOn: Chip | null;
   /** `locked`: in the pack, not yet seen in this learner's code. */
   status: "new" | "learning" | "locked";
+  /**
+   * How much the card hands over before asking. Help that never fades becomes
+   * a crutch, so it thins as the belt rises: `full` shows the lesson,
+   * `question-first` asks before it shows, `minimal` keeps the lesson behind a
+   * link and asks the hardest question the idea has.
+   */
+  support: "full" | "question-first" | "minimal";
   belt: string;
   lapses: number;
   /** Repository root, so the panel can open the file. Empty when no file is known. */
@@ -82,6 +107,11 @@ export interface CardView {
 export interface LessonView {
   id: string;
   at: string;
+  root: string;
+  /** Every file the change touched, for "walk me through it" and the risk check. */
+  files: string[];
+  /** The assistant that made the change, when the hook saw it. */
+  by?: string;
   /** Completes "From …". */
   source: string;
   cards: CardView[];
@@ -98,6 +128,8 @@ export interface QuizView {
   review: boolean;
   /** The concept or command this question is about, for the review heading. */
   about: string;
+  /** Mixed in from outside the topic the learner chose, on purpose. */
+  otherTopic?: boolean;
 }
 
 export interface AnswerView {
@@ -114,12 +146,20 @@ export interface AnswerView {
   title: string;
   newBadges: string[];
   quizStreak: number;
+  /** They said they were sure, and it was wrong. This one gets an extra review. */
+  confidentMiss: boolean;
+  /** Correct, but it repays an earlier confident miss, so the belt holds. */
+  repaysMiss: boolean;
 }
 
 export interface StatusView {
   xp: number;
   level: number;
+  /** The terminal-track title from the shared profile. The panel shows `rank`. */
   title: string;
+  rank: string;
+  /** A depth the answers so far suggest, when it differs from the current one. */
+  suggestedDepth: Level | null;
   /** XP into the current level, 0-99. */
   intoLevel: number;
   dayStreak: number;
@@ -182,6 +222,73 @@ function familiarity(id: string): Familiarity {
   };
 }
 
+/** Green belt and above have answered after a week's gap; they need a question, not a lecture. */
+function supportFor(f: Familiarity): CardView["support"] {
+  if (!f.seen || f.box < 3) return "full";
+  return f.box >= 4 ? "minimal" : "question-first";
+}
+
+/** At this weight a misunderstanding costs data, money or a breach, not just a bug. */
+const RISK_WEIGHT = 85;
+
+function originOf(conceptId: string): CardView["origin"] {
+  const origin = conceptOrigin(conceptId);
+  return origin === null ? "built-in" : origin === "ai" ? "ai" : "pack";
+}
+
+function unmetPrerequisite(conceptId: string): Chip | null {
+  const needs = prerequisiteOf(conceptId);
+  const c = needs ? conceptById(needs) : undefined;
+  if (!c || familiarity(c.id).seen) return null;
+  return { id: c.id, title: c.title, emoji: c.emoji };
+}
+
+/**
+ * A rank for the whole learner, in the dojo's own vocabulary. The shared
+ * profile's titles ("Terminal Novice", "Shell Apprentice") were named for the
+ * command-line tracks and read oddly above a card about React.
+ */
+const RANKS: ReadonlyArray<readonly [number, string]> = [
+  [1, "Novice"],
+  [3, "Apprentice"],
+  [6, "Practitioner"],
+  [10, "Adept"],
+  [15, "Sensei"],
+];
+
+export function rankForLevel(level: number): string {
+  let rank = RANKS[0][1];
+  for (const [min, name] of RANKS) if (level >= min) rank = name;
+  return rank;
+}
+
+const DEPTHS: readonly Level[] = ["Junior", "Mid", "Senior"];
+
+/**
+ * Suggests moving the depth when the answers say it is wrong: consistently
+ * right means the explanations are too shallow, consistently wrong means too
+ * deep. A suggestion only, and only on real evidence; the learner chooses.
+ */
+export function depthSuggestion(current: Level, answers: { attempts: number; correct: number }): Level | null {
+  if (answers.attempts < 10) return null;
+  const rate = answers.correct / answers.attempts;
+  const at = DEPTHS.indexOf(current);
+  if (rate >= 0.85 && at < DEPTHS.length - 1) return DEPTHS[at + 1];
+  if (rate <= 0.4 && at > 0) return DEPTHS[at - 1];
+  return null;
+}
+
+function conceptAnswers(): { attempts: number; correct: number } {
+  let attempts = 0;
+  let correct = 0;
+  for (const [bin, m] of S.mastery) {
+    if (!isConceptBin(bin)) continue;
+    attempts += m.quizAttempts;
+    correct += m.quizCorrect;
+  }
+  return { attempts, correct };
+}
+
 export interface Where {
   root: string;
   file: string;
@@ -206,7 +313,11 @@ function buildCard(conceptId: string, key: string, f: Familiarity, where: Where,
     askTheAi: c.askTheAi,
     docs: c.docs,
     topic: topicOf(conceptId),
+    risk: c.weight >= RISK_WEIGHT,
+    origin: originOf(conceptId),
+    buildsOn: unmetPrerequisite(conceptId),
     status: f.seen ? "learning" : "new",
+    support: supportFor(f),
     belt: beltForBox(f.box).name,
     lapses: f.lapses,
     ...where,
@@ -238,6 +349,10 @@ export interface TeachInput {
   limit: number;
   /** A deliberate request re-teaches ideas already shown this sitting. */
   repeat?: boolean;
+  /** The topic the learner chose to concentrate on. Its ideas are taught first. */
+  focus?: Topic | null;
+  /** Every file in the change, including ones with no recognised idea. */
+  files?: readonly string[];
 }
 
 export function teach(input: TeachInput): Promise<LessonView | null> {
@@ -251,7 +366,17 @@ export function teach(input: TeachInput): Promise<LessonView | null> {
       // Familiarity is read before anything is queued, so "new" means new.
       const before = new Map(sightings.map((s) => [s.id, familiarity(s.id)]));
       const fam = (id: string) => before.get(id) ?? UNSEEN;
-      const ranked = rankSightings(sightings, fam, Math.max(1, input.limit));
+      // Ranked without a limit first, so the learner's focus and "what builds
+      // on what" can reorder before the cut is made.
+      const all = rankSightings(sightings, fam, sightings.length);
+      const focused = input.focus
+        ? [...all.teach].sort(
+            (a, b) => Number(topicOf(b.id) === input.focus) - Number(topicOf(a.id) === input.focus),
+          )
+        : all.teach;
+      const ordered = orderByPrerequisite(focused);
+      const limit = Math.max(1, input.limit);
+      const ranked = { teach: ordered.slice(0, limit), later: ordered.slice(limit), solid: all.solid };
       const depth = S.session.skillLevel;
       const id = `l${Date.now().toString(36)}-${++lessonCounter}`;
 
@@ -293,6 +418,8 @@ export function teach(input: TeachInput): Promise<LessonView | null> {
       return {
         id,
         at: new Date().toISOString(),
+        root: input.root,
+        files: [...new Set(input.files ?? input.changes.map((c) => c.file))],
         source: input.source,
         cards,
         later: ranked.later.map(chip),
@@ -358,7 +485,10 @@ export function quizForConcept(conceptId: string): Promise<QuizView | null> {
     () => {
       const concept = conceptById(conceptId);
       if (!concept) return null;
-      const question = pickConceptQuestion(conceptId, S.session.skillLevel, S.session.recentQuizIds);
+      // At brown and black belt the idea's hardest question is asked, whatever
+      // depth the explanations are set to.
+      const level = familiarity(conceptId).box >= 4 ? "Senior" : S.session.skillLevel;
+      const question = pickConceptQuestion(conceptId, level, S.session.recentQuizIds);
       if (!question) return null;
       S.ensureReviewItem("quiz", question.id, question.question);
       S.noteQuizAsked(question.id);
@@ -374,28 +504,92 @@ export function quizForConcept(conceptId: string): Promise<QuizView | null> {
   );
 }
 
-/** The next due question, most overdue first, or null when the queue is clear. */
+/**
+ * A question written about the learner's own lines.
+ *
+ * It is graded and paid like any first-sight question, and counts toward the
+ * idea's mastery, but it never enters the review queue: next month the code
+ * will have changed and the question would be about lines that no longer
+ * exist. The idea's own question is what comes back.
+ */
+export function quizFromOwnCode(
+  conceptId: string,
+  q: { question: string; answer: string; distractors: readonly string[]; explanation: string },
+): QuizView | null {
+  const concept = conceptById(conceptId);
+  if (!concept) return null;
+  const id = `own-${conceptId}-${quizCounter + 1}`;
+  return openQuiz(
+    {
+      id,
+      question: q.question,
+      choices: shuffleChoices([q.answer, ...q.distractors], id),
+      answer: q.answer,
+      explanation: q.explanation,
+      bin: conceptBin(conceptId),
+      review: false,
+      askedAt: new Date().toISOString(),
+    },
+    concept.title,
+  );
+}
+
+/** With a topic chosen, one question in this many still comes from elsewhere. */
+const MIX_EVERY = 4;
+let reviewsAsked = 0;
+
+/**
+ * The next due question, most overdue first, or null when the queue is clear.
+ *
+ * A chosen topic narrows the pass, but not completely: about one question in
+ * four is taken from another topic and labelled as such. Answering the same
+ * kind of question in a row feels like progress and is mostly recognising the
+ * pattern of the last one; a question that arrives from somewhere else has to
+ * be recalled cold.
+ */
 export function nextReview(skip: readonly string[] = [], topic: Topic | null = null): Promise<QuizView | null> {
   return run(
     () => {
       const skipped = new Set(skip);
-      for (const item of S.due("quiz", 100)) {
+      const due: Array<{ question: NonNullable<ReturnType<typeof questionById>>; bin: string; inTopic: boolean }> = [];
+      for (const item of S.due("quiz", 200)) {
         if (skipped.has(item.ref)) continue;
         const question = questionById(item.ref);
         if (!question) continue;
         const bin = question.bins[0] ?? "shell";
-        // A topic narrows the pass to that shelf; terminal questions have none.
-        if (topic && !(isConceptBin(bin) && topicOf(bin.slice("concept:".length)) === topic)) continue;
-        const about = isConceptBin(bin)
-          ? conceptById(bin.slice("concept:".length))?.title ?? "Recall"
-          : `\`${bin}\``;
-        S.noteQuizAsked(question.id);
-        return openQuiz(ask(question, bin, { review: true, salt: String(quizCounter + 1) }), about);
+        const conceptId = isConceptBin(bin) ? bin.slice("concept:".length) : null;
+        due.push({ question, bin, inTopic: Boolean(topic && conceptId && topicOf(conceptId) === topic) });
       }
-      return null;
+      if (!due.length) return null;
+
+      let pick = due[0];
+      let otherTopic = false;
+      if (topic) {
+        const inside = due.find((d) => d.inTopic);
+        // Terminal questions have no topic and are never mixed in.
+        const outside = due.find((d) => !d.inTopic && isConceptBin(d.bin));
+        const mixNow = reviewsAsked % MIX_EVERY === MIX_EVERY - 1;
+        if (inside && !(mixNow && outside)) pick = inside;
+        else if (inside && outside) {
+          pick = outside;
+          otherTopic = true;
+        } else return null; // nothing left in this topic: the pass is done
+      }
+      reviewsAsked++;
+      const about = isConceptBin(pick.bin)
+        ? conceptById(pick.bin.slice("concept:".length))?.title ?? "Recall"
+        : `\`${pick.bin}\``;
+      S.noteQuizAsked(pick.question.id);
+      const view = openQuiz(ask(pick.question, pick.bin, { review: true, salt: String(quizCounter + 1) }), about);
+      return otherTopic ? { ...view, otherTopic: true } : view;
     },
     { write: true },
   );
+}
+
+/** Test seam: start the one-in-four count again. */
+export function resetReviewMix(): void {
+  reviewsAsked = 0;
 }
 
 /** The question id behind a token, so a review pass can avoid repeating it. */
@@ -407,9 +601,13 @@ export function questionIdFor(token: string): string | null {
  * Grades a choice. The XP comes from the server's own `scoreQuizAnswer`, and a
  * slow correct answer holds its box instead of advancing.
  */
-export function answer(token: string, choiceIndex: number): Promise<AnswerView | null> {
+export function answer(
+  token: string,
+  choiceIndex: number,
+  confidence: Confidence | null = null,
+): Promise<AnswerView | null> {
   return run(
-    () => {
+    async () => {
       const entry = open.get(token);
       if (!entry) return null;
       open.delete(token);
@@ -417,8 +615,24 @@ export function answer(token: string, choiceIndex: number): Promise<AnswerView |
       const chosen = quiz.choices[choiceIndex];
       const correct = chosen !== undefined && chosen === quiz.answer;
 
+      const conceptId = isConceptBin(quiz.bin) ? quiz.bin.slice("concept:".length) : null;
+      const outcome = recordAnswer(await loadJournal(), {
+        question: quiz.id,
+        concept: conceptId,
+        about: entry.about,
+        prompt: quiz.question,
+        chosen: chosen ?? "",
+        truth: quiz.answer,
+        why: quiz.explanation,
+        confidence,
+        correct,
+      });
+      await saveJournal(outcome.journal);
+
       const elapsedMs = Date.now() - Date.parse(quiz.askedAt);
-      const hesitant = Number.isFinite(elapsedMs) && elapsedMs > 45_000;
+      // Slow recall holds its box. So does a correct answer that repays a
+      // confident miss: sure-and-wrong has to be right twice to move on.
+      const hesitant = (Number.isFinite(elapsedMs) && elapsedMs > 45_000) || outcome.repaysMiss;
 
       S.recordMastery(quiz.bin, { quiz: true, correct });
       const scheduled = S.gradeReviewItem("quiz", quiz.id, correct, { hesitant });
@@ -448,6 +662,8 @@ export function answer(token: string, choiceIndex: number): Promise<AnswerView |
         title: S.player.title,
         newBadges: [...day.newBadges, ...score.newBadges, ...score.xp.newBadges],
         quizStreak: S.player.quizStreak,
+        confidentMiss: outcome.confidentMiss,
+        repaysMiss: outcome.repaysMiss,
       };
     },
     { write: true },
@@ -471,6 +687,8 @@ export function status(): Promise<StatusView> {
       xp: S.player.xp,
       level: S.player.level,
       title: S.player.title,
+      rank: rankForLevel(S.player.level),
+      suggestedDepth: depthSuggestion(S.session.skillLevel, conceptAnswers()),
       intoLevel: S.player.xp % 100,
       dayStreak: S.streak.dayStreak,
       quizStreak: S.player.quizStreak,
@@ -537,35 +755,32 @@ const EXCERPT_CONTEXT = 6;
 const EXCERPT_MAX_CHARS = 5_000;
 const EXCERPT_MAX_FILE = 400_000;
 
-/**
- * The parts of a file that use a concept, with a few lines either side and
- * real line numbers. Scrubbed, because this text is about to be sent to a
- * model, and the one line guaranteed to match "hard-coded secret" is the
- * secret.
- */
-export async function excerptFor(conceptId: string, root: string, file: string): Promise<string | null> {
-  const concept = conceptById(conceptId);
-  if (!concept) return null;
+async function readLines(root: string, file: string): Promise<string[] | null> {
   const abs = path.isAbsolute(file) ? file : path.join(root, file);
-  let text: string;
   try {
     const stat = await fs.stat(abs);
     if (!stat.isFile() || stat.size > EXCERPT_MAX_FILE) return null;
-    text = await fs.readFile(abs, "utf8");
+    const text = await fs.readFile(abs, "utf8");
+    return text.includes("\u0000") ? null : text.split(/\r?\n/);
   } catch {
     return null;
   }
-  if (text.includes("\u0000")) return null;
-  const lines = text.split(/\r?\n/);
-  const hits: number[] = [];
-  lines.forEach((line, i) => {
-    if (line.length <= 400 && concept.patterns.some((re) => re.test(line))) hits.push(i);
-  });
-  if (!hits.length) return null;
+}
 
+/**
+ * The lines of a file that matter, with a few either side and their real line
+ * numbers. Every line is scrubbed, because this text is about to be sent to a
+ * model; `withhold` names the lines that must not be sent even scrubbed.
+ */
+function numbered(
+  lines: readonly string[],
+  hits: readonly number[],
+  options: { context: number; maxChars: number; withhold?: (line: string) => boolean },
+): string | null {
+  if (!hits.length) return null;
   const keep = new Set<number>();
-  for (const hit of hits.slice(0, 6)) {
-    for (let i = Math.max(0, hit - EXCERPT_CONTEXT); i <= Math.min(lines.length - 1, hit + EXCERPT_CONTEXT); i++) {
+  for (const hit of hits) {
+    for (let i = Math.max(0, hit - options.context); i <= Math.min(lines.length - 1, hit + options.context); i++) {
       keep.add(i);
     }
   }
@@ -574,12 +789,76 @@ export async function excerptFor(conceptId: string, root: string, file: string):
   let size = 0;
   for (const i of [...keep].sort((a, b) => a - b)) {
     if (i !== last + 1 && out.length) out.push("…");
-    const withheld = conceptId === "hardcoded-secret" && concept.patterns.some((re) => re.test(lines[i]));
-    const row = `${i + 1}: ${withheld ? "«line withheld: it holds the credential»" : scrub(lines[i])}`;
+    const row = `${i + 1}: ${options.withhold?.(lines[i]) ? "«line withheld: it holds the credential»" : scrub(lines[i])}`;
     size += row.length + 1;
-    if (size > EXCERPT_MAX_CHARS) break;
+    if (size > options.maxChars) break;
     out.push(row);
     last = i;
   }
   return out.join("\n");
+}
+
+const SECRET = () => conceptById("hardcoded-secret")?.patterns ?? [];
+const holdsSecret = (line: string) => line.length <= 400 && SECRET().some((re) => re.test(line));
+
+/**
+ * The parts of a file that use a concept. The one line guaranteed to match
+ * "hard-coded secret" is the secret, so it is withheld rather than scrubbed.
+ */
+export async function excerptFor(conceptId: string, root: string, file: string): Promise<string | null> {
+  const concept = conceptById(conceptId);
+  const lines = concept ? await readLines(root, file) : null;
+  if (!concept || !lines) return null;
+  const hits: number[] = [];
+  lines.forEach((line, i) => {
+    if (line.length <= 400 && concept.patterns.some((re) => re.test(line))) hits.push(i);
+  });
+  return numbered(lines, hits.slice(0, 6), {
+    context: EXCERPT_CONTEXT,
+    maxChars: EXCERPT_MAX_CHARS,
+    withhold: holdsSecret,
+  });
+}
+
+/**
+ * The parts of a file that a change added, located in the file as it is now
+ * so the line numbers are real. A diff knows what was added but not where it
+ * ended up after later edits.
+ */
+export async function excerptOfChange(root: string, file: string, added: string, maxChars = 3_500): Promise<string | null> {
+  const lines = await readLines(root, file);
+  if (!lines) return null;
+  const wanted = new Set(added.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 2));
+  const hits: number[] = [];
+  lines.forEach((line, i) => {
+    if (wanted.has(line.trim())) hits.push(i);
+  });
+  return numbered(lines, hits.slice(0, 80), { context: 2, maxChars, withhold: holdsSecret });
+}
+
+/** The start of a file, for a model that needs to know what a project is. */
+export async function headOf(root: string, file: string, maxLines: number): Promise<string | null> {
+  const lines = await readLines(root, file);
+  if (!lines) return null;
+  return lines
+    .slice(0, maxLines)
+    .map((l) => (holdsSecret(l) ? "«line withheld»" : scrub(l)))
+    .join("\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * What the answers say about the learner
+ * ------------------------------------------------------------------ */
+
+export interface InsightView {
+  calibration: CalibrationRow[];
+  /** One sentence, or null when there are too few "sure" answers to say. */
+  verdict: string | null;
+  mistakes: Mistake[];
+}
+
+export async function insight(): Promise<InsightView> {
+  const journal = await loadJournal();
+  const rows = calibration(journal);
+  return { calibration: rows, verdict: calibrationVerdict(rows), mistakes: mistakesForReview(journal) };
 }

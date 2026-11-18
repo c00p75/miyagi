@@ -60,6 +60,33 @@ export class DiffTracker {
     return out;
   }
 
+  /**
+   * The same question for a folder with no git: what in this file is new
+   * since it was last read. There is no diff to ask, so the whole file is
+   * compared with what was remembered.
+   *
+   * A file read for the first time is a baseline, like a repository is,
+   * unless it was just created: then every line in it is new.
+   */
+  deltaFile(root: string, file: string, text: string, created: boolean): FileChange | null {
+    const key = this.key(root, file);
+    let known = this.seen.get(key);
+    const first = !known;
+    if (!known) {
+      known = new Set();
+      this.seen.set(key, known);
+    }
+    const fresh: string[] = [];
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || known.has(trimmed)) continue;
+      known.add(trimmed);
+      fresh.push(line);
+    }
+    if (!fresh.length || (first && !created)) return null;
+    return { file, added: fresh.join("\n"), addedLines: fresh.length };
+  }
+
   reset(): void {
     this.seen.clear();
     this.primed.clear();

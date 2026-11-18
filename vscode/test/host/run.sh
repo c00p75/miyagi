@@ -20,7 +20,11 @@ for v in $(env | grep -E '^(ELECTRON_|VSCODE_)' | cut -d= -f1); do unset "$v"; d
 
 # VSCODE_CLI tells the editor it was started from a command line, so it uses
 # this environment instead of spending ten seconds resolving a login shell.
-VSCODE_CLI=1 MIYAGI_HOME="$TMP/home" "$EDITOR_BIN" \
+# HOME is redirected as well as MIYAGI_HOME. On start the extension repairs any
+# installed capture hook, and with the real home that means rewriting the
+# developer's own ~/.claude/settings.json to point into this temp folder.
+mkdir -p "$TMP/fakehome"
+VSCODE_CLI=1 HOME="$TMP/fakehome" USERPROFILE="$TMP/fakehome" MIYAGI_HOME="$TMP/home" "$EDITOR_BIN" \
   --user-data-dir="$TMP/user" --extensions-dir="$TMP/ext" \
   --extensionDevelopmentPath="$HERE" --extensionTestsPath="$HERE/test/host/smoke.cjs" \
   --disable-workspace-trust --skip-welcome --skip-release-notes --disable-updates \

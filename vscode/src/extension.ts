@@ -9,11 +9,24 @@
  */
 
 import * as vscode from "vscode";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { parseUnifiedDiff } from "../../src/concepts.js";
+import { loadIdeaPacks } from "../../src/packs.js";
+import { profileDir } from "../../src/profile.js";
 import { MiyagiPanel } from "./panel.js";
 import { Watcher } from "./watch.js";
-import { available, resolveProvider, type AiOptions, type EditorModels, type ProviderSetting } from "./ai.js";
+import * as engine from "./engine.js";
+import {
+  available,
+  findBinary,
+  resolveProvider,
+  type AiOptions,
+  type EditorModels,
+  type ProviderSetting,
+} from "./ai.js";
 import {
   CLIENT_NAMES,
   capturedClients,
@@ -21,12 +34,28 @@ import {
   disableCapture,
   enableCapture,
   healCapture,
+  hookRuntime,
+  hookScriptPath,
+  installedHooks,
   setupCapture,
   type Client,
   type Scope,
 } from "./capture.js";
+import { aiIdeaCount, loadAiIdeas } from "./ideas.js";
+import { currentMeter, describeMeter, recordCall } from "./meter.js";
+import { projectMapPrompt } from "./prompts.js";
+import { chooseFiles, trackedFiles, weeklyReport } from "./reports.js";
+import { quietNow, tomorrowMorning, type QuietReason } from "./schedule.js";
+import { supportsSecondarySidebar } from "./docking.js";
 
 const WELCOMED_KEY = "miyagi.welcomed.v1";
+const PAUSED_KEY = "miyagi.pausedUntil.v1";
+const REMINDED_KEY = "miyagi.remindedOn.v1";
+const METER_KEY = "miyagi.meter.v1";
+/** Fewer than this and a reminder is an interruption about nothing. */
+const REMIND_AT = 3;
+
+const config = () => vscode.workspace.getConfiguration("miyagi");
 
 /* ------------------------------------------------------------------ *
  * The editor's own models
@@ -100,11 +129,11 @@ function bundledBinaries(): AiOptions["bundled"] {
 }
 
 async function aiOptions(): Promise<AiOptions> {
-  const config = vscode.workspace.getConfiguration("miyagi");
   return {
-    setting: config.get<ProviderSetting>("ai.provider", "auto"),
-    model: config.get<string>("ai.model", "").trim(),
-    customCommand: config.get<string>("ai.customCommand", ""),
+    setting: config().get<ProviderSetting>("ai.provider", "auto"),
+    model: config().get<string>("ai.model", "").trim(),
+    customCommand: config().get<string>("ai.customCommand", ""),
+    ollamaUrl: config().get<string>("ai.ollamaUrl", "http://localhost:11434").trim(),
     editor: editorModels(),
     bundled: bundledBinaries(),
   };
@@ -120,25 +149,20 @@ export interface MiyagiApi {
   lessons(): Array<{ source: string; concepts: string[] }>;
   /** Which view the panel lives in on this editor. */
   viewId(): string;
-}
-
-/**
- * VS Code from 1.106 lets an extension put a view in the secondary side bar,
- * which is where the panel belongs: opposite the files, where an assistant
- * would sit. The forks share the version number and not the permission:
- * Cursor reserves that side bar for its own agent and drops a contributed
- * view into the Explorer instead. So the automatic placement is for VS Code
- * itself, and everywhere else the panel starts in the activity bar with a
- * command to move it. The manifest declares both; this context key picks one.
- */
-export function supportsSecondarySidebar(appName: string, version: string): boolean {
-  if (!/^(Visual Studio Code|Code - OSS|VSCodium)/i.test(appName)) return false;
-  const [major = 0, minor = 0] = version.split(".").map(Number);
-  return major > 1 || (major === 1 && minor >= 106);
+  /** Every repository has been read once; the next change will be compared against that. */
+  ready(): boolean;
 }
 
 const list = (items: readonly string[]) =>
   items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+
+function run(cwd: string, command: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(command, args, { cwd, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true }, (err, stdout) =>
+      resolve(err ? null : String(stdout)),
+    );
+  });
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<MiyagiApi> {
   const dist = path.join(context.extensionPath, "dist");
@@ -149,6 +173,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       claudeExtension: Boolean(vscode.extensions.getExtension("anthropic.claude-code")),
       appName: vscode.env.appName,
     });
+  const quiet = (): QuietReason =>
+    quietNow({ pausedUntil: context.globalState.get(PAUSED_KEY), quietHours: config().get("quietHours", "") });
 
   const secondary = supportsSecondarySidebar(vscode.env.appName, vscode.version);
   const viewId = secondary ? MiyagiPanel.secondaryViewId : MiyagiPanel.viewId;
@@ -156,11 +182,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   // side bar never shows the view anywhere else, even before activation.
   if (secondary) await vscode.commands.executeCommand("setContext", "miyagi.secondarySidebar", true);
 
+  // Ideas written by hand and ideas a model found in earlier sittings. Both
+  // must exist before anything is taught, or their questions have no lesson.
+  const packs = await loadIdeaPacks().catch(() => []);
+  await loadAiIdeas().catch(() => 0);
+
+  /* ---- status bar ----------------------------------------------- */
+
+  const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
+  statusItem.name = "Miyagi";
+  context.subscriptions.push(statusItem);
+
+  let lastStatus: engine.StatusView | null = null;
+  const renderStatus = (status: engine.StatusView | null) => {
+    lastStatus = status ?? lastStatus;
+    const q = quiet();
+    void vscode.commands.executeCommand("setContext", "miyagi.paused", q.quiet && q.why === "paused");
+    const due = lastStatus?.dueQuestions ?? 0;
+    if (q.quiet) {
+      statusItem.text = "$(debug-pause) Miyagi";
+      statusItem.tooltip =
+        q.why === "paused"
+          ? `Miyagi is paused until ${q.until.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Click to resume.`
+          : "Miyagi is in quiet hours. Changes are still read; nothing is shown until they end.";
+      statusItem.command = q.why === "paused" ? "miyagi.resume" : "miyagi.open";
+    } else {
+      statusItem.text = due ? `$(mortar-board) ${due} due` : "$(mortar-board) Miyagi";
+      statusItem.tooltip = due
+        ? `${due} question${due === 1 ? " is" : "s are"} due for review. Click to start.`
+        : "Miyagi is watching for code worth understanding. Click to open the panel.";
+      statusItem.command = due ? "miyagi.review" : "miyagi.open";
+    }
+    if (config().get<boolean>("statusBar", true)) statusItem.show();
+    else statusItem.hide();
+    maybeRemind(lastStatus);
+  };
+
+  /** At most once a day, and never when asked to be quiet. */
+  const maybeRemind = (status: engine.StatusView | null) => {
+    if (!status || config().get<string>("reviewReminder", "daily") !== "daily" || quiet().quiet) return;
+    const today = new Date().toDateString();
+    if (status.dueQuestions < REMIND_AT || context.globalState.get<string>(REMINDED_KEY) === today) return;
+    void context.globalState.update(REMINDED_KEY, today);
+    void vscode.window
+      .showInformationMessage(
+        `Miyagi: ${status.dueQuestions} questions are due. Answering them from memory is the part that makes it stick.`,
+        "Review now",
+        "Not today",
+      )
+      .then((choice) => {
+        if (choice === "Review now") void vscode.commands.executeCommand("miyagi.review");
+      });
+  };
+
+  /* ---- panel and watcher ---------------------------------------- */
+
   let watcher: Watcher | undefined;
   const panel = new MiyagiPanel({
     context,
     aiOptions,
     roots: () => watcher?.getRoots() ?? [],
+    plainRoots: () => watcher?.getPlainRoots() ?? [],
     capture: async () => {
       const on = await capturedClients(workspaceDir());
       return {
@@ -171,14 +253,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
           .map((c) => CLIENT_NAMES[c]),
       };
     },
+    quiet,
+    onStatus: renderStatus,
   });
 
   watcher = new Watcher({
     onChanges: (root, source, changes) => void panel.teach(root, source, changes),
     onObservations: (observations) => void panel.observed(observations),
     onRoots: () => void panel.pushState(),
+    onScan: (scan) => panel.scanned(scan),
+    onBaseline: (root, files) => panel.baselined(root, files),
   });
-  watcher.setEnabled(vscode.workspace.getConfiguration("miyagi").get<boolean>("watch.enabled", true));
+  const configureWatcher = () =>
+    watcher?.configure({
+      enabled: config().get<boolean>("watch.enabled", true),
+      muted: quiet().quiet,
+      ignore: config().get<string[]>("watch.ignore", []),
+      excludeRepos: config().get<string[]>("watch.excludeRepositories", []),
+    });
+  configureWatcher();
 
   const viewOptions = { webviewOptions: { retainContextWhenHidden: true } };
   context.subscriptions.push(
@@ -189,23 +282,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     vscode.window.registerWebviewViewProvider(MiyagiPanel.secondaryViewId, panel, viewOptions),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("miyagi")) return;
-      watcher?.setEnabled(vscode.workspace.getConfiguration("miyagi").get<boolean>("watch.enabled", true));
+      configureWatcher();
       void panel.pushState();
     }),
   );
+  // Quiet hours begin and end without any event to hang them on.
+  const tick = setInterval(() => {
+    configureWatcher();
+    renderStatus(null);
+  }, 60_000);
+  context.subscriptions.push({ dispose: () => clearInterval(tick) });
 
   const open = () => vscode.commands.executeCommand(`${viewId}.focus`);
-  const register = (id: string, run: () => unknown) =>
-    context.subscriptions.push(vscode.commands.registerCommand(id, run));
+  const register = (id: string, handler: () => unknown) =>
+    context.subscriptions.push(vscode.commands.registerCommand(id, handler));
 
   register("miyagi.open", open);
+  register("miyagi.openBeside", () => panel.openBeside());
+  register("miyagi.settings", () =>
+    vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${context.extension.id}`),
+  );
+
+  /* ---- pause ----------------------------------------------------- */
+
+  const setPause = async (until: Date | null) => {
+    await context.globalState.update(PAUSED_KEY, until ? until.toISOString() : undefined);
+    configureWatcher();
+    await panel.pushState();
+  };
+  register("miyagi.pause", async () => {
+    type Item = vscode.QuickPickItem & { until: Date };
+    const now = Date.now();
+    const picked = await vscode.window.showQuickPick<Item>(
+      [
+        { label: "For 30 minutes", until: new Date(now + 30 * 60_000) },
+        { label: "For 1 hour", until: new Date(now + 60 * 60_000) },
+        { label: "For 3 hours", until: new Date(now + 180 * 60_000) },
+        { label: "Until tomorrow morning", until: tomorrowMorning() },
+      ],
+      {
+        title: "Pause Miyagi",
+        placeHolder: "No cards, toasts or reminders until then. What your assistant writes meanwhile is not taught later.",
+      },
+    );
+    if (picked) await setPause(picked.until);
+  });
+  register("miyagi.resume", () => setPause(null));
+
+  /* ---- setup ----------------------------------------------------- */
 
   /**
    * Everything that can be done without the learner: find their assistants,
    * turn capture on for each, confirm which AI will write explanations, and
    * open the panel. Safe to run again; it only reports what it changed.
    */
-  const setup = async (options: { quiet?: boolean } = {}) => {
+  const setup = async () => {
     const clients = clientsHere();
     const captured = await setupCapture({ ...captureOptions(), clients });
     const ai = await resolveProvider(await aiOptions());
@@ -215,25 +346,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
 
     const lines = [
       repos.length
-        ? `Watching ${list(repos.map((r) => path.basename(r)))}.`
+        ? `Watching ${repos.length === 1 ? path.basename(repos[0]) : `${repos.length} repositories`}.`
         : "No git repository is open yet; Miyagi starts watching as soon as one is.",
       ai.provider
         ? `Explanations will be written by ${ai.provider.label}, on your account.`
         : "No AI assistant was found for explanations, so cards use the built-in lessons.",
       captured.on.length
         ? `Capturing the commands ${list(captured.on.map((c) => CLIENT_NAMES[c]))} runs.` +
-          (captured.changed.length ? ` Start a new ${list(captured.changed.map((c) => CLIENT_NAMES[c]))} session for that to begin.` : "")
+          (captured.changed.length
+            ? ` Start a new ${list(captured.changed.map((c) => CLIENT_NAMES[c]))} session for that to begin.`
+            : "")
         : clients.length
         ? ""
         : "No assistant with a hook system (Claude Code, Cursor) was found, so commands are not captured.",
       ...captured.problems,
     ].filter(Boolean);
-    if (!options.quiet || captured.problems.length) {
-      const show = captured.problems.length ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
-      void show(`Miyagi is set up. ${lines.join(" ")}`);
-    }
+    const show = captured.problems.length ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+    void show(`Miyagi is set up. ${lines.join(" ")}`);
   };
-  register("miyagi.setup", () => setup());
+  register("miyagi.setup", setup);
 
   register("miyagi.moveToSide", async () => {
     await open();
@@ -245,18 +376,77 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     }
   });
 
+  /* ---- teaching on request -------------------------------------- */
+
+  const pickRepo = async (title: string): Promise<string | undefined> => {
+    const roots = watcher?.getRoots() ?? [];
+    if (roots.length <= 1) return roots[0];
+    const active = vscode.window.activeTextEditor?.document.uri.fsPath;
+    const sorted = [...roots].sort(
+      (a, b) => Number(Boolean(active?.startsWith(b + path.sep))) - Number(Boolean(active?.startsWith(a + path.sep))),
+    );
+    const picked = await vscode.window.showQuickPick(
+      sorted.map((r) => ({ label: path.basename(r), description: r })),
+      { title },
+    );
+    return picked?.description;
+  };
+
+  const nothingNew = () =>
+    vscode.window.showInformationMessage(
+      "Miyagi read the changes and found nothing new to teach: either none of its ideas appear, or you already hold them.",
+    );
+
   register("miyagi.explainChanges", async () => {
     await open();
     const sets = (await watcher?.everything()) ?? [];
     let cards = 0;
     for (const set of sets) cards += await panel.teach(set.root, set.source, set.changes, true);
+    panel.clearBaseline();
+    void panel.pushState();
     if (!sets.length) {
       void vscode.window.showInformationMessage("Miyagi found no uncommitted changes or commits in the open repositories.");
     } else if (!cards) {
-      void vscode.window.showInformationMessage(
-        "Miyagi read the changes and found nothing new to teach: either none of its ideas appear, or you already hold them.",
-      );
+      void nothingNew();
     }
+  });
+
+  register("miyagi.teachBranch", async () => {
+    const root = await pickRepo("Which repository?");
+    if (!root) return void vscode.window.showInformationMessage("Miyagi needs an open git repository for this.");
+    const input = await vscode.window.showInputBox({
+      title: "Teach me a branch or a pull request",
+      prompt: "A branch to compare against (the lesson covers everything since it), or a pull request number.",
+      value: "main",
+    });
+    const target = input?.trim();
+    if (!target) return;
+
+    let diff: string | null;
+    let source: string;
+    if (/^#?\d+$/.test(target)) {
+      const number = target.replace("#", "");
+      const gh = findBinary("gh");
+      if (!gh) {
+        return void vscode.window.showWarningMessage(
+          "Reading a pull request needs the GitHub CLI (gh), which was not found. Use a branch name instead.",
+        );
+      }
+      diff = await run(root, gh, ["pr", "diff", number]);
+      source = `pull request #${number}`;
+    } else if (/^[\w./-]{1,200}$/.test(target) && !target.startsWith("-")) {
+      diff = await run(root, "git", ["diff", "--no-color", "--no-ext-diff", "-U0", `${target}...HEAD`]);
+      source = `this branch since ${target}`;
+    } else {
+      return void vscode.window.showWarningMessage("That does not look like a branch name or a pull request number.");
+    }
+    if (diff === null) {
+      return void vscode.window.showWarningMessage(`Miyagi could not read ${source}. Check that it exists in ${path.basename(root)}.`);
+    }
+    const changes = parseUnifiedDiff(diff);
+    if (!changes.length) return void vscode.window.showInformationMessage(`There are no added lines in ${source}.`);
+    await open();
+    if (!(await panel.teach(root, source, changes, true))) void nothingNew();
   });
 
   register("miyagi.review", async () => {
@@ -265,6 +455,85 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   });
 
   register("miyagi.clearFeed", () => panel.clear());
+
+  /* ---- reading matter: the week, and the project ---------------- */
+
+  const showMarkdown = async (folder: string, name: string, text: string) => {
+    const dir = path.join(profileDir(), folder);
+    await fsp.mkdir(dir, { recursive: true });
+    const file = path.join(dir, name);
+    await fsp.writeFile(file, text, "utf8");
+    const uri = vscode.Uri.file(file);
+    try {
+      await vscode.commands.executeCommand("markdown.showPreview", uri);
+    } catch {
+      await vscode.window.showTextDocument(uri);
+    }
+  };
+
+  register("miyagi.weeklyReport", async () => {
+    const [status, dojo] = await Promise.all([engine.status(), engine.dojo()]);
+    const text = await weeklyReport({
+      status,
+      dojo,
+      meterLine: describeMeter(currentMeter(context.globalState.get(METER_KEY))),
+    });
+    await showMarkdown("reports", `week-${new Date().toISOString().slice(0, 10)}.md`, text);
+  });
+
+  register("miyagi.projectMap", async () => {
+    const root = await pickRepo("Explain how which project works?");
+    if (!root) return void vscode.window.showInformationMessage("Miyagi needs an open git repository for this.");
+    const resolved = await resolveProvider(await aiOptions());
+    if (!resolved.provider) return void vscode.window.showWarningMessage(`Miyagi: ${resolved.reason}`);
+    const provider = resolved.provider;
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Miyagi: asking ${provider.label} how ${path.basename(root)} works`,
+        cancellable: true,
+      },
+      async (_progress, token) => {
+        const abort = new AbortController();
+        token.onCancellationRequested(() => abort.abort());
+        try {
+          const files = await trackedFiles(root);
+          if (!files.length) throw new Error("no tracked files were found in that repository");
+          const chosen = chooseFiles(files, { tree: 220, heads: 9 });
+          const heads: Array<{ file: string; head: string }> = [];
+          for (const file of chosen.heads) {
+            const head = await engine.headOf(root, file, /readme/i.test(file) ? 60 : 45);
+            if (head?.trim()) heads.push({ file, head });
+          }
+          const prompt = projectMapPrompt(
+            { name: path.basename(root), tree: chosen.tree, totalFiles: files.length, heads },
+            (await engine.status()).depth,
+          );
+          const reply = await provider.run(prompt, abort.signal);
+          await context.globalState.update(
+            METER_KEY,
+            recordCall(currentMeter(context.globalState.get(METER_KEY)), prompt.system.length + prompt.user.length, reply.length),
+          );
+          const text = [
+            `# How ${path.basename(root)} works`,
+            "",
+            `_Written by ${provider.label} on ${new Date().toISOString().slice(0, 10)} from ${chosen.tree.length} of ${files.length} file names and the first lines of ${heads.length} files. It has not read the whole project, so treat it as a map to check, not a fact sheet._`,
+            "",
+            reply,
+            "",
+          ].join("\n");
+          await showMarkdown("maps", `${path.basename(root).replace(/[^\w.-]+/g, "-")}.md`, text);
+          void panel.pushState();
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          if (reason !== "cancelled") void vscode.window.showWarningMessage(`Miyagi could not write the map: ${reason}`);
+        }
+      },
+    );
+  });
+
+  /* ---- AI and capture ------------------------------------------- */
 
   register("miyagi.chooseAi", async () => {
     const options = await aiOptions();
@@ -285,9 +554,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       placeHolder: "It runs on your own account with that provider. Miyagi has no key of its own.",
     });
     if (!picked) return;
-    await vscode.workspace
-      .getConfiguration("miyagi")
-      .update("ai.provider", picked.value, vscode.ConfigurationTarget.Global);
+    await config().update("ai.provider", picked.value, vscode.ConfigurationTarget.Global);
   });
 
   register("miyagi.enableCapture", async () => {
@@ -339,11 +606,66 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     void panel.pushState();
   });
 
+  /* ---- what is going on ----------------------------------------- */
+
+  const output = vscode.window.createOutputChannel("Miyagi");
+  context.subscriptions.push(output);
+  register("miyagi.doctor", async () => {
+    const options = await aiOptions();
+    const [found, hooks, status] = await Promise.all([available(options), installedHooks(workspaceDir()), engine.status()]);
+    let editorList: string[] = [];
+    try {
+      editorList = ((await options.editor?.list()) ?? []).map((m) => `${m.name} (${m.family})`);
+    } catch {
+      editorList = [];
+    }
+    const q = quiet();
+    const lines = [
+      `Miyagi ${context.extension.packageJSON.version} in ${vscode.env.appName} ${vscode.version} on ${process.platform}`,
+      "",
+      "WATCHING",
+      `  enabled: ${config().get("watch.enabled", true)}`,
+      `  repositories: ${watcher?.getRoots().join(", ") || "(none)"}`,
+      `  folders without git: ${watcher?.getPlainRoots().join(", ") || "(none)"}`,
+      `  excluded: ${(watcher?.getAllRoots() ?? []).filter((r) => !watcher?.getRoots().includes(r)).join(", ") || "(none)"}`,
+      `  ignore patterns: ${config().get<string[]>("watch.ignore", []).join(", ") || "(none)"}`,
+      `  quiet: ${q.quiet ? (q.why === "paused" ? `paused until ${q.until.toLocaleString()}` : "quiet hours") : "no"}`,
+      "",
+      "AI FOR EXPLANATIONS",
+      `  setting: ${options.setting}${options.model ? `, model ${options.model}` : ""}`,
+      `  in use: ${found.length && options.setting !== "off" ? (options.setting === "auto" ? found[0].label : found.find((a) => a.id === options.setting)?.label ?? "(not available)") : "(none)"}`,
+      ...found.map((a) => `  found: ${a.id}: ${a.label}  [${a.detail}]`),
+      `  editor language-model API: ${options.editor ? `present, ${editorList.length} model(s)${editorList.length ? ": " + editorList.join(", ") : ""}` : "not offered by this editor"}`,
+      `  ${describeMeter(currentMeter(context.globalState.get(METER_KEY)))}`,
+      `  find ideas with AI: ${config().get("ai.findIdeas", "off")}`,
+      "",
+      "COMMAND CAPTURE",
+      `  assistants found: ${clientsHere().map((c) => CLIENT_NAMES[c]).join(", ") || "(none)"}`,
+      ...(hooks.length ? hooks.map((h) => `  hook: ${CLIENT_NAMES[h.client]} (${h.scope}) in ${h.file}`) : ["  hook: not installed"]),
+      `  hook script: ${hookScriptPath()} ${fs.existsSync(hookScriptPath()) ? "(present)" : "(missing)"}`,
+      `  runs on: ${hookRuntime(process.execPath) ?? "nothing found (install Node.js)"}`,
+      "",
+      "IDEAS AND PROGRESS",
+      `  profile: ${profileDir()}`,
+      `  ideas: ${status.concepts} (${aiIdeaCount()} found by AI, ${packs.reduce((n, p) => n + p.added.length, 0)} from pack files)`,
+      ...packs.flatMap((p) => [
+        `  pack ${p.file}: ${p.error ? `skipped, ${p.error}` : `${p.added.length} idea(s)`}`,
+        ...p.rejected.map((r) => `    rejected ${r.id}: ${r.reason}`),
+      ]),
+      `  level ${status.level} (${status.rank}), ${status.xp} XP, ${status.discovered} found, ${status.dueQuestions} due`,
+      "",
+    ];
+    output.clear();
+    output.appendLine(lines.join("\n"));
+    output.show(true);
+  });
+
   // Paths move when Node, the editor or this extension is updated. An
   // installed hook is rewritten with today's paths before it can go stale.
   void healCapture(captureOptions()).catch(() => undefined);
 
   await watcher.start();
+  void engine.status().then(renderStatus);
 
   if (!context.globalState.get<boolean>(WELCOMED_KEY)) {
     void context.globalState.update(WELCOMED_KEY, true);
@@ -367,6 +689,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     roots: () => watcher?.getRoots() ?? [],
     lessons: () => panel.summary(),
     viewId: () => viewId,
+    ready: () => Boolean(watcher?.isReady()),
   };
 }
 

@@ -681,3 +681,298 @@ footer p {
 p.where {
   font-size: 0.92em;
 }
+
+/* ---- banners, heartbeat, nudges --------------------------------- */
+
+.banner {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 0.92em;
+}
+
+.banner .link {
+  margin-left: 6px;
+}
+
+.pulse {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: var(--gap);
+  font-size: 0.92em;
+  color: var(--muted);
+}
+
+.dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  transform: translateY(-1px);
+}
+
+.nudge {
+  margin-bottom: var(--gap);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* ---- tags ------------------------------------------------------- */
+
+.tags {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.tag.risk {
+  color: var(--miss);
+  border-color: var(--miss);
+}
+
+.tag.verdict-right {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.tag.verdict-partly {
+  color: var(--vscode-charts-yellow, #cca700);
+  border-color: var(--vscode-charts-yellow, #cca700);
+}
+
+.tag.verdict-wrong {
+  color: var(--miss);
+  border-color: var(--miss);
+}
+
+.card-head:disabled {
+  cursor: default;
+}
+
+/* ---- blocks inside a card or lesson ----------------------------- */
+
+.block,
+.note {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.block h4,
+.quiz h4 {
+  margin-bottom: 6px;
+  font-size: 0.85em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.block p:last-child,
+.note p:last-child {
+  margin-bottom: 0;
+}
+
+.note.busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.note.error {
+  border-color: var(--miss);
+}
+
+.by {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.asked {
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}
+
+.followup {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.origin,
+.builds-on {
+  margin-top: 10px;
+  font-size: 0.92em;
+}
+
+/* ---- text entry ------------------------------------------------- */
+
+input[type="text"],
+textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--border));
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+textarea {
+  display: block;
+  resize: vertical;
+}
+
+input[type="text"]:focus-visible,
+textarea:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--muted));
+}
+
+.ask {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ask input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- more options, lesson tools --------------------------------- */
+
+.more {
+  margin-top: 10px;
+  font-size: 0.92em;
+}
+
+.disclose {
+  color: var(--muted);
+}
+
+.more-list,
+.lesson-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+}
+
+.lesson-tools {
+  margin: 4px 0 8px;
+  font-size: 0.92em;
+}
+
+button.chip {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: none;
+  color: var(--vscode-foreground);
+  line-height: inherit;
+}
+
+/* ---- find the bug ----------------------------------------------- */
+
+.code {
+  margin-bottom: 8px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+}
+
+.codeline {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  min-width: max-content;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--vscode-foreground);
+  text-align: left;
+  line-height: 1.5;
+}
+
+.codeline:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.codeline code {
+  padding: 0;
+  background: none;
+  white-space: pre;
+}
+
+.ln {
+  flex-shrink: 0;
+  width: 2em;
+  text-align: right;
+  color: var(--muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  user-select: none;
+}
+
+.codeline.right {
+  box-shadow: inset 3px 0 0 var(--ok);
+  background: var(--vscode-diffEditor-insertedLineBackground, rgba(63, 185, 80, 0.15));
+}
+
+.codeline.wrong {
+  box-shadow: inset 3px 0 0 var(--miss);
+  opacity: 0.7;
+}
+
+.codeline:disabled {
+  cursor: default;
+}
+
+/* ---- risks and walkthrough -------------------------------------- */
+
+.risks ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.risks li {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.risks li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.risks li p {
+  margin: 4px 0 0;
+}
+
+.walk {
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.walk .actions {
+  margin-top: 8px;
+}

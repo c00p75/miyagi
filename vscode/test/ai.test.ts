@@ -4,13 +4,13 @@ import {
   available,
   customProvider,
   editorProvider,
-  explainPrompt,
   findBinary,
   resolveProvider,
   runProcess,
   type AiOptions,
   type EditorModels,
 } from "../src/ai.js";
+import { explainPrompt } from "../src/prompts.js";
 
 const base: AiOptions = { setting: "auto", model: "", customCommand: "", editor: null, bundled: {} };
 const never = new AbortController().signal;
