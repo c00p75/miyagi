@@ -1,11 +1,12 @@
 {
   "name": "miyagi-mcp",
-  "version": "3.0.0",
-  "description": "A patient, gamified, voice-enabled MCP coding tutor. You run the commands; it drills, corrects, and keeps score.",
+  "version": "3.1.0",
+  "description": "Learn while you vibe code. An MCP tutor that watches what your AI assistant builds, teaches the few ideas worth owning, and brings them back until they stick.",
   "type": "module",
   "bin": {
     "miyagi": "dist/miyagi.js",
-    "miyagi-mcp": "dist/miyagi.js"
+    "miyagi-mcp": "dist/miyagi.js",
+    "miyagi-observe": "dist/observe-cli.js"
   },
   "main": "dist/miyagi.js",
   "files": [
@@ -14,7 +15,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && chmod +x dist/miyagi.js",
+    "build": "tsc && chmod +x dist/miyagi.js dist/observe-cli.js",
     "start": "node dist/miyagi.js",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
@@ -38,6 +39,11 @@
   "license": "MIT",
   "author": "George M'sapenda",
   "keywords": [
+    "vibe-coding",
+    "learn-to-code",
+    "spaced-repetition",
+    "claude-code",
+    "hooks",
     "mcp",
     "model-context-protocol",
     "mcp-server",

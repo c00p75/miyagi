@@ -24,6 +24,9 @@ import { allTracks, loadUserTracks, roadmapsDir, verifiableSteps } from "./roadm
 import { hostShell, execShellName } from "./platform.js";
 import { generatedCachePath, loadGeneratedCache } from "./sampling.js";
 import { QUIZ_BANK } from "./quiz.js";
+import { CONCEPTS, CONCEPT_QUESTIONS } from "./concepts.js";
+import { observationsPath, readCursor, readObservations } from "./observe.js";
+import { hookInstalled } from "./setup.js";
 
 const exec = promisify(execCb);
 
@@ -218,6 +221,28 @@ async function checkExecShell(): Promise<Check> {
   }
 }
 
+async function checkCapture(): Promise<Check> {
+  const claude = await hookInstalled("claude");
+  const cursor = await hookInstalled("cursor");
+  const all = await readObservations();
+  const pending = (await readObservations({ since: await readCursor() })).length;
+  const pack = `${CONCEPTS.length} techniques, ${CONCEPT_QUESTIONS.length} recall questions`;
+  if (!claude && !cursor) {
+    return {
+      name: "Ride-along capture",
+      status: "warn",
+      detail: `not installed for this project or globally (${pack} in the pack)`,
+      fix: "Run `npx miyagi-mcp --setup` so the tutor notices what your assistant does. `explain_change` and `debrief` still work from the git diff without it.",
+    };
+  }
+  const where = [claude ? `Claude Code (${claude})` : "", cursor ? `Cursor (${cursor})` : ""].filter(Boolean).join(", ");
+  return {
+    name: "Ride-along capture",
+    status: "ok",
+    detail: `installed for ${where}; ${all.length} observations logged, ${pending} waiting for a debrief (${observationsPath()}); ${pack}`,
+  };
+}
+
 export async function runDoctor(write: (line: string) => void = console.log): Promise<number> {
   const checks: Check[] = [];
   checks.push(await checkNode());
@@ -227,6 +252,7 @@ export async function runDoctor(write: (line: string) => void = console.log): Pr
   checks.push(await checkHistory());
   checks.push(...(await checkTracks()));
   checks.push(await checkQuizzes());
+  checks.push(await checkCapture());
   checks.push(await checkSpeech());
 
   write(`miyagi ${VERSION} — doctor`);

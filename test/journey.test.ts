@@ -38,7 +38,8 @@ after(() => client?.close());
 test("the first response orients a new user, and only the first", async () => {
   const first = await client.text("get_user_stats");
   assert.match(first, /First run/, "a new install explains itself once");
-  assert.match(first, /verify_step/);
+  assert.match(first, /explain_change/);
+  assert.match(first, /review_due_items/);
   const second = await client.text("get_user_stats");
   assert.ok(!/First run/.test(second), "and never again, or it is noise by the third card");
 });

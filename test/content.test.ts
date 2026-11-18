@@ -103,6 +103,7 @@ test("the brief never tells the model to do the work for the learner", () => {
     stdoutExcerpt: "",
   });
   assert.match(brief, /Do not answer the quiz for them/);
+  assert.match(brief, /user story/);
 });
 
 test("diagrams are command-specific where a specific one exists", () => {

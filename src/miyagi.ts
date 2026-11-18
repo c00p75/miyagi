@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
  * miyagi
- * A patient, gamified, voice-enabled MCP coding tutor.
+ * A patient, gamified, voice-enabled MCP coding tutor for people who build
+ * with AI.
  *
- * Wax on, wax off: the learner runs every command themselves. This server
- * drills, corrects, catches the falls, and keeps score. It never does the
- * work for them.
+ * The assistant writes the code; this server makes sure the person understood
+ * it. It watches what was built (through an editor hook, or by reading the
+ * diff), picks the few ideas worth owning, ties each to a real line, and brings
+ * the question back on a spaced schedule until it sticks. It also still does
+ * what it began as: hand out a command, let the learner run it, verify the
+ * outcome. Wax on, wax off.
  *
  * Transport: stdio. NOTHING may be written to stdout except MCP frames.
  * All diagnostics go to stderr.
@@ -45,17 +49,45 @@ import {
   type Category,
   type RoadmapStep,
 } from "./roadmaps.js";
-import { binOf, conceptFor, type SkillLevel } from "./content.js";
+import { binOf, conceptFor, contentFor, type SkillLevel } from "./content.js";
+import { beltForBox, conceptBin, conceptById, questionsForConcept, type ConceptHit } from "./concepts.js";
+import {
+  UNSEEN,
+  dojoRows,
+  dojoSummary,
+  mergeSightings,
+  pickConceptQuestion,
+  rankSightings,
+  renderConceptCard,
+  renderDojo,
+  summariseObservations,
+  tutorBrief,
+  type Familiarity,
+  type Sighting,
+} from "./teach.js";
+import { pruneObservations, readCursor, readObservations, runObserveHook, writeCursor } from "./observe.js";
+import { changesFromFile, changesFromText, conceptsIn, gitChanges, type FoundChanges } from "./changes.js";
+import { AGENT_RULES, anyHookInstalled, runSetup } from "./setup.js";
 import { isSameCommand, runCheckpoint, type CheckpointResult } from "./checkpoint.js";
 import { execShellName, hostShell, posixEscapeHatch } from "./platform.js";
 import {
   ask,
+  allQuestions,
   grade,
   generatedCount,
   pickQuestion,
   questionById,
   type AskedQuiz,
+  type QuizQuestion,
 } from "./quiz.js";
+import {
+  currentPlacement,
+  pickPlacementQuestions,
+  recommendTracks,
+  recordPlacementResult,
+  resetPlacementLog,
+  suggestSkillLevel,
+} from "./recommend.js";
 import {
   attachSampling,
   bankCovers,
@@ -82,6 +114,7 @@ import {
   awardXp,
   due,
   ensureReviewItem,
+  findReviewItem,
   gradeReviewItem,
   hydrate,
   masteryRows,
@@ -115,6 +148,7 @@ import {
   type DayResult,
   type XpResult,
 } from "./state.js";
+import { XP_CONCEPT_DISCOVERED, scoreQuizAnswer } from "./scoring.js";
 import {
   playerBlock,
   relative,
@@ -214,11 +248,12 @@ function onboarding(): string | null {
   onboardingShown = true;
   return [
     "> ### 👋 First run",
-    "> Nothing is saved yet, so here is the shape of it:",
-    `> 1. \`list_roadmaps\` — pick a track. There are ${allTracks().length}, and you can author your own.`,
-    "> 2. `get_next_roadmap_command` — it hands you a command. **You** run it, in your own terminal or through `run_teaching_command`.",
-    "> 3. `verify_step` — checks the outcome actually exists on your machine. That is what earns real XP; running a command is worth a token amount.",
-    "> 4. `review_due_items` — comes back later for whatever you got wrong. That is the part that turns practice into memory.",
+    "> Your assistant writes the code. I make sure it ends up in *your* head too.",
+    "> 1. **Build as usual.** When a piece of work is done, `explain_change` picks the few ideas in it worth owning and ties each to a real line.",
+    "> 2. **`debrief`** — what the assistant did while you watched. Run `npx miyagi-mcp --setup` once and it notices every command and edit on its own.",
+    "> 3. **`review_due_items`** — the questions come back days later, right before you would have forgotten. That is the part that makes it stick.",
+    "> 4. Each technique earns a belt, white to black, by being recalled cold. You cannot grind them; you have to build something.",
+    `> Want terminal and git practice too? \`list_roadmaps\` has ${allTracks().length} guided tracks.`,
     `> Progress saves to \`${profilePath()}\`. Nothing leaves your machine.`,
   ].join("\n");
 }
@@ -461,10 +496,21 @@ function playerOut() {
  * Server
  * ------------------------------------------------------------------ */
 
-const server = new McpServer({
-  name: "miyagi",
-  version: VERSION,
-});
+const server = new McpServer(
+  {
+    name: "miyagi",
+    version: VERSION,
+  },
+  {
+    instructions: [
+      "miyagi is a coding tutor for someone who builds with an AI assistant and wants to understand what gets built.",
+      "After you finish a meaningful change, call `explain_change` (no arguments reads the git diff) and teach from the card: tie each idea to the lines you just wrote, in two or three plain sentences, then ask its one question and pass the answer to `verify_quiz_answer`.",
+      "When the user asks what happened, or returns after a break, call `debrief`. At the start of a session, call `review_due_items` if anything is due.",
+      "Keep it short, concrete and a little fun. One idea at a time. Never lecture, never hold up the work to teach, and do not re-explain ideas a card marks as already theirs.",
+      "For terminal skills there are roadmap tracks: `list_roadmaps`, `get_next_roadmap_command`, `verify_step`.",
+    ].join(" "),
+  },
+);
 
 /* ---- quick_config -------------------------------------------------- *
  * Voice settings used to live in a second `configure_voice` tool that
@@ -484,7 +530,7 @@ server.registerTool(
       openWorldHint: false,
     },
     description:
-      "Set the teaching depth (Junior/Mid/Senior), roadmap category, track, topic, voice, and session mode (drill, ride-along, or focus). Call with no arguments to read the current configuration.",
+      "Set the teaching depth (Junior/Mid/Senior), roadmap category, track, topic, voice, and session mode (drill, ride-along, or focus). Call with no arguments to read the current configuration. `start_placement` opens an optional three-question depth check — never required, and never a reason to skip letting them pick.",
     inputSchema: {
       skill_level: z
         .enum(["Junior", "Mid", "Senior"])
@@ -507,6 +553,12 @@ server.registerTool(
         .boolean()
         .optional()
         .describe("Wipe saved XP, level, streaks, mastery and review queue back to first-run state."),
+      start_placement: z
+        .boolean()
+        .optional()
+        .describe(
+          "Open an optional 3-question placement (Junior, Mid, Senior). They can skip it and pick a depth themselves. Does not start a roadmap.",
+        ),
     },
   },
   async (args) => {
@@ -589,30 +641,66 @@ server.registerTool(
 
     if (args.test_phrase && voice.enabled) audioQueue.enqueue(args.test_phrase);
 
+    let placementBlocks: string[] = [];
+    const placementAsked: Array<{ quiz_id: string; question: string; level: string }> = [];
+    if (args.start_placement) {
+      resetPlacementLog();
+      const questions = pickPlacementQuestions(allQuestions(), session.recentQuizIds);
+      for (const [i, question] of questions.entries()) {
+        const open = openQuiz(
+          ask(question, "placement", { salt: `placement:${i}`, placement: true }),
+        );
+        placementAsked.push({ quiz_id: open.token, question: open.question, level: question.level });
+        placementBlocks.push(
+          `### ${question.level}\n${quizBlock({ quiz: open, token: open.token })}`,
+        );
+      }
+      changes.push("opened an optional placement test (3 questions, no XP)");
+    }
+
     if (!changes.length) {
       return textResult(`## ⚙️ Configuration\n${status}`);
     }
 
     schedulePersist();
     record({ kind: "config", label: "quick_config", detail: changes.join("; "), xpAwarded: 0 });
-    if (!args.test_phrase) {
+    if (!args.test_phrase && !args.start_placement) {
       audioQueue.enqueue(
         `Configuration updated. Teaching at ${session.skillLevel} level on ${activeRoadmap.roadmap_name}.`,
       );
     }
 
-    return textResult(
-      [
-        "## ⚙️ Quick Config Applied",
-        changes.map((c) => `- ${c}`).join("\n"),
-        warnings.length ? "\n### ⚠️ Warnings\n" + warnings.map((w) => `- ${w}`).join("\n") : "",
-        "",
-        "### Now",
-        status,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
+    const placementNote = args.start_placement
+      ? [
+          "",
+          "## Optional placement",
+          "These gauge teaching depth. They do not start a track and they do not pay XP.",
+          "Ask **one at a time**, wait, and grade with `verify_quiz_answer` using the quiz_id.",
+          "They can skip the rest and pick Junior, Mid, or Senior themselves.",
+          "",
+          ...placementBlocks,
+        ]
+      : [];
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            "## ⚙️ Quick Config Applied",
+            changes.map((c) => `- ${c}`).join("\n"),
+            warnings.length ? "\n### ⚠️ Warnings\n" + warnings.map((w) => `- ${w}`).join("\n") : "",
+            "",
+            "### Now",
+            status,
+            ...placementNote,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
+      structuredContent: { placement: placementAsked },
+    };
   },
 );
 
@@ -629,9 +717,17 @@ server.registerTool(
       openWorldHint: false,
     },
     description:
-      "List every available track, built-in and user-authored, with its category and step count. Call this before setting a roadmap name: previously an unknown name silently fell back to Command Line Basics.",
+      "List every available track, built-in and user-authored, with its category and step count. Pass `interests` and `project` to rank a few suggestions — Command Line Basics is never forced. Call this before setting a roadmap name.",
     inputSchema: {
       category: z.enum(CATEGORIES as [Category, ...Category[]]).optional(),
+      interests: z
+        .string()
+        .optional()
+        .describe("What they want to get better at, in their own words."),
+      project: z
+        .string()
+        .optional()
+        .describe("What they are building (stack, product, or a one-line README)."),
       reload: z
         .boolean()
         .default(false)
@@ -648,12 +744,22 @@ server.registerTool(
           active: z.boolean(),
         }),
       ),
+      recommendations: z.array(
+        z.object({
+          name: z.string(),
+          category: z.string(),
+          reason: z.string(),
+          score: z.number(),
+        }),
+      ),
+      suggested_level: z.string(),
+      suggested_level_reason: z.string(),
       user_dir: z.string(),
       loaded_user_tracks: z.number(),
       skipped_files: z.array(z.string()),
     },
   },
-  async ({ category, reload }) => {
+  async ({ category, interests, project, reload }) => {
     const report = reload ? await loadUserTracks() : null;
     const tracks = allTracks()
       .filter((t) => !category || t.category === category)
@@ -675,7 +781,42 @@ server.registerTool(
       byCategory.set(r.category, list);
     }
 
+    const lookup = findTrack(activeRoadmap.roadmap_name);
+    const remainingOnActive = lookup.matched
+      ? Math.max(0, lookup.track.steps.length - activeRoadmap.step_index)
+      : 0;
+    const recommendations = recommendTracks({
+      tracks: allTracks().map((t) => ({
+        name: t.name,
+        category: t.category,
+        description: t.description,
+        source: t.source,
+        steps: t.steps.map((s) => ({ topic: s.topic, command: s.command })),
+      })),
+      xp: player.xp,
+      interests,
+      project,
+      activeName: activeRoadmap.roadmap_name,
+      remainingOnActive,
+      strongBins: strongSpots().map((r) => r.bin),
+    });
+    const depth = suggestSkillLevel({
+      xp: player.xp,
+      playerLevel: player.level,
+      strongBins: strongSpots().map((r) => r.bin),
+      placement: currentPlacement().length >= 3 ? currentPlacement() : null,
+    });
+
     const lines = ["# 🗺️ Available Roadmaps", ""];
+    lines.push("## Suggested for you");
+    lines.push(
+      "Ranked from XP, this profile, and what you said you are building. **You pick.** Command Line Basics is not required.",
+    );
+    lines.push(`Suggested depth: **${depth.level}** — ${depth.reason}`);
+    for (const rec of recommendations) {
+      lines.push(`- **${rec.name}** (${rec.category}) — ${rec.reason}`);
+    }
+    lines.push("");
     for (const [cat, list] of byCategory) {
       lines.push(`## ${cat}`);
       for (const r of list) {
@@ -693,10 +834,13 @@ server.registerTool(
     if (report?.skipped.length) {
       lines.push("", "### ⚠️ Skipped files", report.skipped.map((s) => `- ${s}`).join("\n"));
     }
-    lines.push("", "_Set one with `quick_config` or `set_active_roadmap`._");
+    lines.push("", "_Set one with `quick_config` or `set_active_roadmap`. Do not start a track until they choose._");
 
     return result(lines.join("\n"), {
       tracks: rows,
+      recommendations,
+      suggested_level: depth.level,
+      suggested_level_reason: depth.reason,
       user_dir: roadmapsDir(),
       loaded_user_tracks: report?.loaded ?? rows.filter((r) => r.source === "user").length,
       skipped_files: report?.skipped ?? [],
@@ -1175,6 +1319,57 @@ server.registerTool(
 
     openQuizzes.delete(quiz.token);
     const given = answer.trim();
+    if (quiz.placement) {
+      const deterministic = grade(quiz, given);
+      let correct = deterministic.correct;
+      let modelReason: string | null = null;
+      if (!correct) {
+        const verdict = await gradeProse({
+          question: quiz.question,
+          expected: quiz.answer,
+          explanation: quiz.explanation,
+          given,
+        });
+        if (verdict?.correct) {
+          correct = true;
+          modelReason = verdict.reason;
+        }
+      }
+      const qLevel = (questionById(quiz.id)?.level ?? "Junior") as SkillLevel;
+      const log = recordPlacementResult(qLevel, correct);
+      record({
+        kind: "quiz",
+        label: quiz.question,
+        bin: "placement",
+        correct,
+        detail: `placement ${qLevel} (${correct ? "hit" : "miss"})`,
+        xpAwarded: 0,
+      });
+      const done = log.length >= 3;
+      const suggestion = done ? suggestSkillLevel({ xp: player.xp, playerLevel: player.level, placement: log }) : null;
+      const lines = [
+        correct ? "# ✅ Placement — that one landed" : "# ❌ Placement — not that one",
+        "",
+        `**${qLevel}** · ${log.length} of 3`,
+        `**Answer:** ${quiz.answer}`,
+        modelReason ? `**Judged by meaning:** ${modelReason}` : "",
+        `**Why:** ${quiz.explanation}`,
+        "",
+        done && suggestion
+          ? `Suggested depth: **${suggestion.level}**. ${suggestion.reason} They still choose.`
+          : "_Next placement question, or they can skip and pick Junior / Mid / Senior._",
+        "",
+        "_Placement does not pay XP and does not start a track._",
+      ].filter(Boolean);
+      return result(lines.join("\n"), {
+        correct,
+        quiz_id: quiz.token,
+        answer: given,
+        xp_awarded: 0,
+        next_review_in: null,
+        player: playerOut(),
+      });
+    }
     const deterministic = grade(quiz, given);
     let correct = deterministic.correct;
     let modelReason: string | null = null;
@@ -1206,26 +1401,8 @@ server.registerTool(
     const day = touchDay();
 
     if (correct) {
-      player.quizStreak += 1;
-      player.bestStreak = Math.max(player.bestStreak, player.quizStreak);
-      // Streak multiplier caps at 2x: past that, XP stops meaning practice and
-      // starts meaning "answered the easy ones in a row".
-      const multiplier = 1 + Math.min(1, Math.floor(player.quizStreak / 3) * 0.25);
-      const base = quiz.review ? 30 : 25; // review is worth more; it is the harder recall
-      const amount = Math.round(base * multiplier);
-      const xp = awardXp(amount);
-
-      const newBadges: string[] = [];
-      const badgeFor = (n: number, badge: string) => {
-        if (player.quizStreak >= n && !player.badges.includes(badge)) {
-          player.badges.push(badge);
-          newBadges.push(badge);
-        }
-      };
-      badgeFor(3, "Sharpshooter 🔥");
-      badgeFor(5, "Deadeye 🎯");
-      badgeFor(10, "Unbreakable 💎");
-      if (newBadges.length) schedulePersist();
+      // The numbers live in scoring.ts, shared with the editor panel.
+      const { multiplier, base, amount, xp, newBadges } = scoreQuizAnswer(true, quiz.review);
 
       record({
         kind: quiz.review ? "review" : "quiz",
@@ -1273,9 +1450,7 @@ server.registerTool(
       });
     }
 
-    const lostStreak = player.quizStreak;
-    player.quizStreak = 0;
-    const xp = awardXp(5); // consolation XP for attempting
+    const { lostStreak, xp } = scoreQuizAnswer(false, quiz.review); // consolation XP for attempting
 
     record({
       kind: quiz.review ? "review" : "quiz",
@@ -1637,6 +1812,9 @@ server.registerTool(
       `**${counts.due}** due now of ${counts.total} scheduled (${counts.dueQuiz} questions, ${counts.dueCommand} commands).`,
       next ? `Next item due ${relative(next)}.` : "_Nothing scheduled ahead._",
       "",
+      "## 🥋 Dojo",
+      dojoSummary(dojoRows(conceptFamiliarity)) + " — the full board is at `miyagi://dojo`.",
+      "",
       "## 📈 Lifetime",
       `- Practice days: **${stats.days}** · first recorded ${relative(stats.firstAt)}`,
       `- Commands practised: **${stats.commands}**`,
@@ -1725,6 +1903,385 @@ server.registerTool(
         quizzes_correct: stats.quizzesCorrect,
         days: stats.days,
       },
+    });
+  },
+);
+
+/* ------------------------------------------------------------------ *
+ * Learning from what the assistant did
+ *
+ * Everything above teaches a command the learner was handed. These two tools
+ * teach the code an assistant wrote while the learner watched, which is where
+ * someone building with AI actually spends their day. `explain_change` reads a
+ * change; `debrief` reads the hook's log of a whole session. Both end in the
+ * same place: a few ideas, each tied to a real line, each with a question that
+ * comes back on the review schedule.
+ * ------------------------------------------------------------------ */
+
+
+function conceptFamiliarity(id: string): Familiarity {
+  const items = questionsForConcept(id)
+    .map((q) => findReviewItem("quiz", q.id))
+    .filter((i): i is NonNullable<typeof i> => Boolean(i));
+  if (!items.length) return UNSEEN;
+  return {
+    seen: true,
+    box: Math.max(...items.map((i) => i.box)),
+    lapses: items.reduce((n, i) => n + i.lapses, 0),
+  };
+}
+
+const LEARN_OUT = {
+  source: z.string(),
+  files: z.array(z.string()),
+  concepts: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      file: z.string(),
+      status: z.enum(["new", "learning", "later", "solid"]),
+    }),
+  ),
+  new_concepts: z.number(),
+  commands_observed: z.number(),
+  quiz_id: z.string(),
+  xp_awarded: z.number(),
+  capture_installed: z.boolean(),
+  player: z.object(PLAYER_OUT),
+};
+
+interface LessonInput {
+  heading: string;
+  intro: string[];
+  changes: Array<{ file: string; concepts: ConceptHit[] }>;
+  source: string;
+  limit: number;
+  quiz: boolean;
+  commandsObserved: number;
+  captureInstalled: boolean;
+  /** Shown when nothing recognisable was found. */
+  emptyNote: string;
+}
+
+function teachChanges(input: LessonInput) {
+  const level = session.skillLevel;
+  const sightings = mergeSightings(input.changes);
+  // Familiarity is read before anything is queued, so "new" means new.
+  const before = new Map(sightings.map((s) => [s.id, conceptFamiliarity(s.id)]));
+  const fam = (id: string) => before.get(id) ?? UNSEEN;
+  const ranked = rankSightings(sightings, fam, input.limit);
+  const files = [...new Set(input.changes.map((c) => c.file))];
+
+  let discovered = 0;
+  let firstQuestion: { id: string; question: QuizQuestion } | null = null;
+  for (const s of ranked.teach) {
+    const concept = conceptById(s.id);
+    if (!concept) continue;
+    const isNew = !fam(s.id).seen;
+    if (isNew) discovered++;
+    const question = pickConceptQuestion(s.id, level, session.recentQuizIds);
+    if (question) {
+      ensureReviewItem("quiz", question.id, question.question);
+      if (!firstQuestion) firstQuestion = { id: s.id, question };
+    }
+    record({
+      kind: "concept",
+      label: concept.title,
+      bin: conceptBin(s.id),
+      detail: `${isNew ? "discovered" : "seen again"} in ${s.file}`,
+      xpAwarded: isNew ? XP_CONCEPT_DISCOVERED : 0,
+    });
+  }
+
+  const xp: XpResult | null = discovered ? awardXp(discovered * XP_CONCEPT_DISCOVERED) : null;
+  const day: DayResult | null = ranked.teach.length ? touchDay() : null;
+  const policy = policyFor(session.mode);
+  const surfaced = shouldSurfaceCard(session.mode, false);
+  const quiz =
+    input.quiz && surfaced && firstQuestion
+      ? openQuiz(
+          ask(firstQuestion.question, conceptBin(firstQuestion.id), { salt: String(quizCounter + 1) }),
+        )
+      : null;
+
+  const dojo = dojoSummary(dojoRows(conceptFamiliarity));
+  const lines: string[] = [`# 🥋 ${input.heading}`, ""];
+
+  if (!surfaced) {
+    lines.push(
+      ranked.teach.length
+        ? `_Focus mode: **${ranked.teach.length}** idea${ranked.teach.length === 1 ? "" : "s"} from ${input.source} queued for review, nothing else. Ask again when you have attention to spare._`
+        : `_Focus mode. ${input.emptyNote}_`,
+    );
+  } else {
+    lines.push(...input.intro, "");
+    if (!ranked.teach.length && !ranked.solid.length) {
+      lines.push(input.emptyNote);
+    }
+    if (ranked.teach.length) {
+      lines.push(
+        ranked.teach.length === 1
+          ? "## The one idea worth owning here"
+          : `## ${ranked.teach.length} ideas worth owning here`,
+        "",
+        ...ranked.teach.map((s, i) => renderConceptCard(s, level, fam(s.id), i + 1) + "\n"),
+      );
+    }
+    if (ranked.later.length) {
+      lines.push(
+        `**Also in there, for next time:** ${ranked.later
+          .map((s) => `${conceptById(s.id)!.emoji} ${conceptById(s.id)!.title}`)
+          .join(" · ")}`,
+        "",
+      );
+    }
+    if (ranked.solid.length) {
+      lines.push(
+        `**Already yours:** ${ranked.solid
+          .map((s) => `${beltForBox(fam(s.id).box).emoji} ${conceptById(s.id)!.title}`)
+          .join(" · ")} — you have answered these cold, so no lecture.`,
+        "",
+      );
+    }
+    if (ranked.teach.length) lines.push(tutorBrief(ranked.teach, Boolean(quiz)), "");
+    if (quiz) {
+      lines.push(quizBlock({ quiz, token: quiz.token }), "");
+    } else if (ranked.teach.length) {
+      lines.push(
+        `_${ranked.teach.length === 1 ? "Its question is" : "Their questions are"} in your review queue. \`review_due_items\` brings ${ranked.teach.length === 1 ? "it" : "them"} back when the timing is right._`,
+        "",
+      );
+    }
+    if (discovered) {
+      lines.push(
+        `✨ **${discovered} new technique${discovered === 1 ? "" : "s"} discovered** · +${xp?.awarded ?? 0} XP`,
+      );
+    }
+    lines.push(`🥋 Dojo: ${dojo}`);
+    const foot = xpFootnote(xp, day);
+    if (foot && showsXpFootnote(session.mode, {
+      leveledUp: Boolean(xp?.leveledUp),
+      titleChanged: Boolean(xp?.titleChanged),
+      newBadges: [...(xp?.newBadges ?? []), ...(day?.newBadges ?? [])],
+      streakMilestone: Boolean(day?.newDay && [3, 7, 30].includes(day.dayStreak)),
+    })) {
+      lines.push("", foot);
+    }
+  }
+
+  if (policy.speak && ranked.teach.length) {
+    const top = conceptById(ranked.teach[0].id)!;
+    audioQueue.enqueue(
+      `${ranked.teach.length} idea${ranked.teach.length === 1 ? "" : "s"} from that change. First: ${top.title}. ${top.hook}` +
+        (quiz ? ` Question: ${quiz.question}` : ""),
+    );
+  }
+
+  const status = (s: Sighting, bucket: "teach" | "later" | "solid") =>
+    bucket === "solid" ? "solid" : bucket === "later" ? "later" : fam(s.id).seen ? "learning" : "new";
+  const out = (s: Sighting, bucket: "teach" | "later" | "solid") => ({
+    id: s.id,
+    title: conceptById(s.id)?.title ?? s.id,
+    file: s.file,
+    status: status(s, bucket) as "new" | "learning" | "later" | "solid",
+  });
+
+  return result(lines.join("\n"), {
+    source: input.source,
+    files,
+    concepts: [
+      ...ranked.teach.map((s) => out(s, "teach")),
+      ...ranked.later.map((s) => out(s, "later")),
+      ...ranked.solid.map((s) => out(s, "solid")),
+    ],
+    new_concepts: discovered,
+    commands_observed: input.commandsObserved,
+    quiz_id: quiz?.token ?? "",
+    xp_awarded: xp?.awarded ?? 0,
+    capture_installed: input.captureInstalled,
+    player: playerOut(),
+  });
+}
+
+const SETUP_HINT =
+  "Turn on ride-along capture once (`npx miyagi-mcp --setup`, then restart the editor) and every command and edit your assistant makes is noted for the next debrief — file names and ideas only, never contents.";
+
+/* ---- explain_change ------------------------------------------------ */
+server.registerTool(
+  "explain_change",
+  {
+    title: "Explain a Change",
+    description:
+      "Teach the ideas behind code that was just written. With no arguments it reads the uncommitted git changes (or the last commit) in the working directory. Pass `diff` for a specific diff or snippet, or `path` for one file. Returns up to `limit` ideas — each tied to a real line, with what it is, how it goes wrong and a question to ask — plus one recall question. Call this after finishing a feature or fix, before summarising the work. Read-only.",
+    annotations: {
+      title: "Explain a Change",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      diff: z.string().optional().describe("A unified diff, or a plain code snippet, to teach from."),
+      path: z
+        .string()
+        .optional()
+        .describe("A file to teach from. With `diff`, the file name the snippet belongs to."),
+      cwd: z.string().optional().describe("Project directory. Defaults to the server's working directory."),
+      limit: z.number().int().min(1).max(5).default(3).describe("How many ideas to teach now."),
+      quiz: z.boolean().default(true).describe("Ask one recall question on the top idea."),
+    },
+    outputSchema: LEARN_OUT,
+  },
+  async (args) => {
+    const cwd = args.cwd ?? process.cwd();
+    const captureInstalled = Boolean(await anyHookInstalled(cwd));
+    let found: FoundChanges;
+    if (args.diff?.trim()) {
+      found = changesFromText(args.diff, args.path);
+    } else if (args.path?.trim()) {
+      const fromFile = await changesFromFile(cwd, args.path);
+      if ("error" in fromFile) {
+        found = { changes: [], source: `\`${args.path}\``, kind: "none" };
+        return teachChanges({
+          heading: "Explain a Change",
+          intro: [],
+          changes: [],
+          source: found.source,
+          limit: args.limit,
+          quiz: false,
+          commandsObserved: 0,
+          captureInstalled,
+          emptyNote: fromFile.error,
+        });
+      }
+      found = fromFile;
+    } else {
+      found = await gitChanges(cwd);
+    }
+
+    const lines = found.changes.reduce((n, c) => n + c.addedLines, 0);
+    return teachChanges({
+      heading: "What just got built",
+      intro: found.changes.length
+        ? [
+            `From ${found.source}: **${found.changes.length}** file${found.changes.length === 1 ? "" : "s"}, **+${lines}** line${lines === 1 ? "" : "s"}.`,
+          ]
+        : [],
+      changes: conceptsIn(found.changes),
+      source: found.source || "this project",
+      limit: args.limit,
+      quiz: args.quiz,
+      commandsObserved: 0,
+      captureInstalled,
+      emptyNote: found.changes.length
+        ? "Nothing in this change matches a technique in the pack — it may be plain logic, styling or text. Still worth one question to your assistant: _“walk me through the riskiest line you just wrote.”_"
+        : found.kind === "none"
+        ? "No change to read: this is not a git repository, or there is nothing uncommitted and no commit yet. Pass `diff` or `path` to point at some code."
+        : "No added lines to read.",
+    });
+  },
+);
+
+/* ---- debrief ------------------------------------------------------- */
+server.registerTool(
+  "debrief",
+  {
+    title: "Debrief",
+    description:
+      "What the assistant did since the last debrief, and the few ideas in it worth understanding. Reads the ride-along capture log (commands run, files edited, techniques used) and falls back to the uncommitted git changes when capture is not installed. Call this when the user asks what just happened, returns from a break, or finishes a session.",
+    annotations: {
+      title: "Debrief",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      cwd: z.string().optional().describe("Project directory. Defaults to the server's working directory."),
+      limit: z.number().int().min(1).max(5).default(3).describe("How many ideas to teach now."),
+      quiz: z.boolean().default(true).describe("Ask one recall question on the top idea."),
+      replay: z
+        .boolean()
+        .default(false)
+        .describe("Include everything captured, not only what is new since the last debrief."),
+    },
+    outputSchema: LEARN_OUT,
+  },
+  async (args) => {
+    const cwd = args.cwd ?? process.cwd();
+    const captureInstalled = Boolean(await anyHookInstalled(cwd));
+    const cursor = args.replay ? null : await readCursor();
+    const observations = await readObservations({ since: cursor });
+
+    if (observations.length) {
+      const summary = summariseObservations(observations);
+      const bins = new Map<string, { count: number; example: string }>();
+      for (const c of summary.commands) {
+        const bin = binOf(c.command);
+        const row = bins.get(bin);
+        if (row) row.count += c.count;
+        else bins.set(bin, { count: c.count, example: c.command });
+      }
+      const topBins = [...bins.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 6);
+      const intro = [
+        `Since ${cursor ? `your last debrief (${relative(cursor)})` : "capture was turned on"}, your assistant ran **${summary.commandTotal}** command${summary.commandTotal === 1 ? "" : "s"} and edited **${summary.files.length}** file${summary.files.length === 1 ? "" : "s"} (+${summary.linesAdded} lines).`,
+      ];
+      if (topBins.length) {
+        intro.push(
+          "",
+          "**At the terminal:**",
+          ...topBins.map(([bin, row]) => {
+            const { content } = contentFor(row.example);
+            return `- \`${bin}\` ×${row.count}${content ? ` — ${content.concept}` : ""}`;
+          }),
+        );
+      }
+      if (summary.files.length) {
+        const shown = summary.files.slice(0, 8).map((f) => `\`${f}\``).join(", ");
+        intro.push("", `**Files touched:** ${shown}${summary.files.length > 8 ? ` and ${summary.files.length - 8} more` : ""}`);
+      }
+      const response = teachChanges({
+        heading: "Debrief",
+        intro,
+        changes: summary.changes,
+        source: "this session",
+        limit: args.limit,
+        quiz: args.quiz,
+        commandsObserved: summary.commandTotal,
+        captureInstalled,
+        emptyNote:
+          "Nothing in those edits matches a technique in the pack. Ask your assistant: _“what is the one decision in there I should be able to explain?”_",
+      });
+      if (summary.newest) await writeCursor(summary.newest);
+      void pruneObservations();
+      return response;
+    }
+
+    // Nothing captured. Git still knows what changed, so the tool is useful
+    // before anyone has installed a hook.
+    const found = await gitChanges(cwd);
+    const lines = found.changes.reduce((n, c) => n + c.addedLines, 0);
+    return teachChanges({
+      heading: "Debrief",
+      intro: found.changes.length
+        ? [
+            captureInstalled
+              ? `Nothing new captured since your last debrief, so this is from ${found.source}: **${found.changes.length}** file${found.changes.length === 1 ? "" : "s"}, **+${lines}** lines.`
+              : `Ride-along capture is off, so this is from ${found.source}: **${found.changes.length}** file${found.changes.length === 1 ? "" : "s"}, **+${lines}** lines.`,
+            ...(captureInstalled ? [] : ["", `> ${SETUP_HINT}`]),
+          ]
+        : [],
+      changes: conceptsIn(found.changes),
+      source: found.source || "this project",
+      limit: args.limit,
+      quiz: args.quiz,
+      commandsObserved: 0,
+      captureInstalled,
+      emptyNote: found.changes.length
+        ? "Nothing in those changes matches a technique in the pack."
+        : captureInstalled
+        ? "Nothing new since your last debrief, and no uncommitted changes. Go build something — I will be watching. 👀"
+        : `Nothing to debrief yet: no captured session and no uncommitted changes.\n\n> ${SETUP_HINT}`,
     });
   },
 );
@@ -1976,6 +2533,17 @@ server.registerResource(
 );
 
 server.registerResource(
+  "dojo",
+  "miyagi://dojo",
+  {
+    title: "The dojo",
+    description: "Every technique discovered so far, and the belt held in each.",
+    mimeType: "text/markdown",
+  },
+  async (uri) => markdown(uri.href, renderDojo(dojoRows(conceptFamiliarity))),
+);
+
+server.registerResource(
   "getting-started",
   "miyagi://getting-started",
   {
@@ -1989,17 +2557,27 @@ server.registerResource(
       [
         "# Getting started with miyagi",
         "",
-        "**You run the commands.** This server drills, corrects, keeps score, and never does the work for you.",
+        "**Your assistant writes the code. miyagi makes sure you understood it.**",
         "",
-        "## The loop",
-        "1. **`list_roadmaps`** — pick a track. Author your own by dropping JSON in `" + roadmapsDir() + "`.",
+        "## While you build with AI",
+        "1. **`explain_change`** — after a feature or fix, the few ideas in the change worth owning: what each is, how it bites, a question to put to your assistant, and one recall question. No arguments needed; it reads the git diff.",
+        "2. **`debrief`** — what the assistant did since you last looked: commands run, files touched, techniques used. Turn on capture once with `npx miyagi-mcp --setup` and it notices on its own. File names and ideas only; never contents.",
+        "3. **`review_due_items`** — the questions come back on a spacing ladder until they stick. A minute at the start of a session is enough.",
+        "4. **The dojo** (`miyagi://dojo`) — every technique you have discovered and the belt you hold in each. Belts rise with cold recall and drop with a miss.",
+        "",
+        "Add `npx miyagi-mcp --rules` to CLAUDE.md, AGENTS.md or .cursorrules and the assistant will do steps 1-3 without being asked.",
+        "",
+        "## Terminal and git practice",
+        "1. **`list_roadmaps`** — pick a track that matches what you are building. Author your own by dropping JSON in `" +
+          roadmapsDir() +
+          "`.",
         "2. **`get_next_roadmap_command`** — the next command, with the reason it comes next and the checkpoint it has to pass.",
         "3. **Run it yourself**, or through `run_teaching_command`. Default mode is ride-along; `quick_config` with `mode: \"drill\"` is the full card, quiz, and voice.",
-        "4. **`verify_step`** — a read-only probe confirms the outcome exists on your machine. This is where the XP is: " +
-          `${XP_CHECKPOINT_PASS} for a verified outcome against up to ${XP_COMMAND_ATTEMPT} for an attempt (less in quieter modes).`,
-        "5. **`review_due_items`** — whatever you got wrong comes back on a spacing ladder until it sticks.",
+        "4. **`verify_step`** — a read-only probe confirms the outcome exists on your machine: " +
+          `${XP_CHECKPOINT_PASS} XP for a verified outcome against up to ${XP_COMMAND_ATTEMPT} for an attempt.`,
         "",
         "## What is scored",
+        "- **Techniques discovered** in real code, once each. They cannot be farmed: the code has to exist.",
         "- **Verified outcomes**, once each. Re-passing a checkpoint pays nothing.",
         "- **Quiz answers**, with a streak multiplier. Review answers pay more than first sights.",
         "- **Practice days**, as a separate consecutive-day streak.",
@@ -2076,40 +2654,90 @@ server.registerResource(
 /* ------------------------------------------------------------------ *
  * Prompts
  *
- * A learner should not have to know tool names to start. These are the three
- * things anyone actually wants: drill me, test what I have forgotten, and
- * explain what just went wrong.
+ * A learner should not have to know tool names to start. These are the
+ * things anyone actually wants: ride along (the default), drill me, test
+ * what I have forgotten, and explain what just went wrong.
  * ------------------------------------------------------------------ */
 
 const userMessage = (text: string) => ({
   messages: [{ role: "user" as const, content: { type: "text" as const, text } }],
 });
 
+const sessionPromptArgs = {
+  roadmap: completable(
+    z.string().optional().describe("Track to practise. Leave empty to get recommendations first."),
+    (value) => trackNames().filter((n) => n.toLowerCase().includes(String(value ?? "").toLowerCase())),
+  ),
+  level: z.enum(["Junior", "Mid", "Senior"]).optional().describe("Teaching depth. Leave empty to get a suggestion."),
+  interests: z.string().optional().describe("What you want to get better at."),
+  project: z.string().optional().describe("What you are building right now."),
+};
+
+server.registerPrompt(
+  "ride-along",
+  {
+    title: "Ride along",
+    description: "The quiet default: a short card, no inline quiz, no voice.",
+    argsSchema: sessionPromptArgs,
+  },
+  ({ roadmap, level, interests, project }) =>
+    userMessage(
+      [
+        "Be my coding tutor for this session, using the miyagi tools.",
+        `Call quick_config with mode: "ride-along"${level ? ` and teaching depth ${level}` : ""}. Ride-along is the default; setting it makes the mode explicit.`,
+        "",
+        "Intake — do this before any command:",
+        roadmap
+          ? `Track: "${roadmap}" (verify it exists with list_roadmaps first).`
+          : [
+              "Do not start Command Line Basics unless they pick it.",
+              "Look at the workspace (package.json, README, recent files) and ask what they are building if it is unclear.",
+              `Call list_roadmaps with interests and project (${interests || project ? `interests: ${interests ?? "—"}, project: ${project ?? "inferred from the repo"}` : "inferred from the repo, plus anything they tell you"}).`,
+              "Offer the suggested tracks and the suggested depth. They choose. Then set the track with quick_config or set_active_roadmap.",
+            ].join(" "),
+        "",
+        "Loop, one step at a time, only after a track is chosen:",
+        "1. Call review_due_items first. Anything due gets cleared before new ground.",
+        "2. Call get_next_roadmap_command and show me the command with the reason it comes next.",
+        "3. Wait for me to say I have run it, or run it through run_teaching_command if I ask you to.",
+        "4. Teach from the card's tutor brief. Ground examples in their project as a short user story. Do not ask the quiz inline — ride-along queues recall for later.",
+        "",
+        "Rules: I run the commands. Do not skip ahead, do not switch to drill unless I ask, and stop after each step until I respond.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    ),
+);
+
 server.registerPrompt(
   "drill",
   {
     title: "Drill me",
-    description: "Start a practice session on a track, one command at a time.",
-    argsSchema: {
-      roadmap: completable(
-        z.string().optional().describe("Track to drill. Defaults to the active one."),
-        (value) => trackNames().filter((n) => n.toLowerCase().includes(String(value ?? "").toLowerCase())),
-      ),
-      level: z.enum(["Junior", "Mid", "Senior"]).optional().describe("Teaching depth."),
-    },
+    description: "A guided session: pick a track and depth, then one command at a time.",
+    argsSchema: sessionPromptArgs,
   },
-  ({ roadmap, level }) =>
+  ({ roadmap, level, interests, project }) =>
     userMessage(
       [
         "Be my coding tutor for this session, using the miyagi tools.",
-        roadmap ? `Track: "${roadmap}" (verify it exists with list_roadmaps first).` : "Use my active roadmap.",
-        level ? `Set my teaching depth to ${level} with quick_config.` : "",
+        `Call quick_config with mode: "drill"${level ? ` and teaching depth ${level}` : ""}.`,
         "",
-        "Loop, one step at a time:",
+        "Intake — stop here until they have chosen a track and a depth. Do not call get_next_roadmap_command yet. Do not start Command Line Basics or Junior unless they pick those.",
+        "1. Call get_user_stats. Read the workspace (package.json, README, source) so you know the project.",
+        "2. Ask what they want to get better at, and what they are building, if that is not already obvious.",
+        `3. Call list_roadmaps with interests and project (${interests || project ? `interests: "${interests ?? ""}", project: "${project ?? ""}"` : "from the repo and their answers"}). Offer the recommended tracks plus the rest as options, with a one-line why. They choose.`,
+        roadmap
+          ? `They already named a track: "${roadmap}". Verify it with list_roadmaps, still offer the recommendations in case they want to switch.`
+          : "",
+        "4. Depth: do not assume Junior. Offer Junior / Mid / Senior. Recommend the suggested_level from list_roadmaps. Optionally offer a 3-question placement via quick_config with start_placement: true — one question at a time, verify_quiz_answer, then they still pick. Skipping the test is fine.",
+        level ? `They already named a depth: ${level}. Use it unless the placement (if they take it) and they agree to change.` : "",
+        "5. Only then set the chosen track and skill_level with quick_config or set_active_roadmap.",
+        "",
+        "Loop, one step at a time, only after intake:",
         "1. Call review_due_items first. Anything due gets cleared before new ground.",
         "2. Call get_next_roadmap_command and show me the command with the reason it comes next.",
         "3. Wait for me to say I have run it, or run it through run_teaching_command if I ask you to.",
-        "4. Teach from the card's tutor brief, then ask me the quiz and grade it with verify_quiz_answer.",
+        "4. Teach from the card's tutor brief. Every example should be a short user story from their project when you can see it: who the user is, what they do, why this command is the next move. Then ask the quiz and grade it with verify_quiz_answer.",
         "",
         "Rules: I run the commands. Do not answer the quiz for me, do not skip ahead, and stop after each step until I respond.",
       ]
@@ -2164,6 +2792,42 @@ server.registerPrompt(
 );
 
 server.registerPrompt(
+  "debrief",
+  {
+    title: "Debrief me",
+    description: "What did the assistant just do, and what in it should I understand?",
+    argsSchema: {},
+  },
+  () =>
+    userMessage(
+      [
+        "Call the miyagi debrief tool and teach me from the card.",
+        "For each idea, show me the exact lines in my project it refers to and explain them in two or three plain sentences. One idea at a time; wait for me between them.",
+        "Then ask me the card's question and pass my answer to verify_quiz_answer. Keep it quick and a bit fun — I am mid-build, not in a lecture.",
+      ].join("\n"),
+    ),
+);
+
+server.registerPrompt(
+  "teach-me-this-change",
+  {
+    title: "Teach me what you just wrote",
+    description: "Turn the change you just made into a two-minute lesson.",
+    argsSchema: {
+      path: z.string().optional().describe("One file to focus on. Leave empty for everything uncommitted."),
+    },
+  },
+  ({ path: file }) =>
+    userMessage(
+      [
+        `Call the miyagi explain_change tool${file ? ` with path: "${file}"` : ""} and teach me from the card.`,
+        "Before you explain each idea, ask me what I think the code does — one guess, then correct me. Point at the real lines.",
+        "Finish with the card's question, and pass my answer to verify_quiz_answer.",
+      ].join("\n"),
+    ),
+);
+
+server.registerPrompt(
   "progress",
   {
     title: "Where am I?",
@@ -2209,7 +2873,7 @@ async function main(): Promise<void> {
   // Tell subscribed clients when saved state moves, so a sidebar reading the
   // profile is not showing a level the learner passed twenty minutes ago.
   onPersist(() => {
-    for (const uri of ["miyagi://profile", "miyagi://review", "miyagi://roadmap", "miyagi://insights"]) {
+    for (const uri of ["miyagi://profile", "miyagi://review", "miyagi://roadmap", "miyagi://insights", "miyagi://dojo"]) {
       void server.server.sendResourceUpdated({ uri }).catch(() => {});
     }
   });
@@ -2265,6 +2929,20 @@ if (invokedDirectly) {
         log("doctor failed:", err);
         process.exit(1);
       });
+  } else if (process.argv.slice(2).includes("--observe")) {
+    // The editor hook. Silent, and always a clean exit: see observe.ts.
+    runObserveHook()
+      .catch(() => 0)
+      .finally(() => process.exit(0));
+  } else if (process.argv.slice(2).some((a) => a === "--setup" || a === "setup")) {
+    runSetup(process.argv.slice(2))
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        log("setup failed:", err);
+        process.exit(1);
+      });
+  } else if (process.argv.slice(2).some((a) => a === "--rules" || a === "rules")) {
+    console.log(AGENT_RULES);
   } else if (process.argv.slice(2).some((a) => a === "--version" || a === "-v")) {
     console.log(VERSION);
   } else {

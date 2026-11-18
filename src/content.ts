@@ -1254,6 +1254,9 @@ export function teachingBrief(args: {
   if (args.stdoutExcerpt.trim()) {
     lines.push("> Reference the actual output when you explain it; do not describe output in the abstract.");
   }
+  lines.push(
+    "> Ground examples in **their** project when you can see the repo (package.json, README, recent files). Tell it as a short user story: who the user is, what they tap or type, and why this command is the next move. Do not invent a product they are not building. If you cannot see a project, use one concrete story, not abstract flags.",
+  );
   lines.push("> Then hand back to the quiz. Do not answer the quiz for them, and do not run the next command on their behalf.");
   return lines.join("\n");
 }
