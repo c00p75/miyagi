@@ -152,6 +152,7 @@ import {
   type XpResult,
 } from "./state.js";
 import { XP_CONCEPT_DISCOVERED, scoreQuizAnswer } from "./scoring.js";
+import { parseTerminalCommand, runTerminal } from "./terminal.js";
 import {
   playerBlock,
   relative,
@@ -2957,6 +2958,15 @@ if (invokedDirectly) {
       .then((code) => process.exit(code))
       .catch((err) => {
         log("setup failed:", err);
+        process.exit(1);
+      });
+  } else if (parseTerminalCommand(process.argv.slice(2), process.cwd())) {
+    // `watch`, `review`, `dojo`: the tutor with no host. Also not MCP, so the
+    // terminal is a person's and printing to it is the whole point.
+    runTerminal(parseTerminalCommand(process.argv.slice(2), process.cwd())!)
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        log("failed:", err);
         process.exit(1);
       });
   } else if (process.argv.slice(2).some((a) => a === "--rules" || a === "rules")) {

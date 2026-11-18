@@ -31,6 +31,7 @@
  */
 
 import type { QuizQuestion } from "./quiz.js";
+import { analyse } from "./structure.js";
 
 export type ConceptLevel = "Junior" | "Mid" | "Senior";
 
@@ -1911,10 +1912,24 @@ function evidenceOf(line: string): string {
 }
 
 /**
+ * Ideas whose evidence IS a comment or lives equally well in one: an escape
+ * hatch like `// @ts-ignore` is written as a comment, and a credential pasted
+ * into a comment is still a leaked credential. These are matched against the
+ * lines as written. Everything else is matched with comments blanked out, so
+ * prose about `await` is not mistaken for asynchronous code.
+ */
+const MATCH_RAW = new Set(["type-escape", "hardcoded-secret"]);
+
+/**
  * Finds the concepts a block of *added* text relies on.
  *
+ * Each pattern is tried against a line with its comments removed and, when
+ * the line is part of a statement that runs over several lines, against that
+ * whole statement (see structure.ts). A statement is counted once, and its
+ * first line is the evidence.
+ *
  * Lines over a few hundred characters are skipped: they are minified bundles
- * or data, and running two dozen expressions over them is where a regex-based
+ * or data, and running dozens of expressions over them is where a regex-based
  * scanner turns slow.
  */
 export function detectConcepts(filePath: string, added: string): ConceptHit[] {
@@ -1926,16 +1941,26 @@ export function detectConcepts(filePath: string, added: string): ConceptHit[] {
   if (/(^|\/)(node_modules|dist|build|\.next|vendor)\//.test(normalisedPath)) return [];
   if (/(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|\.min\.(js|css)|\.map)$/.test(normalisedPath)) return [];
 
+  const { code, statement } = analyse(normalisedPath, lines);
+
   const hits: ConceptHit[] = [];
   for (const concept of CONCEPTS) {
     if (concept.files && !concept.files.test(normalisedPath)) continue;
+    const raw = MATCH_RAW.has(concept.id);
     let count = 0;
     let first = "";
-    for (const line of lines) {
-      if (concept.patterns.some((re) => re.test(line))) {
-        count++;
-        if (!first) first = line;
-      }
+    let counted = "";
+    for (let i = 0; i < lines.length; i++) {
+      const line = raw ? lines[i] : code[i];
+      const whole = raw ? "" : statement[i];
+      const onLine = concept.patterns.some((re) => re.test(line));
+      const inStatement = !onLine && whole !== "" && whole !== counted && concept.patterns.some((re) => re.test(whole));
+      if (!onLine && !inStatement) continue;
+      // Every line of a multi-line statement carries the same joined text;
+      // once it has matched as a whole it must not match again per line.
+      if (inStatement) counted = whole;
+      count++;
+      if (!first) first = lines[i];
     }
     if (count) {
       hits.push({

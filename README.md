@@ -212,6 +212,18 @@ practice: *"Set my roadmap to Backend Developer and teach me `docker compose con
 
 Linux users who want audio: `sudo apt install speech-dispatcher`.
 
+## In a terminal
+
+No MCP client and no editor needed. The same ideas, questions, review schedule and profile:
+
+```bash
+npx miyagi-mcp watch      # teach from what changes in this repository, when the work pauses
+npx miyagi-mcp review     # answer what is due, from memory
+npx miyagi-mcp dojo       # what you have found, and the belt held in each
+```
+
+`watch` treats whatever was uncommitted when it started as old, and prints a card once a change has been still for twenty seconds. `review` shows each question alone first and the choices only after Enter. This is the way to use Miyagi beside a terminal agent, or inside JetBrains, Neovim or Zed.
+
 ## Tools
 
 For learning from what your assistant built:
