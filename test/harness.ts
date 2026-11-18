@@ -46,7 +46,10 @@ export class TestClient {
   constructor(private readonly options: ClientOptions) {
     this.child = spawn(process.execPath, [SERVER_ENTRY], {
       cwd: options.cwd,
-      env: { ...process.env, MIYAGI_HOME: options.home },
+      // HOME as well as MIYAGI_HOME: the server looks in ~/.claude and ~/.cursor
+      // for an installed capture hook, and a developer who has capture turned on
+      // would otherwise get different answers from these tests than CI does.
+      env: { ...process.env, MIYAGI_HOME: options.home, HOME: options.home, USERPROFILE: options.home },
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
 

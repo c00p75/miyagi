@@ -62,6 +62,8 @@ export interface CodeConcept {
 
 const CODE = /\.(jsx?|tsx?|mjs|cjs|py|rb|go|rs|java|kt|php|cs|swift|vue|svelte)$/i;
 const JS = /\.(jsx?|tsx?|mjs|cjs|vue|svelte)$/i;
+/** Code, plus the template files where markup is written by hand. */
+const MARKUP = /\.(jsx?|tsx?|mjs|cjs|py|rb|go|rs|java|kt|php|cs|swift|vue|svelte|html?|erb|ejs|hbs|jinja2?|j2|twig|njk)$/i;
 
 export const CONCEPTS: CodeConcept[] = [
   {
@@ -75,6 +77,9 @@ export const CONCEPTS: CodeConcept[] = [
       /["'`](sk|pk|rk)[-_](live|test|proj)[-_][A-Za-z0-9]{12,}/,
       /\b(ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}/,
       /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+      /\bAKIA[0-9A-Z]{16}\b/,
+      // A password inside a connection string. A `${...}` or `<placeholder>` is not one.
+      /:\/\/[^/\s:@]+:[^@\s$<{/]{6,}@/,
     ],
     hook: "Your house key is now taped to the front door.",
     what: "A real credential typed straight into a source file, so everyone who can read the code can use the key.",
@@ -106,6 +111,13 @@ export const CONCEPTS: CodeConcept[] = [
       /\bf["'](SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"']*\{/i,
       /\bf"(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"]*'\{/i,
       /["'](SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"']*%s[^"']*["']\s*%/i,
+      // A double-quoted query that opens an SQL quote before the value:
+      // `"... WHERE name = '" + name + "'"` and `"... = '%s'" % name`. The
+      // single quote belongs to the SQL, so only the double quote ends the string.
+      /"(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"]*"\s*\+/i,
+      /"(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"]*%s[^"]*"\s*%/i,
+      // PHP joins strings with a dot.
+      /["'](SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"']*["']\s*\.\s*\$\w/i,
     ],
     hook: "You just let strangers finish your sentences — and the database does whatever the sentence says.",
     what: "A database query assembled by dropping a value directly into the query text.",
@@ -207,7 +219,8 @@ export const CONCEPTS: CodeConcept[] = [
     patterns: [
       /\bprocess\.env\.[A-Z_]{2,}/,
       /\bimport\.meta\.env\.[A-Z_]{2,}/,
-      /\bos\.(environ|getenv)\b/,
+      /\bos\.(environ|getenv|Getenv|LookupEnv)\b/,
+      /\benv::var\(|\$_ENV\[|\bgetenv\(/,
       /\bENV\[["'][A-Z_]+["']\]/,
       /\bDeno\.env\.get\(/,
     ],
@@ -232,7 +245,11 @@ export const CONCEPTS: CodeConcept[] = [
     emoji: "🛂",
     weight: 70,
     files: null,
-    patterns: [/\bAccess-Control-Allow-(Origin|Credentials|Headers)\b/i, /\bcors\(/, /\bCORSMiddleware\b/],
+    patterns: [
+      /\bAccess-Control-Allow-(Origin|Credentials|Headers)\b/i,
+      /\bcors\(|\bcors\.(New|Default|AllowAll)\(/,
+      /\bCORSMiddleware\b|@CrossOrigin\b/,
+    ],
     hook: "The most-googled error in web development is the browser doing its job.",
     what: "The rule a server publishes about which other websites' pages may read its responses in a browser.",
     lens: {
@@ -281,6 +298,7 @@ export const CONCEPTS: CodeConcept[] = [
       /^\s*model\s+\w+\s*\{/,
       /\b(pgTable|sqliteTable|mysqlTable)\(/,
       /\b(add_column|create_table|op\.add_column|op\.create_table)\b/,
+      /\bclass \w+\(models\.Model\)/,
     ],
     hook: "Code you can rewrite on a whim. Data remembers everything you ever did to it.",
     what: "The declared shape of the stored data, and the ordered steps that change that shape over time.",
@@ -306,7 +324,10 @@ export const CONCEPTS: CodeConcept[] = [
     patterns: [
       /\bexport\s+(async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\b/,
       /\b(app|router)\.(get|post|put|patch|delete)\(\s*["'`]\//,
-      /@(app|router)\.(get|post|put|patch|delete|route)\(/,
+      /@(app|router|bp|api|blueprint)\.(get|post|put|patch|delete|route)\(/,
+      // NestJS and Spring name the method in a decorator.
+      /^\s*@(Get|Post|Put|Patch|Delete)\(|@(Get|Post|Put|Patch|Delete|Request)Mapping\b/,
+      /\bhttp\.HandleFunc\(|\b(r|router|e|g|mux)\.(GET|POST|PUT|PATCH|DELETE)\(\s*"/,
       /\bNextResponse\.json\(|\bres\.status\(\d+\)/,
     ],
     hook: "You just opened a door onto the internet. Doors do not check who is knocking.",
@@ -352,7 +373,15 @@ export const CONCEPTS: CodeConcept[] = [
     emoji: "🪂",
     weight: 60,
     files: CODE,
-    patterns: [/\bcatch\s*(\(|\{)/, /\.catch\(/, /^\s*except\b.*:/, /\bthrow\s+new\s+\w*Error\(/, /^\s*raise\s+\w+/],
+    patterns: [
+      /\bcatch\s*(\(|\{)/,
+      /\.catch\(/,
+      /^\s*except\b.*:/,
+      /\bthrow\s+new\s+\w*Error\(/,
+      /^\s*raise\s+\w+/,
+      /\bif err != nil\b/,
+      /^\s*rescue\b/,
+    ],
     hook: "The happy path is a demo. This is the part that decides what Monday looks like.",
     what: "The code that decides what happens when an operation does not succeed.",
     lens: {
@@ -418,7 +447,13 @@ export const CONCEPTS: CodeConcept[] = [
     emoji: "⏳",
     weight: 55,
     files: CODE,
-    patterns: [/\bawait\s+\w/, /\basync\s+(function|def|\(|\w+\s*=>)/, /\bPromise\.(all|allSettled|race)\(/],
+    patterns: [
+      /\bawait\s+\w/,
+      /\basync\s+(function|def|\(|\w+\s*=>)/,
+      /\bPromise\.(all|allSettled|race)\(/,
+      // Rust writes it after the call: `client.get(url).send().await?`.
+      /\)\.await\b/,
+    ],
     hook: "Ordering coffee: you get a buzzer, not a coffee. `await` is standing there until it buzzes.",
     what: "Code that starts something slow, such as a network request, and continues when the answer arrives.",
     lens: {
@@ -441,10 +476,16 @@ export const CONCEPTS: CodeConcept[] = [
     weight: 55,
     files: /(^|\/)(package\.json|requirements[\w.-]*\.txt|pyproject\.toml|Gemfile|go\.mod|Cargo\.toml)$/,
     patterns: [
-      /^\s*"[@\w][\w./-]*"\s*:\s*"[\^~]?\d+\.\d+/,
+      // The project's own `"version": "1.0.0"` has the same shape and is not a dependency.
+      /^\s*"(?!version")[@\w][\w./-]*"\s*:\s*"[\^~]?\d+\.\d+/,
       /^[A-Za-z][\w.-]*\s*(==|>=|~=)\s*\d/,
       /^\s*gem\s+["']\w/,
-      /^\s*[\w-]+\s*=\s*["']\d+\.\d+/,
+      /^\s*(?!version\b)[\w-]+\s*=\s*["'][\^~>=<]*\d+\.\d+/,
+      // Cargo's table form, and a PEP 621 dependency list in pyproject.toml.
+      /^\s*[\w-]+\s*=\s*\{\s*version\s*=/,
+      /^\s*["'][A-Za-z][\w.-]*(\[[\w,-]+\])?\s*(==|>=|~=)\s*\d/,
+      // go.mod: a module path and a version, with or without a leading `require`.
+      /^\s*(require\s+)?[\w.-]+\.[a-z]{2,}\/[\w./-]+\s+v\d+\.\d+/,
     ],
     hook: "You just invited a stranger's code to live in your app — along with all of its friends.",
     what: "Someone else's code that this project now downloads and runs as part of itself.",
@@ -472,6 +513,8 @@ export const CONCEPTS: CodeConcept[] = [
       /\bsupabase\s*\.from\(/,
       /\.(objects\.(filter|get|all)|query\(\w+\)\.filter)\(/,
       /\bdb\.(select|insert|update|delete)\(/,
+      // Model classes are capitalised: `User.findOne(...)`, `Order.find_by(...)`.
+      /\b[A-Z]\w+\.(findOne|findById|findByPk|findAll|find_by|where)\(|\.query\.filter_by\(/,
     ],
     hook: "Every one of these calls is a drive to the shop. The question is how many trips you are making.",
     what: "Code that reads or writes the database through a library instead of hand-written SQL.",
@@ -494,7 +537,10 @@ export const CONCEPTS: CodeConcept[] = [
     emoji: "📡",
     weight: 50,
     files: CODE,
-    patterns: [/\bfetch\(\s*["'`(\w]/, /\baxios\.(get|post|put|patch|delete)\(|\baxios\(/, /\brequests\.(get|post|put|delete)\(/],
+    patterns: [
+      // The global function, not a method that shares its name: `Rails.cache.fetch(...)` is a cache read.
+      /(?<![.\w])fetch\(\s*["'`(\w]|\b(window|globalThis|self)\.fetch\(/,
+      /\baxios\.(get|post|put|patch|delete)\(|\baxios\(/, /\b(requests|httpx)\.(get|post|put|delete)\(/, /\bhttp\.(Get|Post)\(/],
     hook: "A reply arriving and a request succeeding are two different things.",
     what: "Code that sends a request to another server and uses what comes back.",
     lens: {
@@ -516,7 +562,7 @@ export const CONCEPTS: CodeConcept[] = [
     emoji: "🧪",
     weight: 50,
     files: CODE,
-    patterns: [/\b(describe|it|test)\(\s*["'`]/, /\bexpect\(.+\)\.(to|not)\w*/, /^\s*def test_\w+\(/, /\bassert\.(equal|ok|deepEqual|strictEqual|throws)\(/],
+    patterns: [/\b(describe|it|test)\(\s*["'`]/, /\bexpect\(.+\)\.(to|not)\w*/, /^\s*def test_\w+\(/, /\bassert\.(equal|ok|deepEqual|strictEqual|throws)\(/, /^func Test\w+\(t \*testing\.T\)/, /^\s*#\[(tokio::)?test\]/, /\bself\.assert[A-Z]\w+\(/],
     hook: "A test that cannot fail is a smoke alarm with no battery.",
     what: "Code whose only job is to run other code and check that it still does what it should.",
     lens: {
@@ -560,7 +606,7 @@ export const CONCEPTS: CodeConcept[] = [
     emoji: "🔇",
     weight: 45,
     files: /\.tsx?$/i,
-    patterns: [/:\s*any\b/, /\bas\s+any\b/, /@ts-(ignore|expect-error|nocheck)/, /\bas\s+unknown\s+as\b/],
+    patterns: [/:\s*any\b/, /\bas\s+any\b/, /@ts-(ignore|expect-error|nocheck)/, /\bas\s+unknown\s+as\b/, /\b(Record<\w+,\s*any>|Array<any>|Promise<any>)/],
     hook: "Tape over the check-engine light. The dashboard looks great now.",
     what: "A place where the code tells TypeScript to stop checking, usually to make an error go away.",
     lens: {
@@ -605,7 +651,7 @@ export const CONCEPTS: CodeConcept[] = [
     weight: 35,
     files: /\.(css|scss|jsx|tsx|vue|svelte|html)$/i,
     patterns: [
-      /\bdisplay\s*:\s*(flex|grid)\b/,
+      /\bdisplay\s*:\s*["']?(flex|grid)\b/,
       /\bclass(Name)?=["'`{][^"'`]*\b(flex|grid)\b[^"'`]*\b(items-|justify-|gap-|grid-cols-|flex-col)/,
     ],
     hook: "Centering a div: a rite of passage, finally solved by these two.",
@@ -622,6 +668,310 @@ export const CONCEPTS: CodeConcept[] = [
       "One long word in a flex child and the whole row bursts out of its container on phones, because flex items will not shrink below their content.",
     askTheAi: "Which element is the layout container here, and what happens to this layout on a narrow phone screen?",
     docs: { label: "MDN: CSS layout", url: "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/CSS_layout" },
+  },
+  {
+    id: "xss-html-injection",
+    title: "Raw HTML put into the page",
+    emoji: "🎭",
+    weight: 92,
+    files: MARKUP,
+    patterns: [
+      /\bdangerouslySetInnerHTML\b/,
+      // Assignment only, and not the `el.innerHTML = ""` idiom for emptying an element.
+      /\.(innerHTML|outerHTML)\s*\+?=(?!=)(?!\s*(""|''|``)\s*;?\s*$)/,
+      /\.insertAdjacentHTML\(/,
+      /\bdocument\.write(ln)?\(/,
+      /\bv-html\s*=/,
+      /\{@html\s/,
+      /\{\{[^}]*\|\s*safe\b/,
+      /\bmark_safe\(|\.html_safe\b|<%=\s*raw\b/,
+      /\[innerHTML\]\s*=/,
+      // jQuery's `.html(value)`. With no argument it reads, which is harmless.
+      /\$\([^)]*\)\.html\(\s*[^)\s]/,
+      /\becho\s+\$_(GET|POST|REQUEST)\b/,
+      /\{\{\{\s*[\w.]+\s*\}\}\}/,
+    ],
+    hook: "You handed a stranger a pen and let them write on your page, in your handwriting.",
+    what: "Text is being inserted into the page as live HTML, so any markup inside it is built and run by the browser.",
+    lens: {
+      Junior:
+        "Normally a framework shows text as text: type `<b>` and you see `<b>`. This switches that off. If any part of the string came from a user, they can add their own script, and it runs for everyone who opens the page.",
+      Mid:
+        "Injected script runs with the page's full rights: it reads the session, calls your API as the visitor, rewrites the form they are typing into. Escaping by default is the protection, and this line is the opt-out. Sanitise with a real library, never a regex.",
+      Senior:
+        "Sanitise at output, for the context it lands in: HTML, attribute and URL each have different rules. Add a Content-Security-Policy as the second wall, and treat stored rich text as hostile every time it is rendered, not only when it was saved.",
+    },
+    pitfall:
+      "You render a user's bio as HTML so the line breaks show. Someone saves a bio with a script in it, and every visitor to their profile quietly sends them a session.",
+    askTheAi: "Where does this HTML string come from, could a user have written any part of it, and what sanitises it?",
+    docs: { label: "OWASP: Cross Site Scripting Prevention", url: "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html" },
+  },
+  {
+    id: "file-upload",
+    title: "Accepting files from users",
+    emoji: "📎",
+    weight: 80,
+    files: MARKUP,
+    patterns: [
+      /\b(multer|formidable|busboy)\s*\(|["'](multer|formidable|busboy|express-fileupload|uploadthing[\w/]*|@uploadthing\/[\w-]+)["']/,
+      /\bupload\.(single|array|fields|any)\(/,
+      /\b(UploadFile|FileField|ImageField|FileStorage|MultipartFile|IFormFile)\b/,
+      /\b(req|request)\.files?\b|\brequest\.FILES\b|\$_FILES\b/,
+      /\btype=\{?["']file["']/,
+      /\bformData\.get(All)?\(\s*["'](file|files|image|avatar|upload|attachment|photo|document)s?["']\s*\)/i,
+      /\.get(All)?\([^)]*\)\s+as\s+File\b|\binstanceof\s+File\b/,
+      /\b(target|currentTarget|input)\.files\b|\buseDropzone\(/,
+      /\.FormFile\(|->file\(\s*["']|\bhas_(one|many)_attached\b/,
+      /\b(createPresignedPost|generate_presigned_post|createSignedUploadUrl|PutObjectCommand)\b/,
+      /\bgenerate_presigned_url\(\s*["']put_object["']/,
+      /\.storage\s*\.from\([^)]*\)\s*\.upload\(/,
+      /\bmultipart\/form-data\b/,
+    ],
+    hook: "A text box takes words. This takes anything at all, in any size, with any name.",
+    what: "The app now receives whole files chosen by a visitor and has to decide where to put them and what to trust about them.",
+    lens: {
+      Junior:
+        "A file arrives with a name, a type and contents, and the sender controls all three. The server decides the size limit, which types are welcome and where the file is stored. The form's own checks are only a hint.",
+      Mid:
+        "The declared type is a label the sender wrote. Check the real content, cap the size before reading the body, and store under a name you generate, outside any folder the web server will run or serve as a page.",
+      Senior:
+        "Prefer direct-to-storage uploads with a short-lived signed URL, so large bodies never pass through the app. Pin the size and content type in the signature, serve from a separate origin, and scan or re-encode before anyone else can fetch the file.",
+    },
+    pitfall:
+      "The form only offers images, so nobody checks on the server. Someone posts a four-gigabyte file straight to the endpoint, the disk fills, and the whole site goes down with it.",
+    askTheAi: "What limits the size and type of an upload on the server, where is the file stored, and what name is it stored under?",
+    docs: { label: "OWASP: File Upload", url: "https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html" },
+  },
+  {
+    id: "webhook",
+    title: "A webhook: another service calling you",
+    emoji: "🪝",
+    weight: 78,
+    files: CODE,
+    patterns: [
+      /\bconstruct_?[eE]vent(Async)?\(/,
+      /\bnew\s+Webhook\(|["']svix["']|\bfrom\s+svix\b|\bsvix-(id|signature|timestamp)\b/,
+      /["'](stripe-signature|x-hub-signature(-256)?|x-shopify-hmac-sha256|x-slack-signature|x-twilio-signature|x-webhook-signature)["']/i,
+      /\b[A-Z][A-Z0-9_]*WEBHOOK_(SIGNING_)?(SECRET|KEY)\b/,
+      // A route path, or a handler named for the job. A variable holding an
+      // outgoing webhook URL is the opposite direction and is left alone.
+      /\.(post|route|all)\(\s*["'`]\/[\w/-]*webhooks?\b/i,
+      /\b(function|def|func)\s+\w*[wW]ebhook\w*/,
+      /\b(verify|validate)_?[wW]ebhook\w*\(|\bwebhooks?\.(verify|constructEvent|unwrap)\(/,
+    ],
+    hook: "A doorbell anyone can ring. The signature is how you know it was the postman.",
+    what: "An endpoint that another company's servers call to tell this app something happened, such as a payment going through.",
+    lens: {
+      Junior:
+        "Instead of asking a service over and over whether the payment is done, you give it an address and it calls you. That address is public, so the service signs each call with a shared secret and the code checks the signature first.",
+      Mid:
+        "The signature is computed over the exact bytes that were sent. Parse the body as JSON first and the bytes change, so verification fails: read the raw body, verify, then parse. Reply 2xx quickly; a slow handler is treated as a failure and retried.",
+      Senior:
+        "Delivery is at least once and in no promised order. Record event ids to drop duplicates, fetch current state rather than trusting an old payload, reject stale timestamps to stop replays, and hand the real work to a queue so the reply stays fast.",
+    },
+    pitfall:
+      "The handler trusts whatever arrives. Someone finds the URL, posts a hand-written \"payment succeeded\" for their own order, and the app ships it for free.",
+    askTheAi: "Where is the signature on this webhook verified, against which secret, and what happens if the same event arrives twice?",
+    docs: { label: "Stripe: Receive events in your webhook endpoint", url: "https://docs.stripe.com/webhooks" },
+  },
+  {
+    id: "db-transaction",
+    title: "A database transaction",
+    emoji: "🤝",
+    weight: 75,
+    files: /\.(jsx?|tsx?|mjs|cjs|py|rb|go|rs|java|kt|php|cs|swift|sql)$/i,
+    patterns: [
+      /\b(BEGIN|START)\s+TRANSACTION\b/,
+      /^\s*(BEGIN|COMMIT|ROLLBACK)(\s+TRANSACTION)?\s*;/i,
+      // Upper case only: `["commit"]` is an argument to git far more often than it is SQL.
+      /["'`]\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*["'`]/,
+      /(\.|::)\$?transaction\s*\(|\.transaction\s+do\b/,
+      /\btransaction\.atomic\b|\bwith\s+[\w.]+\.begin(_nested)?\(/,
+      /@Transactional\b/,
+      /\b(BeginTx|beginTransaction|startTransaction|start_transaction|begin_transaction|withTransaction)\s*\(/,
+      /\b(conn|connection|session|db|tx|trx|client)\w*\.(commit|rollback)\(/,
+    ],
+    hook: "Money leaves one account and never arrives in the other. This is the thing that prevents that.",
+    what: "A group of database writes that either all take effect or none do, even if the program stops halfway through.",
+    lens: {
+      Junior:
+        "Some changes only make sense together: take stock away and create the order. A transaction wraps them, so if the second step fails the first is undone and the data never sits half-changed.",
+      Mid:
+        "Only queries sent through the transaction's own handle belong to it; one sent through the ordinary client commits by itself. Keep the block short and never wait on a network call inside it, because it holds locks and a connection the whole time.",
+      Senior:
+        "Atomic is not the same as isolated. At the default level two transactions can both read a balance and both spend it. Choose the isolation level or lock the row on purpose, expect serialisation failures, and make the whole block safe to retry.",
+    },
+    pitfall:
+      "Order saved, then the payment call throws. With no transaction the order row stays, the customer sees an error, tries again, and now there are two orders and one very confused support inbox.",
+    askTheAi: "Which writes here must succeed or fail together, and is every one of them sent through the transaction?",
+    docs: { label: "PostgreSQL: Transactions", url: "https://www.postgresql.org/docs/current/tutorial-transactions.html" },
+  },
+  {
+    id: "rate-limiting",
+    title: "Rate limiting",
+    emoji: "🚦",
+    weight: 70,
+    files: CODE,
+    patterns: [
+      /\b(rateLimit|rate_limit|ratelimit|throttle|slowDown)\s*\(/,
+      /\bnew\s+(Ratelimit|RateLimiter\w*|Bottleneck)\(|\brate\.NewLimiter\(/,
+      /\bRatelimit\.(slidingWindow|fixedWindow|tokenBucket)\(|\b\w*[rR]ate_?[lL]imit\w*\.(limit|check|consume)\(/,
+      /["'](express-rate-limit|rate-limiter-flexible|@upstash\/ratelimit|@nestjs\/throttler|bottleneck)["']/,
+      /\b(slowapi|flask_limiter|django_ratelimit)\b/,
+      /@(limiter\.limit|ratelimit|Throttle|throttle|RateLimiter)\(/,
+      /\b(throttle_classes|ThrottlerGuard|ThrottlerModule|UserRateThrottle|AnonRateThrottle)\b/,
+      /["']throttle:\d+/,
+      /["'](X-RateLimit-(Limit|Remaining|Reset)|Retry-After)["']/i,
+    ],
+    hook: "Without this, the only thing between your login form and a million guesses is the attacker's patience.",
+    what: "A cap on how many times one caller may do something within a stretch of time, with the extra attempts turned away.",
+    lens: {
+      Junior:
+        "A person signs in a few times a day. A script can try ten thousand passwords a minute. A limit lets through what a person would do and refuses the rest, usually with status 429, \"too many requests\".",
+      Mid:
+        "What you count by matters. Per IP address punishes a whole office behind one router and is dodged by rotating addresses; per account lets one attacker lock a victim out. Sensitive routes usually need both, and a `Retry-After` header for honest clients.",
+      Senior:
+        "A counter in process memory resets on deploy and multiplies with every instance, so keep it in a shared store. Behind a proxy the client address comes from a forwarded header that is only trustworthy when your own proxy set it.",
+    },
+    pitfall:
+      "The endpoint that calls a paid AI model has no limit. One visitor writes a loop, runs it overnight, and you wake up to a four-figure bill for answers nobody read.",
+    askTheAi: "What is being counted here (address, user, key), where is the count stored, and which endpoints still have no limit?",
+    docs: { label: "MDN: 429 Too Many Requests", url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429" },
+  },
+  {
+    id: "caching",
+    title: "Caching",
+    emoji: "🧊",
+    weight: 60,
+    files: CODE,
+    patterns: [
+      /\bredis\w*\.(get|set|setex|getex|mget|hget|hset|expire)\(/i,
+      // A thing called cache being read or written. `cached` on its own is just a name.
+      /\b\w*[cC]ache(\.|::)(get|set|put|setex|remember|get_or_set|fetch|wrap|invalidate)\(/,
+      /\b(revalidatePath|revalidateTag|unstable_cache)\(|\bexport\s+const\s+revalidate\s*=|\brevalidate:\s*\d+|["']use cache["']/,
+      /\bcache:\s*["'](no-store|force-cache|no-cache|reload)["']/,
+      /^\s*@(functools\.)?(lru_cache|cache|cached|cache_page)\b/,
+      /@(Cacheable|CacheEvict|CachePut)\b/,
+      /\bCache-Control\b/i,
+      /\b(s-maxage|max-age|stale-while-revalidate)=\d+/,
+      /\bnew\s+(LRUCache|NodeCache|Keyv)\(|\bcaches\.open\(/,
+    ],
+    hook: "The fastest query is the one you never run. The hardest bug is the answer you forgot you kept.",
+    what: "Keeping the result of slow work so the next request can reuse it instead of doing the work again.",
+    lens: {
+      Junior:
+        "Fetching from a database or another service is slow, so the app keeps a copy of the answer for a while. Fast, but the copy can be out of date: someone changes their name and the old one keeps showing until the copy is refreshed.",
+      Mid:
+        "Every cache needs two decisions: the key and the lifetime. The key must include everything the answer depends on, including who is asking. And every write needs to clear what it changed, or readers are served the past.",
+      Senior:
+        "When a popular entry expires, every waiting request recomputes it at once; stagger lifetimes or serve stale while one refreshes. Know each layer between you and the user (browser, CDN, framework, store), because a purge has to reach all of them.",
+    },
+    pitfall:
+      "The dashboard is cached to make it fast, keyed by the URL. The first person to load it is an admin, and for the next hour everyone who visits sees the admin's numbers.",
+    askTheAi: "What is the cache key here, how long does an entry live, and what clears it when the underlying data changes?",
+    docs: { label: "MDN: HTTP caching", url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching" },
+  },
+  {
+    id: "background-job",
+    title: "Work done in the background",
+    emoji: "⏰",
+    weight: 55,
+    files: /\.(jsx?|tsx?|mjs|cjs|py|rb|go|rs|java|kt|php|cs|swift)$|(^|\/)vercel\.json$/i,
+    patterns: [
+      /\bcron\.(schedule|New)\(|\bnew\s+CronJob\(|["'](node-cron|cron|node-schedule)["']|@Cron\(|"crons"\s*:/,
+      // Five cron fields in a string, at least one of them a star: "0 3 * * *".
+      /["'`](?=[^"'`]*\*)(\*|\d+|\*\/\d+)(\s+(\*|[\d,-]+|\*\/\d+)){4}["'`]/,
+      /\bsetInterval\(/,
+      /\b\w*[qQ]ueue\.(add|addBulk|enqueue|publish)\(|\bnew\s+Queue\(/,
+      /["'](bullmq|bull|bee-queue|agenda|pg-boss|inngest)["']/,
+      /\binngest\.(createFunction|send)\(|\bnew\s+Inngest\(/,
+      /@(celery|celery_app|app)\.task\b|@shared_task\b|\.(apply_async|send_task)\(|\bfrom\s+celery\b|\bCelery\(/,
+      /\.add_job\(|\bagenda\.(every|schedule|define)\(|::dispatch\(|\$schedule->(command|call|job)\(/,
+      /@Scheduled\b/,
+      /\bperform_(async|later|in)\b|\binclude\s+Sidekiq::(Worker|Job)\b|<\s*ApplicationJob\b/,
+      /\b(BackgroundTasks|BackgroundScheduler|AsyncIOScheduler)\b|\bbackground_tasks\.add_task\(|\bschedule\.every\(/,
+      /\bwaitUntil\(/,
+    ],
+    hook: "The request said \"done\" and went home. This is the work still going on after the lights are off.",
+    what: "Code that runs on a timer or from a queue, instead of running while a visitor waits for a reply.",
+    lens: {
+      Junior:
+        "Some work is too slow to do while someone waits (sending email, resizing video), and some has to happen with nobody there (a nightly clean-up). A job is that work, written down to be run later or on a schedule.",
+      Mid:
+        "Nobody is watching when a job fails, so the failure has to go somewhere: retries with a limit, a log, an alert. A timer inside the web process disappears on every deploy and never fires on a serverless host that has gone to sleep.",
+      Senior:
+        "Queues deliver at least once, so a job must be safe to run twice. Guard scheduled work against overlapping with its own previous run and against firing once per instance, and move what keeps failing to a dead-letter queue instead of retrying forever.",
+    },
+    pitfall:
+      "The nightly job starts failing in March. It has no alert, so the first anyone hears of it is in June, when a customer asks why their invoices stopped.",
+    askTheAi: "What runs this job and how often, what happens when it fails, and is it safe if it runs twice?",
+    docs: { label: "BullMQ: documentation", url: "https://docs.bullmq.io/" },
+  },
+  {
+    id: "pagination",
+    title: "Results a page at a time",
+    emoji: "📄",
+    weight: 50,
+    files: /\.(jsx?|tsx?|mjs|cjs|py|rb|go|rs|java|kt|php|cs|swift|vue|svelte|sql)$/i,
+    patterns: [
+      /\bLIMIT\s+(\d+|\$\d+|\?|:\w+|%s|\$\{[^}]+\}|\{\w+\})\s+OFFSET\b/i,
+      /\bOFFSET\s+(\d+|\$\d+|\?|:\w+|%s)\s+(ROWS\b|LIMIT\b)/i,
+      /\.(skip|offset)\([^)]*\)\s*\.(take|limit)\(|\.(take|limit)\([^)]*\)\s*\.(skip|offset)\(/,
+      // The arithmetic that turns a page number into an offset.
+      /\(\s*\w*[pP]age\w*\s*-\s*1\s*\)\s*\*\s*\w/,
+      /\bcursor\s*:\s*\{/,
+      /\b(nextCursor|next_cursor|endCursor|hasNextPage|has_next_page|nextPageToken|next_page_token)\b/,
+      /\b(searchParams|query_params|args|GET)\.get\(\s*["'](page|page_size|pageSize|per_page|perPage|cursor|offset)["']/,
+      /\b(req|request|ctx)\.query\.(page|pageSize|page_size|per_page|perPage|cursor|offset)\b/,
+      /\b(pageSize|page_size|per_page|perPage|paginate_by|PageNumberPagination|CursorPagination|LimitOffsetPagination)\b/,
+      /(\.|->)paginate\(|\bPaginator\(|\bPageRequest\.of\(|\bPageable\b|\bparams\[:page\]/,
+    ],
+    hook: "Nobody reads ten thousand rows. Sending them anyway is how a list page takes the site down.",
+    what: "Returning a long list in fixed-size slices, with a way to ask for the next slice.",
+    lens: {
+      Junior:
+        "A list that is short today will not stay short. Instead of sending everything, the server sends the first twenty and a way to ask for the next twenty. The size of a page is the server's decision, not the caller's.",
+      Mid:
+        "Offset paging (skip 40, take 20) is simple, but the database still walks past every skipped row, and rows shift when something is inserted. Cursor paging asks for rows after the last one seen: stable, and just as fast on page 500.",
+      Senior:
+        "A cursor needs a stable, unique sort; add the id as a tie-breaker. Cap the page size on the server whatever the caller asks for, treat a total count as a second, often expensive, query, and keep the cursor opaque so the sort can change later.",
+    },
+    pitfall:
+      "The page size comes straight from the URL with no ceiling. Someone asks for a page of ten million, and the server tries its best to oblige.",
+    askTheAi: "What is the largest page a caller can ask for, what is the list sorted by, and is that sort unique?",
+    docs: { label: "Prisma: Pagination", url: "https://www.prisma.io/docs/orm/prisma-client/queries/pagination" },
+  },
+  {
+    id: "react-props",
+    title: "Props: passing data into a component",
+    emoji: "🎁",
+    weight: 40,
+    files: /\.(jsx?|tsx?|vue|svelte)$/i,
+    patterns: [
+      /\b(interface|type)\s+\w*Props\b/,
+      // Components are capitalised; an ordinary function taking an options object is not one.
+      /\bfunction\s+[A-Z]\w*\s*\(\s*(\{|props\b)/,
+      /\bconst\s+[A-Z]\w*\s*(:\s*[\w.]+(<[^=]*>)?\s*)?=\s*\(\s*(\{|props\b)/,
+      /:\s*(React\.)?(FC|FunctionComponent)\s*</,
+      /\b(this\.)?props\.[A-Za-z_]/,
+      /\bchildren\s*\??:\s*(React\.)?(ReactNode|ReactElement|JSX\.Element)\b|\bPropsWithChildren\b/,
+      />\s*\{children\}\s*<|^\s*\{children\}\s*$/,
+      /\bdefineProps\s*[<(]|\$props\(\)/,
+    ],
+    hook: "A component is a function. Props are its arguments, with one rule: look, do not touch.",
+    what: "The values a parent component hands to a child so the child knows what to show and what to call.",
+    lens: {
+      Junior:
+        "Props are how one component configures another, like attributes on an HTML tag. They travel one way, from parent to child, and the child must not change them. To send something back up, the parent passes a function and the child calls it.",
+      Mid:
+        "A component re-renders when its parent does, and a memoised one whenever a prop is a different reference. An object or function written inline in JSX is new on every render. `children` is an ordinary prop, and often tidier than passing data through five layers.",
+      Senior:
+        "Props are a component's public interface: keep them few and hard to combine wrongly, with one variant prop rather than three booleans. Copying a prop into state forks the source of truth. When several layers only pass a prop along, reach for composition before context.",
+    },
+    pitfall:
+      "A prop is copied into state \"as the starting value\". The parent later sends a new one, the child goes on showing the old, and the bug report says the screen is haunted.",
+    askTheAi: "Which component owns this data, which props are passed along without being used, and could any of them be removed?",
+    docs: { label: "React: Passing Props to a Component", url: "https://react.dev/learn/passing-props-to-a-component" },
   },
 ];
 
@@ -1001,11 +1351,529 @@ export const CONCEPT_QUESTIONS: QuizQuestion[] = [
       "Yes, and it cannot be untracked without deleting the whole repository",
     ],
     "Ignore rules only apply to untracked files. The old commits still hold the contents, so those secrets need rotating too."),
+  cq("xss-html-injection", 1, "Junior",
+    "A user's comment contains `<img src=x onerror=...>` and the page inserts it with `innerHTML`. What happens?",
+    "The handler runs as the site's own code",
+    [
+      "The tag is shown as plain text, because markup inside a string is never executed",
+      "The browser strips the attribute automatically before adding it to the document",
+      "The whole page is blocked, and the comment is reported to the owner of the site",
+    ],
+    "Raw HTML is parsed, not displayed. The broken image fires its error handler, and that script can do anything the logged-in visitor can."),
+  cq("xss-html-injection", 2, "Mid",
+    "React escapes text rendered in JSX. Why is `dangerouslySetInnerHTML` different?",
+    "It skips that escaping entirely",
+    [
+      "It escapes the string twice, which makes special characters show up doubled",
+      "It renders on the server only, so the markup never reaches a visitor's browser",
+      "It sanitises the markup first and removes anything that looks like a script",
+    ],
+    "The prop hands your string to the browser as markup. Anything a user could have typed into it needs a real sanitiser first."),
+  cq("file-upload", 1, "Junior",
+    "An upload form only offers `.png` files in the file picker. Why is that not enough?",
+    "The server can be sent anything directly",
+    [
+      "PNG files can be larger than the limit that most browsers allow for a single form",
+      "The picker checks the size of a file but never looks at what the file is called",
+      "Visitors on phones are shown a different picker that ignores the accepted types",
+    ],
+    "The `accept` attribute is a convenience inside the form. A request made without the form skips it, so type and size are checked again on the server."),
+  cq("file-upload", 2, "Senior",
+    "Uploaded files are saved under the filename the user supplied. What does a name like `../../app/config.js` do?",
+    "Writes outside the upload folder",
+    [
+      "Nothing, because operating systems reject any filename that contains a dot",
+      "It is renamed to `config.js` and stored safely alongside all of the others",
+      "It fails validation, since a slash is not allowed to appear in form data",
+    ],
+    "A supplied name is input like any other. Generate your own, and keep uploads somewhere the server will never run or serve as code."),
+  cq("webhook", 1, "Junior",
+    "A webhook endpoint has a public URL. Who can send it a request claiming to be a payment confirmation?",
+    "Anyone who finds the address",
+    [
+      "Only the payment provider, because a webhook URL is private to the two parties",
+      "Only servers in the same region, since providers restrict where calls come from",
+      "Nobody, until the URL has been registered with the browser as a trusted origin",
+    ],
+    "The URL is not a secret. The signature header is what proves the provider sent the call, so check it before believing the body."),
+  cq("webhook", 2, "Mid",
+    "A provider delivers the same webhook event twice because the first reply was slow. What should the handler do?",
+    "Recognise the event id and skip it",
+    [
+      "Process both, because a provider only repeats an event when the first one was lost",
+      "Return an error for the second, so that the provider stops sending any duplicates",
+      "Wait for a third delivery, and then act on whichever two of the copies agree",
+    ],
+    "Providers retry until they get a quick 2xx, so duplicates are normal. Record the ids you have handled, or the customer gets two orders."),
+  cq("db-transaction", 1, "Junior",
+    "A transfer subtracts from one account, then the server crashes before adding to the other. What would a transaction have done?",
+    "Undone the subtraction as well",
+    [
+      "Finished the second write automatically as soon as the server came back up",
+      "Saved the first write and emailed an administrator about the missing second one",
+      "Stopped the server from crashing until both of the writes had been completed",
+    ],
+    "Inside a transaction the writes land together or not at all. A crash halfway rolls back the part that happened, so no money vanishes."),
+  cq("db-transaction", 2, "Mid",
+    "Inside a Prisma `$transaction` callback, one query uses the global `prisma` client instead of the `tx` argument. What happens to it?",
+    "It runs outside and is not rolled back",
+    [
+      "It is rejected, because the global client is locked while a transaction is open",
+      "It joins the transaction anyway, since both clients share a single connection",
+      "It runs twice, once inside the transaction and once more after it commits",
+    ],
+    "Only queries sent through the transaction's own handle belong to it. The stray one commits by itself, even when everything else is undone."),
+  cq("rate-limiting", 1, "Junior",
+    "A login endpoint puts no limit on attempts. What does that let an attacker do?",
+    "Try passwords until one works",
+    [
+      "Read the password table directly, because unlimited requests bypass the hashing",
+      "Sign in as any user with no password once a thousand requests have been sent",
+      "Slow the endpoint down for themselves only, which does no harm to anyone else",
+    ],
+    "Guessing is only slow if something makes it slow. A cap per account and per address turns a million tries into a handful."),
+  cq("rate-limiting", 2, "Senior",
+    "A rate limiter counts requests in the server's memory. The app then scales to four instances. What changes?",
+    "Each instance keeps its own count",
+    [
+      "Nothing, since instances share memory whenever they are running the same code",
+      "The limit becomes four times stricter, as every request is counted on all four",
+      "Requests are refused until the counters on every instance are reset by hand",
+    ],
+    "Four separate counters means four times the allowance, and a restart wipes them. A shared store such as Redis gives one count for all."),
+  cq("caching", 1, "Junior",
+    "A user updates their profile, and the page keeps showing the old name for several minutes. What is the likeliest cause?",
+    "A stored copy is being served",
+    [
+      "The database is still writing the change and has not yet finished saving it",
+      "The browser refuses to redraw a page that it has already displayed once",
+      "The update was sent to a different account because of a typing mistake",
+    ],
+    "A cache answers from memory until the copy expires or is cleared. A write has to clear what it changed, or readers see the past."),
+  cq("caching", 2, "Senior",
+    "A response containing one user's account details is cached under the URL alone. What goes wrong?",
+    "Other people are served that data",
+    [
+      "Nothing, as long as the cached copy is set to expire within an hour of being stored",
+      "The response is stored twice, which doubles the memory that the cache needs",
+      "The first user is logged out as soon as a second person requests the same page",
+    ],
+    "The cache key has to include everything the answer depends on. Leave out who is asking and the first visitor's page becomes everyone's."),
+  cq("background-job", 1, "Junior",
+    "Sending a welcome email takes five seconds. Why hand it to a background job instead of sending it during the signup request?",
+    "The user gets a reply right away",
+    [
+      "Emails sent from inside a request are always flagged as spam by mail providers",
+      "A background job is able to send the email without needing any credentials",
+      "A request is not allowed to make a network call to any other service",
+    ],
+    "The request only has to record that the email is owed. A worker sends it afterwards, and can try again if the mail service is down."),
+  cq("background-job", 2, "Senior",
+    "A job charges a card, crashes before marking itself done, and the queue retries it. What must be true of the job?",
+    "Running it twice has the same effect as once",
+    [
+      "It must finish within one second, so that a crash can never interrupt it midway",
+      "It must run on the same server each time, so the retry can see the first attempt",
+      "It must delete itself from the queue before starting, so no retry can ever happen",
+    ],
+    "Queues deliver at least once, so a retry after a half-finished run is normal. An idempotency key lets the second run see the charge already happened."),
+  cq("pagination", 1, "Junior",
+    "Why return a list endpoint's results in pages instead of all at once?",
+    "The table will not stay small",
+    [
+      "Browsers are unable to display more than one hundred rows in a single list",
+      "Databases charge per query, and smaller queries are billed at a lower rate",
+      "JSON has a fixed size limit that a long list of results would go over",
+    ],
+    "With ten test rows everything is instant. With a million, one request loads them all into memory and takes the server down with it."),
+  cq("pagination", 2, "Mid",
+    "With `OFFSET` paging, a new row is inserted at the top while someone is reading page 1. What do they see on page 2?",
+    "A row they already saw on page 1",
+    [
+      "An error, because the total number of rows no longer matches the first request",
+      "The same page as before, since the offsets are frozen when the first page loads",
+      "An empty page, because inserting a row resets the position to the beginning",
+    ],
+    "Offsets count from the top, so an insert pushes everything down one place. A cursor (\"rows after this id\") does not shift."),
+  cq("react-props", 1, "Junior",
+    "A child component assigns a new value to one of its props. What happens in the parent?",
+    "Nothing; data only flows down",
+    [
+      "The parent's state is updated to match, and both components render again",
+      "React throws an error and removes the child component from the screen",
+      "The parent receives the new value the next time that it happens to render",
+    ],
+    "Props are read-only inputs. To change the parent's data, the parent passes down a function and the child calls it."),
+  cq("react-props", 2, "Mid",
+    "A parent passes `style={{ color: \"red\" }}` to a memoised child, and the child still re-renders every time. Why?",
+    "The object is new on every render",
+    [
+      "Memoised components always re-render whenever they are given a style prop",
+      "Inline styles are compared as strings, and that comparison is case-sensitive",
+      "The child reads the style from context, which ignores memoisation entirely",
+    ],
+    "Memoisation compares props by reference. An object literal in JSX is created again on each render, so it never equals the last one."),
 ];
 
 export function questionsForConcept(id: string): QuizQuestion[] {
   const bin = conceptBin(id);
   return CONCEPT_QUESTIONS.filter((q) => q.bins.includes(bin));
+}
+
+/* ------------------------------------------------------------------ *
+ * Concepts registered at runtime
+ *
+ * The built-in pack cannot know every library a project uses, so more
+ * concepts can be added while the server runs: from JSON idea packs a person
+ * writes by hand, and from ideas the host model spots in a change. Both are
+ * untrusted in the same way. One is a hand-edited file and the other is model
+ * output, and once registered either is indistinguishable from a built-in: its
+ * text lands in a card, its patterns run inside an editor hook, and its
+ * question ids key the review schedule on disk.
+ *
+ * So everything is validated, nothing throws, and a definition that fails is
+ * rejected whole with a reason an author can act on. Half a concept (a lesson
+ * with a truncated pitfall, or with one of its two questions missing) is worse
+ * than none, because nobody finds out it is half.
+ *
+ * CONCEPTS and CONCEPT_QUESTIONS are mutated in place. Other modules hold
+ * references to those arrays, and a reassigned array would leave them reading
+ * the old one.
+ * ------------------------------------------------------------------ */
+
+/** A concept as it can be written in JSON. */
+export interface ConceptDefinition {
+  /** Kebab-case, 3-60 characters. */
+  id: string;
+  title: string;
+  /** Defaults to 💡. */
+  emoji?: string;
+  /** 0-100, clamped. Defaults to 50. */
+  weight?: number;
+  /** Regex source matched against the path, case-insensitively. Null or absent means any file. */
+  files?: string | null;
+  /** Regex sources. May be empty or absent: such a concept is never auto-detected. */
+  patterns?: string[];
+  hook: string;
+  what: string;
+  /** A plain string means the same text at every depth. */
+  lens: Record<ConceptLevel, string> | string;
+  pitfall: string;
+  /** Defaults to a generic question. */
+  askTheAi?: string;
+  /** The url must be https. Defaults to a web search for the title. */
+  docs?: { label: string; url: string };
+  questions?: Array<{
+    question: string;
+    answer: string;
+    /** Two to four wrong choices. */
+    distractors: string[];
+    explanation: string;
+    /** Defaults to Junior. */
+    level?: ConceptLevel;
+  }>;
+}
+
+export interface RegisterResult {
+  /** Ids now registered, whether new or replacing an earlier registration. */
+  added: string[];
+  /** The id is "(unknown)" when the definition did not carry a usable one. */
+  rejected: Array<{ id: string; reason: string }>;
+}
+
+/** Fixed at load, before anything can be registered, so a pack can never join this set. */
+const BUILT_IN_IDS: ReadonlySet<string> = new Set(CONCEPTS.map((c) => c.id));
+
+/** Where each runtime concept came from. Built-ins are deliberately absent. */
+const ORIGINS = new Map<string, string>();
+
+const LIMITS = {
+  title: 80,
+  hook: 200,
+  what: 400,
+  lens: 700,
+  pitfall: 500,
+  askTheAi: 300,
+  docsLabel: 80,
+  docsUrl: 500,
+  question: 300,
+  choice: 200,
+  explanation: 500,
+  patterns: 8,
+  pattern: 300,
+  questions: 12,
+  origin: 120,
+} as const;
+
+const DEFAULT_EMOJI = "💡";
+const DEFAULT_WEIGHT = 50;
+const DEFAULT_ASK = "What does this part of the change do, and what should I check before relying on it?";
+
+/** Control characters have no business in a card, an id, or a file on disk. */
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
+
+/**
+ * How much longer than the longest wrong choice an answer may be. Past this a
+ * learner can win by picking the longest choice without reading any of them,
+ * which is the same thing the built-in bank's rubric guards against in bulk.
+ */
+const ANSWER_LENGTH_ALLOWANCE = 1.4;
+
+class Rejected extends Error {}
+const reject = (reason: string): never => {
+  throw new Rejected(reason);
+};
+
+/**
+ * A required string: present, not blank, and within its cap.
+ *
+ * Over-long text is rejected rather than cut. A lesson that stops mid-sentence
+ * looks finished to the code and broken to the reader, and the author would
+ * never be told.
+ */
+function requiredText(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string") return reject(`${field} is missing or is not text`);
+  const clean = value.replace(CONTROL_CHARS, " ").trim();
+  if (!clean) return reject(`${field} is empty`);
+  if (clean.length > max) return reject(`${field} is longer than ${max} characters`);
+  return clean;
+}
+
+/**
+ * Compiles a pattern from a definition. Only the `i` flag is ever applied: `g`
+ * and `y` make `test` remember where it stopped, which would turn detection
+ * into something that depends on the previous line.
+ */
+function compilePattern(source: unknown, field: string): RegExp {
+  if (typeof source !== "string" || !source) return reject(`${field} is not a regular expression source`);
+  if (source.length > LIMITS.pattern) return reject(`${field} is longer than ${LIMITS.pattern} characters`);
+  // A repeated group that itself contains a repeat, `(a+)+`, is the classic
+  // shape that takes exponential time on a near miss. Detection runs in an
+  // editor hook on every edit, so the cheap check is worth an occasional
+  // refusal of a pattern that would have been fine.
+  if (/\([^()]*[+*][^()]*\)\s*[+*{]/.test(source)) {
+    return reject(`${field} repeats a group that already contains a repeat, which can take too long to run`);
+  }
+  let compiled: RegExp;
+  try {
+    compiled = new RegExp(source, "i");
+  } catch (err) {
+    return reject(`${field} does not compile (${(err as Error).message.slice(0, 80)})`);
+  }
+  // Detection must not claim things, and this would claim every line of every file.
+  if (compiled.test("")) return reject(`${field} matches an empty line, so it would fire on everything`);
+  return compiled;
+}
+
+function levelOf(value: unknown, field: string): ConceptLevel {
+  if (value === undefined || value === null) return "Junior";
+  if (value === "Junior" || value === "Mid" || value === "Senior") return value;
+  return reject(`${field} must be Junior, Mid or Senior`);
+}
+
+/**
+ * One registered question, held to the parts of the bank's rubric that can be
+ * checked one question at a time. The thresholds for length and for a question
+ * that gives itself away are the ones `validateGenerated` applies to
+ * model-written questions, so a question is judged the same whichever door it
+ * came through.
+ */
+function parseQuestion(raw: unknown, conceptId: string, n: number): QuizQuestion {
+  const at = `question ${n}`;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return reject(`${at} is not an object`);
+  const o = raw as Record<string, unknown>;
+
+  const question = requiredText(o.question, `${at}: question`, LIMITS.question);
+  const answer = requiredText(o.answer, `${at}: answer`, LIMITS.choice);
+  const explanation = requiredText(o.explanation, `${at}: explanation`, LIMITS.explanation);
+  if (question.length < 15) reject(`${at}: question is too short to be a question`);
+  if (explanation.length < 20) reject(`${at}: explanation is too short to teach anything`);
+  if (/answer is|correct answer/i.test(question)) reject(`${at}: question gives its own answer away`);
+
+  if (!Array.isArray(o.distractors)) reject(`${at}: distractors must be a list`);
+  const rawDistractors = o.distractors as unknown[];
+  if (rawDistractors.length < 2 || rawDistractors.length > 4) reject(`${at}: needs 2 to 4 distractors`);
+  const distractors = rawDistractors.map((d, i) => requiredText(d, `${at}: distractor ${i + 1}`, LIMITS.choice));
+
+  const norm = (s: string) => s.toLowerCase().trim();
+  if (distractors.some((d) => norm(d) === norm(answer))) reject(`${at}: the answer is also listed as a distractor`);
+  if (new Set(distractors.map(norm)).size !== distractors.length) reject(`${at}: two choices are the same`);
+
+  const longestWrong = Math.max(...distractors.map((d) => d.length));
+  if (answer.length > longestWrong * ANSWER_LENGTH_ALLOWANCE) {
+    reject(`${at}: the answer is much longer than every other choice, so it can be picked without reading`);
+  }
+
+  return cq(conceptId, n, levelOf(o.level, `${at}: level`), question, answer, distractors, explanation);
+}
+
+function parseDefinition(raw: unknown): { concept: CodeConcept; questions: QuizQuestion[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return reject("not an object");
+  const o = raw as Record<string, unknown>;
+
+  const id = o.id as string; // shape already checked by the caller
+  const title = requiredText(o.title, "title", LIMITS.title);
+
+  let emoji = DEFAULT_EMOJI;
+  if (o.emoji !== undefined && o.emoji !== null) {
+    if (typeof o.emoji !== "string") reject("emoji is not text");
+    const clean = (o.emoji as string).replace(CONTROL_CHARS, "").trim();
+    // Sixteen code units is room for a flag or a family; more is not an emoji.
+    if (clean.length > 16) reject("emoji is longer than one emoji");
+    if (clean) emoji = clean;
+  }
+
+  let weight = DEFAULT_WEIGHT;
+  if (o.weight !== undefined && o.weight !== null) {
+    if (typeof o.weight !== "number" || !Number.isFinite(o.weight)) reject("weight is not a number");
+    weight = Math.max(0, Math.min(100, Math.round(o.weight as number)));
+  }
+
+  const files = o.files === undefined || o.files === null ? null : compilePattern(o.files, "files");
+
+  let patterns: RegExp[] = [];
+  if (o.patterns !== undefined && o.patterns !== null) {
+    if (!Array.isArray(o.patterns)) reject("patterns must be a list");
+    const sources = o.patterns as unknown[];
+    if (sources.length > LIMITS.patterns) reject(`more than ${LIMITS.patterns} patterns`);
+    patterns = sources.map((source, i) => compilePattern(source, `pattern ${i + 1}`));
+  }
+
+  const hook = requiredText(o.hook, "hook", LIMITS.hook);
+  const what = requiredText(o.what, "what", LIMITS.what);
+  const pitfall = requiredText(o.pitfall, "pitfall", LIMITS.pitfall);
+
+  let lens: Record<ConceptLevel, string>;
+  if (typeof o.lens === "string") {
+    const same = requiredText(o.lens, "lens", LIMITS.lens);
+    lens = { Junior: same, Mid: same, Senior: same };
+  } else if (o.lens && typeof o.lens === "object" && !Array.isArray(o.lens)) {
+    const l = o.lens as Record<string, unknown>;
+    lens = {
+      Junior: requiredText(l.Junior, "lens.Junior", LIMITS.lens),
+      Mid: requiredText(l.Mid, "lens.Mid", LIMITS.lens),
+      Senior: requiredText(l.Senior, "lens.Senior", LIMITS.lens),
+    };
+  } else {
+    return reject("lens is missing: give one text, or one each for Junior, Mid and Senior");
+  }
+
+  const askTheAi =
+    o.askTheAi === undefined || o.askTheAi === null ? DEFAULT_ASK : requiredText(o.askTheAi, "askTheAi", LIMITS.askTheAi);
+
+  let docs = {
+    label: "Search the docs",
+    url: `https://duckduckgo.com/?q=${encodeURIComponent(title)}`,
+  };
+  if (o.docs !== undefined && o.docs !== null) {
+    if (typeof o.docs !== "object" || Array.isArray(o.docs)) reject("docs must be an object with a label and a url");
+    const d = o.docs as Record<string, unknown>;
+    const url = requiredText(d.url, "docs.url", LIMITS.docsUrl);
+    let protocol = "";
+    try {
+      protocol = new URL(url).protocol;
+    } catch {
+      reject("docs.url is not a URL");
+    }
+    // The link is rendered as something to click. Nothing but https belongs there.
+    if (protocol !== "https:") reject("docs.url must start with https://");
+    docs = {
+      label: d.label === undefined || d.label === null ? docs.label : requiredText(d.label, "docs.label", LIMITS.docsLabel),
+      url,
+    };
+  }
+
+  let questions: QuizQuestion[] = [];
+  if (o.questions !== undefined && o.questions !== null) {
+    if (!Array.isArray(o.questions)) reject("questions must be a list");
+    const list = o.questions as unknown[];
+    if (list.length > LIMITS.questions) reject(`more than ${LIMITS.questions} questions`);
+    questions = list.map((q, i) => parseQuestion(q, id, i + 1));
+  }
+
+  return {
+    concept: { id, title, emoji, weight, files, patterns, hook, what, lens, pitfall, askTheAi, docs },
+    questions,
+  };
+}
+
+const CONCEPT_ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Takes a runtime concept and its questions back out. Built-ins are never passed here. */
+function unregister(id: string): void {
+  const at = CONCEPTS.findIndex((c) => c.id === id);
+  if (at !== -1) CONCEPTS.splice(at, 1);
+  const bin = conceptBin(id);
+  for (let i = CONCEPT_QUESTIONS.length - 1; i >= 0; i--) {
+    if (CONCEPT_QUESTIONS[i].bins.includes(bin)) CONCEPT_QUESTIONS.splice(i, 1);
+  }
+  BY_ID.delete(id);
+  ORIGINS.delete(id);
+}
+
+/**
+ * Adds concepts to the running pack.
+ *
+ * A built-in id is never shadowed: the built-in lessons are the ones the tests
+ * hold to the rubric, and a pack that could quietly replace "hardcoded-secret"
+ * could quietly teach the opposite. Registering an id that an earlier call
+ * registered replaces that concept and its questions, so an edited pack can be
+ * loaded again without restarting.
+ *
+ * Question ids are `c-<conceptId>-<n>`, the same shape as the built-ins, which
+ * is what lets review, selection and lookup treat them identically. It also
+ * means renumbering a pack's questions moves their review history, exactly as
+ * it would for a built-in.
+ */
+export function registerConcepts(defs: readonly unknown[], origin: string): RegisterResult {
+  const result: RegisterResult = { added: [], rejected: [] };
+  if (!Array.isArray(defs)) return result;
+  const from =
+    (typeof origin === "string" ? origin.replace(CONTROL_CHARS, " ").trim().slice(0, LIMITS.origin) : "") || "runtime";
+
+  for (const raw of defs) {
+    let id = "(unknown)";
+    try {
+      const candidate = raw && typeof raw === "object" ? (raw as Record<string, unknown>).id : undefined;
+      if (typeof candidate !== "string" || candidate.length < 3 || candidate.length > 60 || !CONCEPT_ID.test(candidate)) {
+        reject(
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? "id must be 3-60 characters of lower-case letters, digits and single hyphens"
+            : "not an object",
+        );
+      }
+      id = candidate as string;
+      if (BUILT_IN_IDS.has(id)) reject("a built-in idea already has this id, and built-ins cannot be replaced");
+
+      const { concept, questions } = parseDefinition(raw);
+      unregister(id);
+      CONCEPTS.push(concept);
+      CONCEPT_QUESTIONS.push(...questions);
+      BY_ID.set(id, concept);
+      ORIGINS.set(id, from);
+      if (!result.added.includes(id)) result.added.push(id);
+    } catch (err) {
+      // Anything unexpected (a getter that throws, a proxy) is one more reason
+      // to reject, never a reason to take the server down.
+      const reason = err instanceof Rejected ? err.message : `could not be read (${String((err as Error)?.message ?? err).slice(0, 80)})`;
+      result.rejected.push({ id, reason });
+    }
+  }
+  return result;
+}
+
+export function isBuiltInConcept(id: string): boolean {
+  return BUILT_IN_IDS.has(id);
+}
+
+/** Where a registered concept came from ("pack:<file>", "ai", ...), or null for built-ins and unknown ids. */
+export function conceptOrigin(id: string): string | null {
+  return ORIGINS.get(id) ?? null;
+}
+
+/** Test seam: remove everything registered at runtime. */
+export function clearRegisteredConcepts(): void {
+  for (const id of [...ORIGINS.keys()]) unregister(id);
 }
 
 /* ------------------------------------------------------------------ *

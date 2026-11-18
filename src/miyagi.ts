@@ -33,6 +33,8 @@ import { profilePath, profileDir, isDue, REVIEW_INTERVALS_DAYS } from "./profile
 import { readHistory, summarise, historyPath, flushHistory } from "./history.js";
 import { analyse } from "./insights.js";
 import { runDoctor } from "./doctor.js";
+import { loadIdeaPacks, packProblems } from "./packs.js";
+import { lessonSections } from "./notes.js";
 import {
   allTracks,
   exampleTrackJson,
@@ -101,6 +103,7 @@ import { screenCommand, screenDanger } from "./safety.js";
 import { looksInteractive, runCommand, DEFAULT_TIMEOUT_MS } from "./run.js";
 import { AudioQueue, sanitizeForSpeech } from "./tts.js";
 import {
+  ARCHIVE_IS_ALWAYS_FULL,
   commandXp,
   parseMode,
   policyFor,
@@ -2299,7 +2302,7 @@ server.registerTool(
       openWorldHint: false,
     },
     description:
-      "Write a ROADMAP_PROGRESS.md review sheet: roadmap position, player stats, mastery, what is due for review, and the practice log. Reads the durable history, so it is correct after a restart.",
+      "Write a ROADMAP_PROGRESS.md review sheet: roadmap position, player stats, mastery, what is due for review, the practice log, and the full lesson for every command practised and every idea met. Reads the durable history, so it is correct after a restart.",
     inputSchema: {
       output_path: z
         .string()
@@ -2384,6 +2387,10 @@ server.registerTool(
             .join("\n")
         : "_No commands recorded in this scope._",
       "",
+      // What surfaced at the time depended on the mode. What is kept does not:
+      // the export carries the whole lesson for everything on record, looked
+      // up now from the packs because the log stores which, never what.
+      ...(ARCHIVE_IS_ALWAYS_FULL ? lessonSections(entries, session.skillLevel) : []),
       "## Quiz Log",
       "",
       quizzes.length
@@ -2865,6 +2872,9 @@ async function main(): Promise<void> {
   if (restored) markReturning();
   const tracks = await loadUserTracks();
   const cachedQuestions = await loadGeneratedCache();
+  // After the profile, before the transport: a review item for a pack's
+  // question has to find that question from the very first request.
+  const packs = await loadIdeaPacks();
 
   attachSampling(server);
   const transport = new StdioServerTransport();
@@ -2888,6 +2898,13 @@ async function main(): Promise<void> {
       `(${tracks.loaded} user-authored from ${tracks.dir}), ${reviewCounts().due} items due for review`,
   );
   if (tracks.skipped.length) log("skipped roadmap files:", tracks.skipped.join(", "));
+  if (packs.length) {
+    const problems = packProblems(packs);
+    log(
+      `idea packs: ${packs.reduce((n, p) => n + p.added.length, 0)} ideas from ${packs.length} file${packs.length === 1 ? "" : "s"}` +
+        (problems.length ? `; skipped ${problems.join(", ")}` : ""),
+    );
+  }
   log(
     `shell ${hostShell()} via ${execShellName()}, ${cachedQuestions} cached generated questions, ` +
       `${verified.size} verified checkpoints`,

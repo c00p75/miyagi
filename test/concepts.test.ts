@@ -100,6 +100,149 @@ test("it does not claim what is not there", () => {
   assert.ok(!ids("a.py", "useState(0)").includes("react-state"));
 });
 
+/* ---- the newer ideas: what each sees, and the look-alike it must leave alone ---- */
+
+const sees = (id: string, file: string, code: string) =>
+  assert.ok(ids(file, code).includes(id), `${id} was not seen in: ${code}`);
+const ignores = (id: string, file: string, code: string) =>
+  assert.ok(!ids(file, code).includes(id), `${id} was claimed from: ${code}`);
+
+test("raw HTML is noticed where it is injected, not where it is cleared or read", () => {
+  const id = "xss-html-injection";
+  sees(id, "Post.tsx", "<div dangerouslySetInnerHTML={{ __html: post.body }} />");
+  sees(id, "list.js", "el.innerHTML = `<li>${comment.text}</li>`;");
+  sees(id, "list.js", "out.innerHTML += row;");
+  sees(id, "Comment.vue", '<p v-html="comment.body"></p>');
+  sees(id, "templates/bio.html", "{{ user.bio|safe }}");
+  sees(id, "legacy.js", "document.write(banner);");
+  ignores(id, "list.js", 'el.innerHTML = "";');
+  ignores(id, "list.js", "if (el.innerHTML === expected) return;");
+  ignores(id, "list.js", "el.textContent = comment.text;");
+  ignores(id, "notes.md", "Never use dangerouslySetInnerHTML with user input.");
+  ignores(id, "templates/bio.html", "<p>Keep your account safe by using a long password.</p>");
+});
+
+test("rate limiting is seen as a call or a library, never as the word", () => {
+  const id = "rate-limiting";
+  sees(id, "server.js", "app.use(rateLimit({ windowMs: 60_000, max: 20 }));");
+  sees(id, "server.js", 'import rateLimit from "express-rate-limit";');
+  sees(id, "limit.ts", 'import { Ratelimit } from "@upstash/ratelimit";');
+  sees(id, "main.py", "from slowapi import Limiter");
+  sees(id, "search.js", "const onType = throttle(runSearch, 300);");
+  ignores(id, "server.js", "// TODO: rate limit this endpoint and throttle the bots");
+  ignores(id, "trim.ts", "const limit = Math.min(items.length, 10);");
+  ignores(id, "engine.js", "const throttle = pedal.position * 0.8;");
+  ignores(id, "README.md", "We rateLimit( every route.");
+});
+
+test("a transaction is seen as a boundary in code, not as a noun or a git verb", () => {
+  const id = "db-transaction";
+  sees(id, "transfer.ts", "await prisma.$transaction([debit, credit]);");
+  sees(id, "transfer.ts", "await db.transaction(async (tx) => {");
+  sees(id, "services.py", "    with transaction.atomic():");
+  sees(id, "transfer.sql", "BEGIN;");
+  sees(id, "transfer.js", 'await client.query("COMMIT");');
+  ignores(id, "pay.ts", "const transaction = await stripe.charges.retrieve(id);");
+  ignores(id, "pay.py", 'transaction_id = payment["id"]');
+  ignores(id, "release.js", 'await run("git", ["commit", "-m", message]);');
+  ignores(id, "import.rb", "begin");
+  ignores(id, "notes.ts", "// begin transaction here once the schema is ready");
+});
+
+test("caching is seen where something is stored or given a lifetime, not in a name", () => {
+  const id = "caching";
+  sees(id, "users.ts", "const hit = await redis.get(`user:${id}`);");
+  sees(id, "users.ts", "userCache.set(id, user);");
+  sees(id, "page.tsx", "export const revalidate = 60;");
+  sees(id, "data.ts", "const getPosts = unstable_cache(loadPosts);");
+  sees(id, "rates.py", "@lru_cache(maxsize=None)");
+  sees(id, "assets.js", 'res.setHeader("Cache-Control", "no-store");');
+  ignores(id, "totals.ts", "const cached = computeTotals(orders);");
+  ignores(id, "totals.ts", "if (cached) return cached;");
+  ignores(id, "totals.ts", "let cacheHits = 0;");
+  ignores(id, "form.ts", "await form.revalidate();");
+  ignores(id, "list.ts", "// cache this later");
+});
+
+test("pagination is seen in the mechanics of paging, not in the word page", () => {
+  const id = "pagination";
+  sees(id, "posts.ts", 'sql("SELECT * FROM posts LIMIT 20 OFFSET 40")');
+  sees(id, "posts.ts", "const rows = await db.select().from(posts).offset(skip).limit(take);");
+  sees(id, "posts.ts", "skip: (page - 1) * size,");
+  sees(id, "posts.ts", "cursor: { id: lastId },");
+  sees(id, "views.py", 'page_size = int(request.GET.get("page_size", 20))');
+  sees(id, "route.ts", 'const page = Number(searchParams.get("page") ?? 1);');
+  ignores(id, "list.ts", "// show the first page of results");
+  ignores(id, "Footer.tsx", "<p>Next page</p>");
+  ignores(id, "scrape.ts", "const page = await browser.newPage();");
+  ignores(id, "db.py", "cursor = conn.cursor()");
+  ignores(id, "Save.tsx", 'style={{ cursor: "pointer" }}');
+  ignores(id, "styles.css", "  cursor: pointer;");
+  ignores(id, "trim.ts", "const limit = 10;");
+});
+
+test("a file upload is seen where a file arrives, not wherever a file is mentioned", () => {
+  const id = "file-upload";
+  sees(id, "upload.js", 'const upload = multer({ dest: "uploads/" });');
+  sees(id, "upload.js", 'app.post("/avatar", upload.single("avatar"), save);');
+  sees(id, "actions.ts", 'const file = formData.get("avatar") as File;');
+  sees(id, "main.py", "async def create(file: UploadFile):");
+  sees(id, "Form.tsx", '<input type="file" name="avatar" />');
+  sees(id, "presign.ts", "const { url, fields } = await createPresignedPost(s3, params);");
+  ignores(id, "config.ts", 'const text = await fs.readFile(file, "utf8");');
+  ignores(id, "Form.tsx", '<input type="text" name="file" />');
+  ignores(id, "actions.ts", 'const name = formData.get("name");');
+  ignores(id, "notes.ts", "// the upload file goes here");
+  ignores(id, "download.ts", "const url = await getSignedUrl(s3, new GetObjectCommand(params));");
+});
+
+test("a webhook is seen where one is received and verified, not where one is sent or mentioned", () => {
+  const id = "webhook";
+  sees(id, "route.ts", "const event = stripe.webhooks.constructEvent(body, sig, secret);");
+  sees(id, "route.ts", 'const sig = req.headers.get("stripe-signature");');
+  sees(id, "clerk.ts", 'import { Webhook } from "svix";');
+  sees(id, "server.js", 'app.post("/api/webhooks/github", handler);');
+  sees(id, "views.py", "def handle_webhook(request):");
+  sees(id, "env.ts", "const secret = process.env.STRIPE_WEBHOOK_SECRET;");
+  ignores(id, "notify.js", 'const webhookUrl = "https://hooks.slack.com/services/T000/B000/XXXX";');
+  ignores(id, "notify.js", "await fetch(webhookUrl, { method: \"POST\", body });");
+  ignores(id, "todo.ts", "// TODO: add a webhook for refunds");
+  ignores(id, "README.md", "Stripe calls constructEvent( on our webhook.");
+});
+
+test("props are seen on components, not on every function that takes an object", () => {
+  const id = "react-props";
+  sees(id, "Button.tsx", "interface ButtonProps {");
+  sees(id, "Button.tsx", "export function Button({ label, onClick }: ButtonProps) {");
+  sees(id, "Avatar.jsx", "const Avatar = ({ src }) => <img src={src} />;");
+  sees(id, "Title.jsx", "return <h1>{props.title}</h1>;");
+  sees(id, "Layout.tsx", "  children: React.ReactNode;");
+  sees(id, "Card.tsx", "      {children}");
+  ignores(id, "users.ts", "function createUser({ name, email }: NewUser) {");
+  ignores(id, "users.ts", "export async function sendEmail({ to, subject }) {");
+  ignores(id, "retry.ts", "const retry = ({ times = 3 }) => times;");
+  ignores(id, "tree.ts", "const { children } = node;");
+  ignores(id, "Button.py", "interface ButtonProps {");
+  ignores(id, "Button.go", "props.title");
+});
+
+test("a background job is seen as a schedule or a queue, not as any timer or list", () => {
+  const id = "background-job";
+  sees(id, "jobs.js", 'cron.schedule("*/5 * * * *", syncInventory);');
+  sees(id, "signup.ts", 'await emailQueue.add("welcome", { userId });');
+  sees(id, "worker.ts", 'import { Queue, Worker } from "bullmq";');
+  sees(id, "tasks.py", "from celery import shared_task");
+  sees(id, "digest.ts", 'export default inngest.createFunction({ id: "digest" }, { cron: "0 9 * * *" }, run);');
+  sees(id, "Reports.java", "    @Scheduled(fixedRate = 60000)");
+  sees(id, "poll.js", "setInterval(poll, 5000);");
+  ignores(id, "Toast.tsx", "setTimeout(() => setOpen(false), 3000);");
+  ignores(id, "bfs.js", "queue.push(node);");
+  ignores(id, "plan.py", "schedule = load_schedule(path)");
+  ignores(id, "notes.ts", "// runs from cron every night");
+  ignores(id, "grid.ts", 'const cells = "1 2 3 4 5";');
+  ignores(id, "README.md", "setInterval( is how we poll.");
+});
+
 test("generated and vendored files are never taught from", () => {
   assert.deepEqual(ids("package-lock.json", '"zod": "^3.23.8",'), []);
   assert.deepEqual(ids("node_modules/x/index.js", "useEffect(() => {}, [])"), []);

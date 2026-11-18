@@ -315,6 +315,9 @@ test("resources are readable without a tool call", async () => {
 });
 
 test("notes are written from the durable history, so a restart cannot empty them", async () => {
+  // An idea has to have been met for the export to have one to explain.
+  await call("explain_change", { diff: "const [open, setOpen] = useState(false);", path: "src/Menu.tsx", quiz: false });
+
   const target = path.join(home, "NOTES.md");
   const res = await call("export_roadmap_notes", { output_path: target });
   assert.match(res.result.content[0].text, /Notes Exported/);
@@ -323,6 +326,23 @@ test("notes are written from the durable history, so a restart cannot empty them
   assert.match(written, /printf/);
   assert.match(written, /Due for Review/);
   assert.match(written, /Weak Spots/);
+  assert.match(written, /Quiz Log/);
+
+  // The lesson, not just the log: one entry per distinct command, however
+  // many times it was run, at the depth the learner is being taught at.
+  const section = (heading: string) => written.split(`## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+  const commands = section("What each command does");
+  assert.equal(commands.match(/^### `printf`/gm)?.length, 1, "printf was run several times and explained other than once");
+  assert.match(commands, /^### `ls`/m);
+  assert.match(commands, /\*\*What it is\.\*\*/);
+  assert.match(commands, /\*\*How it bites\.\*\*/);
+  assert.match(commands, /Read more: \[/);
+
+  const ideas = section("Ideas met in your code");
+  assert.match(ideas, /### 🧠 React state/);
+  assert.match(ideas, /A value a component remembers between renders/);
+  assert.match(ideas, /\*\*How it bites\.\*\*/);
+  assert.ok(!/Roadmap set|Suggested command/.test(ideas), "a config event was listed as an idea");
 });
 
 test("prompts render usable instructions", async () => {

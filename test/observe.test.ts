@@ -26,7 +26,7 @@ const tmp = (name: string) => fs.mkdtemp(path.join(os.tmpdir(), `miyagi-${name}-
 function runHook(entry: string, args: string[], stdin: string, home: string) {
   return new Promise<{ code: number | null; stdout: string }>((resolve) => {
     const child = spawn(process.execPath, [entry, ...args], {
-      env: { ...process.env, MIYAGI_HOME: home },
+      env: { ...process.env, MIYAGI_HOME: home, HOME: home, USERPROFILE: home },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -181,8 +181,17 @@ test("Cursor hooks follow the same rules", () => {
   assert.deepEqual(mergeCursor(once, null), existing);
 });
 
-test("setup writes the file, reports honestly, and refuses to overwrite broken JSON", async () => {
+test("setup writes the file, reports honestly, and refuses to overwrite broken JSON", async (t) => {
   const cwd = await tmp("setup");
+  // `hookInstalled` checks the global scope too, which is the real home
+  // directory unless it is pointed elsewhere for the length of this test.
+  const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  t.after(() => {
+    process.env.HOME = realHome.HOME;
+    if (realHome.USERPROFILE === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = realHome.USERPROFILE;
+  });
+  process.env.HOME = process.env.USERPROFILE = await tmp("setup-home");
   const first = await applyHooks({ client: "claude", scope: "project", cwd, command: "node x # miyagi-observe" });
   assert.equal(first.status, "installed");
   assert.equal(await hookInstalled("claude", cwd), first.file);
