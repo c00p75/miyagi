@@ -1,0 +1,56 @@
+name: VS Code extension
+
+on:
+  push:
+    branches: [main]
+    tags: ["vscode-v*"]
+    paths: ["vscode/**", "src/**", ".github/workflows/vscode.yml"]
+  pull_request:
+    paths: ["vscode/**", "src/**", ".github/workflows/vscode.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            vscode/package-lock.json
+
+      # The extension bundles the engine from ../src, so both trees are needed.
+      - run: npm ci
+      - run: npm ci
+        working-directory: vscode
+
+      # Typecheck, unit tests, production bundle, .vsix.
+      - name: Package
+        run: npm run package
+        working-directory: vscode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: miyagi-vscode
+          path: vscode/*.vsix
+          if-no-files-found: error
+
+      # A tag is the release. The version in vscode/package.json is what ships;
+      # the tag only says "now".
+      - name: Publish to the VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/vscode-v')
+        run: npm run publish:marketplace
+        working-directory: vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        if: startsWith(github.ref, 'refs/tags/vscode-v')
+        run: npm run publish:openvsx
+        working-directory: vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}

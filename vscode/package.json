@@ -1,0 +1,208 @@
+{
+  "name": "miyagi-vscode",
+  "displayName": "Miyagi: learn while your AI codes",
+  "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
+  "version": "0.1.0",
+  "publisher": "georgemsapenda",
+  "author": "George M'sapenda",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "Education",
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "learn",
+    "tutor",
+    "vibe coding",
+    "claude code",
+    "cursor",
+    "copilot",
+    "spaced repetition"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/c00p75/miyagi.git",
+    "directory": "vscode"
+  },
+  "main": "./dist/extension.js",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0B0B0B",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "miyagi",
+          "title": "Miyagi",
+          "icon": "media/activity.svg",
+          "when": "!miyagi.secondarySidebar"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "miyagi-secondary",
+          "title": "Miyagi",
+          "icon": "media/activity.svg",
+          "when": "miyagi.secondarySidebar"
+        }
+      ]
+    },
+    "views": {
+      "miyagi": [
+        {
+          "type": "webview",
+          "id": "miyagi.panel",
+          "name": "Miyagi",
+          "when": "!miyagi.secondarySidebar"
+        }
+      ],
+      "miyagi-secondary": [
+        {
+          "type": "webview",
+          "id": "miyagi.panelSecondary",
+          "name": "Miyagi",
+          "when": "miyagi.secondarySidebar"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "miyagi.open",
+        "title": "Open Panel",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.setup",
+        "title": "Set Up Everything for Me",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.moveToSide",
+        "title": "Move Panel to Another Side Bar",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.explainChanges",
+        "title": "Teach Me My Uncommitted Changes",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.review",
+        "title": "Review What Is Due",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.chooseAi",
+        "title": "Choose Which AI Writes Explanations",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.enableCapture",
+        "title": "Turn On Command Capture (choose assistant and scope)",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.disableCapture",
+        "title": "Turn Off Command Capture",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.clearFeed",
+        "title": "Clear the Lesson Feed",
+        "category": "Miyagi"
+      }
+    ],
+    "configuration": {
+      "title": "Miyagi",
+      "properties": {
+        "miyagi.watch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch the workspace for code changes and add a lesson card when a change uses an idea worth understanding. Read-only: uses git diff and never edits files."
+        },
+        "miyagi.ideasPerChange": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "The most ideas taught from one change. The rest are named and left for next time."
+        },
+        "miyagi.ai.provider": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "editor",
+            "claude",
+            "codex",
+            "gemini",
+            "custom",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Use the assistant you were seen working with, else the first one found.",
+            "Chat models the editor exposes to extensions (GitHub Copilot in VS Code).",
+            "Claude Code, run headless on your existing login.",
+            "OpenAI Codex, run headless on your existing login.",
+            "Gemini CLI, run headless on your existing login.",
+            "Your own command (miyagi.ai.customCommand).",
+            "No AI. Cards use the built-in lessons only."
+          ],
+          "description": "Which AI writes the explanation tied to your code. It runs on your own account with that provider; Miyagi has no account and no key of its own."
+        },
+        "miyagi.ai.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to ask for. Empty picks a small, cheap model where the provider lets Miyagi choose (Claude Code: haiku)."
+        },
+        "miyagi.ai.customCommand": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "A shell command that reads the prompt on stdin and prints the answer on stdout, for example `llm -m gpt-4o-mini` or `ollama run llama3.2`. Used when the provider is `custom`."
+        },
+        "miyagi.ai.explain": {
+          "type": "string",
+          "default": "onDemand",
+          "enum": [
+            "onDemand",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Only when you press \"Explain in my code\" on a card.",
+            "Automatically for every new card. Uses more of your AI allowance."
+          ],
+          "description": "When Miyagi asks your AI for an explanation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node esbuild.mjs --tests && node --test dist-test/*.test.cjs",
+    "test:host": "node esbuild.mjs && sh test/host/run.sh",
+    "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --baseContentUrl https://github.com/c00p75/miyagi/blob/main/vscode --baseImagesUrl https://github.com/c00p75/miyagi/raw/main/vscode",
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "publish:marketplace": "vsce publish --no-dependencies --packagePath miyagi-vscode-$npm_package_version.vsix",
+    "publish:openvsx": "npx --yes ovsx publish miyagi-vscode-$npm_package_version.vsix",
+    "release": "npm run package && npm run publish:marketplace && npm run publish:openvsx"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/vscode": "~1.94.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  }
+}
