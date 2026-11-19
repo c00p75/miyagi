@@ -18,7 +18,10 @@
 
   /** @type {any} */
   let state = null;
-  const ui = Object.assign({ tab: "now", open: {}, more: {}, practice: {}, lesson: {}, idea: null }, vscode.getState() || {});
+  const ui = Object.assign(
+    { tab: "now", open: {}, more: {}, practice: {}, lesson: {}, idea: null, depthNote: "unseen" },
+    vscode.getState() || {},
+  );
   /** slot -> { quiz, answer, picked }. A slot is a card key, or `<key>|own` for a question about its code. */
   const quizzes = {};
   /** Text typed and not yet sent, by draft id, so a redraw does not eat it. */
@@ -126,7 +129,8 @@
   function header() {
     const s = state.status;
     const depths = ["Junior", "Mid", "Senior"]
-      .map((d) => `<option value="${d}"${d === s.depth ? " selected" : ""}>${d}</option>`)
+      // "Depth:" on every option, so the closed dropdown never reads as a second filter.
+      .map((d) => `<option value="${d}"${d === s.depth ? " selected" : ""}>Depth: ${d}</option>`)
       .join("");
     const topics = [`<option value="">All topics</option>`]
       .concat(
@@ -170,9 +174,14 @@
           </label>
           <label>
             <span class="sr">Explanation depth</span>
-            <select data-change="depth" title="How deep explanations go">${depths}</select>
+            <select data-change="depth" title="How deep explanations and questions go. Every idea still appears at every depth.">${depths}</select>
           </label>
         </div>
+        ${
+          ui.depthNote === "showing"
+            ? `<div class="banner" role="status">Depth changes how deep explanations and questions go. Every idea still appears, at any depth. <button class="link" data-action="depthNoted">Got it</button></div>`
+            : ""
+        }
         <progress max="100" value="${s.intoLevel}" aria-label="Progress to next level"></progress>
         <div class="meta">${s.xp} XP${streak} · ${s.discovered} of ${s.concepts} ideas found</div>
         ${banner}
@@ -1080,6 +1089,10 @@
         return render();
       case "allTopics":
         return send({ type: "setTopic", topic: "" });
+      case "depthNoted":
+        ui.depthNote = "done";
+        remember();
+        return render();
       case "acceptDepth":
         return send({ type: "setDepth", depth: d.depth });
       case "dismissDepth":
@@ -1124,7 +1137,14 @@
 
   app.addEventListener("change", (event) => {
     const el = /** @type {HTMLSelectElement} */ (event.target);
-    if (el.dataset.change === "depth") send({ type: "setDepth", depth: el.value });
+    if (el.dataset.change === "depth") {
+      // Explained once, the first time it is used, then never again.
+      if (ui.depthNote === "unseen") {
+        ui.depthNote = "showing";
+        remember();
+      }
+      send({ type: "setDepth", depth: el.value });
+    }
     if (el.dataset.change === "topic") {
       // A review in progress belongs to the old topic.
       review = { asked: false, quiz: null, answer: null, picked: -1, cleared: 0 };

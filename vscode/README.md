@@ -40,6 +40,7 @@ The research behind these choices: Dunlosky et al. (2013) on which study techniq
 - **A card when it matters.** When new code relies on an idea such as password hashing, a React effect or a hard-coded secret, a card appears: what it is, what to know at your level, and how it goes wrong. At most two ideas per change. Ideas that cost data or money when misunderstood carry a Risk tag.
 - **Review**, with a belt per idea showing how firmly you hold it, and a weekly goal instead of a streak.
 - **Topics.** Pick Security, Backend and APIs, Data, Frontend or Tooling to see and be taught that shelf first.
+- **Depth.** Junior, Mid or Senior sets how deep explanations, questions and AI answers go. It is not a filter: every idea appears at every depth. After ten answers Miyagi suggests moving up or down a level.
 - **A dojo you can browse**, with every idea, your mistakes and what is true, how well your confidence predicts being right, and your last unaided check.
 - **The unaided check.** About ten questions with every kind of help off.
 - **Write my own question** on any card.
