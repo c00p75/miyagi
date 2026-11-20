@@ -87,11 +87,12 @@ test("a prediction must be answerable, and an explained error must quote what is
 test("further reading never uses an address a model wrote", () => {
   const reply = JSON.stringify({
     sections: Object.fromEntries(ids.slice(0, 6).map((i) => [i, sec()])),
-    deeper: [{ kind: "video", title: "Docker in 100 Seconds", by: "Fireship", url: "https://evil.example/x" }, { kind: "podcast", title: "nope" }, { kind: "book", title: "Docker Deep Dive", by: "Nigel Poulton" }],
+    deeper: [{ kind: "video", title: "Docker in 100 Seconds", by: "Fireship", url: "https://evil.example/x" }, { kind: "podcast", title: "nope" }, { kind: "book", title: "Docker Deep Dive", by: "Nigel Poulton" }, { kind: "site", title: "Play with Docker", by: "Docker" }],
   });
   const l = parseLesson(reply, subject, "Junior", "AI");
   assert.ok(l);
-  assert.equal(l.deeper.length, 3);
+  assert.equal(l.deeper.length, 4);
+  assert.deepEqual(l.deeper.map((r) => r.kind), ["docs", "video", "book", "site"]);
   assert.ok(l.deeper.every((r) => !r.url.includes("evil.example")));
   assert.ok(l.deeper[1].url.startsWith("https://www.youtube.com/results?search_query=Docker%20in%20100%20Seconds"));
   assert.ok(l.deeper[2].url.startsWith("https://duckduckgo.com/?q=Docker%20Deep%20Dive"));

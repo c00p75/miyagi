@@ -189,7 +189,7 @@ import { builtInLesson, parseLesson, type Subject } from "../../src/lesson.js";
       check: { sayIt: "Without looking back: a friend asks “what is Docker for?” What do you tell them?", predict: P("“It works on my machine but not on yours.” With Docker, why should that stop?", ["Docker makes laptops faster", "Both run the same image", "Docker fixes bugs in the code"], 1, "Both run the same image."), remember: ["Code needs an environment. Docker packs both together.", "Image = packed. Container = running.", "Your app is four containers, listed in one file."] },
     },
     concepts: ["Image", "Container", "Dockerfile", "Volume"],
-    deeper: [{ kind: "video", title: "Docker in 100 Seconds", by: "Fireship" }, { kind: "video", title: "Docker Tutorial for Beginners", by: "TechWorld with Nana" }, { kind: "book", title: "Docker Deep Dive", by: "Nigel Poulton" }],
+    deeper: [{ kind: "video", title: "Docker in 100 Seconds", by: "Fireship" }, { kind: "video", title: "Docker Tutorial for Beginners", by: "TechWorld with Nana" }, { kind: "article", title: "Get started with Docker", by: "Docker documentation" }, { kind: "site", title: "Play with Docker", by: "A free practice lab in your browser" }, { kind: "book", title: "Docker Deep Dive", by: "Nigel Poulton" }],
   });
   const lessonSample = { Junior: parseLesson(reply, dockerSubject, "Junior", "Claude Code (haiku)"), builtIn: builtInLesson(dockerSubject, "Mid") };
   Object.assign(state, {

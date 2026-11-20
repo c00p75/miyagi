@@ -48,6 +48,8 @@
       decisionForm: false,
       // The depth chosen on one card, when it differs from the learner's default.
       lessonDepth: {},
+      // Which type of further reading is showing on each card.
+      lessonTab: {},
     },
     vscode.getState() || {},
   );
@@ -1267,18 +1269,39 @@
       : state.ai.label
       ? failed(slot) ? `<p class="ls-note muted">${esc(failed(slot))}</p>` : ""
       : `<p class="ls-note muted">Miyagi's built-in lesson. <button class="link" data-action="command" data-id="miyagi.chooseAi">Choose an AI</button> for one written about your project.</p>`;
-    const kinds = { video: "▶", article: "📄", book: "📘", docs: "📚" };
-    const sid = `${key}|Ldeeper`;
-    const deeper = L.deeper.length
-      ? `<details class="ls-sec" data-section="${esc(sid)}"${ui.sections[sid] ? " open" : ""}>
-          <summary><span class="ls-n">＋</span><span class="ls-t"><span>Go deeper</span><span>Videos, articles and books for this depth</span></span><span class="chev" aria-hidden="true">›</span></summary>
-          <div class="ls-body">${L.deeper
-            .map((/** @type {any} */ r) => `<button class="ls-res" data-action="link" data-url="${esc(r.url)}"><span aria-hidden="true">${kinds[r.kind] || "↗"}</span><span><span>${esc(r.title)}</span><span>${esc(r.by)}</span></span><span aria-hidden="true">↗</span></button>`)
-            .join("")}<p class="muted ls-small">Links open in your browser. Except for official documentation, each opens a search for that title, so it never leads to a dead page.</p></div>
-        </details>`
+    // Further reading, always shown at the end: one tab per type, each with its count.
+    const TABS = [
+      ["video", "Videos", "▶"],
+      ["article", "Articles", "📄"],
+      ["site", "Sites", "🌐"],
+      ["book", "Books", "📘"],
+    ];
+    // Official documentation is a site.
+    const typeOf = (/** @type {any} */ r) => (r.kind === "docs" ? "site" : r.kind);
+    const present = TABS.filter(([k]) => L.deeper.some((/** @type {any} */ r) => typeOf(r) === k));
+    const tab = present.some(([k]) => k === ui.lessonTab[key]) ? ui.lessonTab[key] : present.length ? present[0][0] : "";
+    const deeper = present.length
+      ? `<section class="ls-end" aria-label="Keep learning">
+          <h3>Keep learning</h3>
+          <div class="ls-tabs" role="tablist">${present
+            .map(([k, label]) => {
+              const n = L.deeper.filter((/** @type {any} */ r) => typeOf(r) === k).length;
+              return `<button role="tab" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}" data-action="lessonTab" data-key="${esc(key)}" data-tab="${k}">${label} <i>${n}</i></button>`;
+            })
+            .join("")}</div>
+          <div class="ls-reslist" role="tabpanel">${L.deeper
+            .filter((/** @type {any} */ r) => typeOf(r) === tab)
+            .map((/** @type {any} */ r) => {
+              const icon = r.kind === "docs" ? "📚" : (TABS.find(([k]) => k === r.kind) || [])[2] || "↗";
+              return `<button class="ls-res" data-action="link" data-url="${esc(r.url)}"><span aria-hidden="true">${icon}</span><span><span>${esc(r.title)}</span><span>${esc(r.by)}</span></span><span aria-hidden="true">↗</span></button>`;
+            })
+            .join("")}</div>
+          <p class="muted ls-small">Links open in your browser. Except for official documentation, each opens a search for that title, so it never leads to a dead page.</p>
+        </section>`
       : "";
     return `<div class="ls">${seg}${note}
-      <div class="ls-secs">${LESSON_SECTIONS.map(([sidName], i) => lessonSection(key, depth, L.sections[sidName], i, L)).join("")}${deeper}</div>
+      <div class="ls-secs">${LESSON_SECTIONS.map(([sidName], i) => lessonSection(key, depth, L.sections[sidName], i, L)).join("")}</div>
+      ${deeper}
     </div>`;
   }
 
@@ -2768,6 +2791,10 @@
         remember();
         send({ type: "grow" });
         return render();
+      case "lessonTab":
+        ui.lessonTab[key] = d.tab;
+        remember();
+        return render();
       case "lessonDepth":
         ui.lessonDepth[key] = d.depth;
         remember();
@@ -3052,6 +3079,7 @@
 
   if (!ui.sections) ui.sections = {};
   if (!ui.lessonDepth) ui.lessonDepth = {};
+  if (!ui.lessonTab) ui.lessonTab = {};
   if (!ui.altOpen) ui.altOpen = {};
   if (!ui.termRevealed) ui.termRevealed = {};
   if (!ui.scroll) ui.scroll = {};

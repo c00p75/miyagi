@@ -62,7 +62,7 @@ export interface Section {
 }
 
 export interface Resource {
-  kind: "video" | "article" | "book" | "docs";
+  kind: "video" | "article" | "site" | "book" | "docs";
   title: string;
   by: string;
   url: string;
@@ -209,7 +209,7 @@ function resources(raw: unknown, subject: Subject, depth: Depth): Resource[] {
   const out: Resource[] = [];
   if (subject.docs && /^https:\/\//.test(subject.docs.url)) out.push({ kind: "docs", title: subject.docs.label, by: "Official documentation", url: subject.docs.url });
   for (const r of list(raw).map(o)) {
-    const kind = (["video", "article", "book"] as const).find((k) => k === str(r.kind, 10));
+    const kind = (["video", "article", "site", "book"] as const).find((k) => k === str(r.kind, 10));
     const title = str(r.title, 100);
     const by = str(r.by, 60);
     if (!kind || !title) continue;
@@ -220,7 +220,7 @@ function resources(raw: unknown, subject: Subject, depth: Depth): Resource[] {
     out.push({ kind: "video", title: `Videos: ${subject.name} ${level}`, by: "YouTube search", url: search("video", `${subject.name} ${level}`) });
     out.push({ kind: "article", title: `Articles: ${subject.name} ${level}`, by: "Web search", url: search("article", `${subject.name} ${level} explained`) });
   }
-  return out.slice(0, 6);
+  return out.slice(0, 9);
 }
 
 /* ------------------------------------------------------------------ *
@@ -321,7 +321,7 @@ const SHAPE = [
   '  "concept": {…same fields…}, "how": {…}, "architecture": {…}, "implementation": {…}, "practical": {…},',
   '  "application": {"task": {"goal": "...", "where": "...", "doneWhen": "...", "hint": "...", "experiments": ["...", "...", "..."]}},',
   '  "check": {"sayIt": "...", "predict": {…}, "remember": ["...", "...", "..."]}',
-  '}, "concepts": ["...", "..."], "deeper": [{"kind": "video" | "article" | "book", "title": "...", "by": "..."}]}',
+  '}, "concepts": ["...", "..."], "deeper": [{"kind": "video" | "article" | "site" | "book", "title": "...", "by": "..."}]}',
   "VISUAL is one of:",
   '  {"type": "compare", "cols": [{"title": "...", "good": true, "rows": ["...", "..."], "diff": 1, "result": "..."}, {…}]}   (diff = index of the one row that differs)',
   '  {"type": "flow", "steps": [{"label": "...", "note": "..."}]}',
@@ -353,7 +353,7 @@ export function lessonPrompt(req: { subject: Subject; depth: Depth; profile: Pro
     "",
     "Limits: hook at most 70 words; explain at most 70 words; oneLine one sentence; bridge one question; each predict has exactly 3 options of similar length, with the right one not always first; why at most 15 words.",
     "concepts: 3-4 related concepts at my depth, each worth its own lesson (names only, 1-3 words).",
-    "deeper: up to 4 well-known resources at my depth that really exist (a short video, a longer one, an article, a book). Title and author only; do not write addresses.",
+    "deeper: up to 7 well-known resources at my depth that really exist: 2 videos (one short, one longer), 2 articles, 1-2 sites (a practice lab, playground or reference), 1 book. Title and author or publisher only; do not write addresses.",
     "",
     JSON_ONLY,
     SHAPE,

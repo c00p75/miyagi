@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+### Changed
+
+- **Keep learning, at the end of every lesson.** Further reading is no longer behind a "Go deeper" row. It is always shown after the knowledge check, as tabs by type (Videos, Articles, Sites and Books), each with a count. Your AI is now asked for sites too, such as practice labs and references. Official documentation sits under Sites.
+
 ## 0.8.0
 
 ### Added
