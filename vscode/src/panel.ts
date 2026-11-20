@@ -18,7 +18,6 @@ import path from "node:path";
 import { conceptsIn, gitChanges } from "../../src/changes.js";
 import { CONCEPTS, scrub, type FileChange } from "../../src/concepts.js";
 import type { Observation } from "../../src/observe.js";
-import { AudioQueue } from "../../src/tts.js";
 import * as engine from "./engine.js";
 import { resolveProvider, type AiOptions, type Prompt } from "./ai.js";
 import {
@@ -149,7 +148,6 @@ type Inbound =
   | { type: "attemptSubmit"; key: string; text: string }
   | { type: "bug"; key: string }
   | { type: "why"; key: string }
-  | { type: "speak"; key: string }
   | { type: "risks"; lesson: string }
   | { type: "walk"; lesson: string }
   | { type: "walkStep"; lesson: string; index: number }
@@ -273,8 +271,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private lastDepth: engine.Level = "Junior";
   readonly coach: Coach;
 
-  private readonly voice = { enabled: true, words_per_minute: 180 };
-  private readonly audio = new AudioQueue(this.voice);
   private readonly highlight = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
     backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
@@ -681,7 +677,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         this.explanations[key] = { text, by };
         this.reflect((m) => m.explained++);
         this.save();
-        if (setting("voice.autoRead", false)) this.speakText(text);
       },
     );
   }
@@ -1094,7 +1089,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     const step = this.lessonExtras[id]?.walk?.steps[index];
     if (!lesson || !step) return;
     if (step.file) await this.openAt(lesson.root, step.file, step.line, true);
-    if (setting("voice.autoRead", false)) this.speakText(`${step.title}. ${step.text}`);
   }
 
   /* ---- the editor ------------------------------------------------ */
@@ -1136,32 +1130,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       // openAt reports the failure.
     }
     await this.openAt(card.root, card.file, line);
-  }
-
-  /* ---- voice ----------------------------------------------------- */
-
-  private speakText(text: string): void {
-    this.voice.words_per_minute = Math.max(90, Math.min(360, setting("voice.wordsPerMinute", 180)));
-    this.audio.enqueue(text);
-  }
-
-  private speak(key: string): void {
-    const card = this.card(key);
-    if (!card) return;
-    // Pressing it again while more is queued is how you stop it.
-    if (this.audio.pending) return this.audio.clear();
-    this.speakText(
-      [
-        card.title,
-        card.hook,
-        card.what,
-        card.lens[this.lastDepth],
-        `How it goes wrong. ${card.pitfall}`,
-        this.explanations[key]?.text ?? "",
-      ]
-        .filter(Boolean)
-        .join(". "),
-    );
   }
 
   /* ---- things that arrive from the watcher ----------------------- */
@@ -1297,9 +1265,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     if (setting<string>("ai.explain", "onDemand") === "auto") {
       for (const card of lesson.cards) void this.explain(card.key);
     }
-    if (setting("voice.autoRead", false) && lesson.cards[0]) {
-      this.speakText(`New idea. ${lesson.cards[0].title}. ${lesson.cards[0].hook}`);
-    }
     return lesson.cards.length;
   }
 
@@ -1421,8 +1386,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.bug(message.key));
         case "why":
           return void (await this.why(message.key));
-        case "speak":
-          return this.speak(message.key);
         case "risks":
           return void (await this.risks(message.lesson));
         case "walk":
@@ -1617,7 +1580,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
 
   dispose(): void {
     for (const b of this.busy.values()) b.abort.abort();
-    this.audio.dispose();
     this.highlight.dispose();
     this.tab?.dispose();
   }

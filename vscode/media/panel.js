@@ -572,7 +572,6 @@
       !state.explainFirst && c.file && !extra.attempt ? `<button class="link" data-action="attempt" data-key="${esc(c.key)}">Explain it yourself first</button>` : "",
       c.file && claude && !extra.why ? `<button class="link" data-action="why" data-key="${esc(c.key)}">What the assistant said</button>` : "",
       c.origin !== "own" && !(extra.ownCard || {}).saved ? `<button class="link" data-action="writeOwn" data-key="${esc(c.key)}">Write my own question</button>` : "",
-      `<button class="link" data-action="speak" data-key="${esc(c.key)}">Read it aloud</button>`,
       `<button class="link" data-action="copy" data-text="${esc(c.askTheAi)}" title="${esc(c.askTheAi)}">Copy a question for your AI</button>`,
       `<button class="link" data-action="link" data-url="${esc(c.docs.url)}">${esc(c.docs.label)}</button>`,
     ]
@@ -1912,7 +1911,6 @@
       case "explain":
       case "attempt":
       case "why":
-      case "speak":
       case "quiz":
         return send({ type: d.action, key });
       case "hint":

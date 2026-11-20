@@ -28,7 +28,6 @@ before(async () => {
   await client.call("quick_config", {
     roadmap_name: "Command Line Basics",
     category: "Absolute Beginners",
-    voice_enabled: false,
     mode: "drill",
   });
 });

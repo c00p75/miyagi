@@ -67,7 +67,6 @@ export const activeRoadmap: Roadmap = {
   total_steps: 10,
 };
 
-export const voice = { enabled: true, words_per_minute: 180 };
 
 export const session = {
   skillLevel: "Junior" as SkillLevel,
@@ -130,8 +129,6 @@ export function snapshot(): PersistedProfile {
     player: { ...player, badges: [...player.badges] },
     settings: {
       skillLevel: session.skillLevel,
-      voiceEnabled: voice.enabled,
-      wordsPerMinute: voice.words_per_minute,
       mode: session.mode,
     },
     roadmap: { ...activeRoadmap },
@@ -217,8 +214,6 @@ export async function hydrate(): Promise<boolean> {
   session.skillLevel = saved.settings.skillLevel as SkillLevel;
   session.recentQuizIds = [...saved.recentQuizIds];
   session.mode = resolveMode(saved.settings.mode);
-  voice.enabled = saved.settings.voiceEnabled;
-  voice.words_per_minute = saved.settings.wordsPerMinute;
 
   activeRoadmap.category = saved.roadmap.category as Category;
   activeRoadmap.roadmap_name = saved.roadmap.roadmap_name;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+### Removed
+
+- **Voice.** "Read it aloud" on cards, the `miyagi.voice.autoRead` and `miyagi.voice.wordsPerMinute` settings, and reading new cards, explanations and walkthrough steps aloud are gone. The system speech engines it used sounded robotic and added little. Remove the two settings from your `settings.json` if you set them; they no longer do anything.
+
 ## 0.5.0
 
 Miyagi taught the ideas in the code. This release adds what grows a developer beyond that: the tools a project adopts, reading errors, judging where a change will land, and seeing your own progress. Every new feature asks you to go first, then shows you the answer.

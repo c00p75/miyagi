@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * miyagi
- * A patient, gamified, voice-enabled MCP coding tutor for people who build
+ * A patient, gamified MCP coding tutor for people who build
  * with AI.
  *
  * The assistant writes the code; this server makes sure the person understood
@@ -101,7 +101,6 @@ import {
 } from "./sampling.js";
 import { screenCommand, screenDanger } from "./safety.js";
 import { looksInteractive, runCommand, DEFAULT_TIMEOUT_MS } from "./run.js";
-import { AudioQueue, sanitizeForSpeech } from "./tts.js";
 import {
   ARCHIVE_IS_ALWAYS_FULL,
   commandXp,
@@ -146,7 +145,6 @@ import {
   verifiedCount,
   isVerified,
   markVerified,
-  voice,
   weakSpots,
   type DayResult,
   type XpResult,
@@ -167,11 +165,9 @@ import {
 const log = (...a: unknown[]) => console.error("[miyagi]", ...a);
 
 /** Re-exported for the test suite, which screens commands without a transport. */
-export { screenDanger, sanitizeForSpeech };
+export { screenDanger };
 export { titleForLevel } from "./profile.js";
 export { resetProgress };
-
-const audioQueue = new AudioQueue(voice);
 
 /* ------------------------------------------------------------------ *
  * Open quizzes
@@ -516,12 +512,7 @@ const server = new McpServer(
   },
 );
 
-/* ---- quick_config -------------------------------------------------- *
- * Voice settings used to live in a second `configure_voice` tool that
- * duplicated these fields. One tool now owns configuration, including the
- * test phrase, because two ways to set the same value is two things to keep
- * in sync and one of them will drift.
- * ------------------------------------------------------------------ */
+/* ---- quick_config -------------------------------------------------- */
 server.registerTool(
   "quick_config",
   {
@@ -534,7 +525,7 @@ server.registerTool(
       openWorldHint: false,
     },
     description:
-      "Set the teaching depth (Junior/Mid/Senior), roadmap category, track, topic, voice, and session mode (drill, ride-along, or focus). Call with no arguments to read the current configuration. `start_placement` opens an optional three-question depth check — never required, and never a reason to skip letting them pick.",
+      "Set the teaching depth (Junior/Mid/Senior), roadmap category, track, topic, and session mode (drill, ride-along, or focus). Call with no arguments to read the current configuration. `start_placement` opens an optional three-question depth check — never required, and never a reason to skip letting them pick.",
     inputSchema: {
       skill_level: z
         .enum(["Junior", "Mid", "Senior"])
@@ -546,9 +537,6 @@ server.registerTool(
         .optional()
         .describe('Track name. Use `list_roadmaps` for valid values, e.g. "Backend Developer".'),
       current_topic: z.string().optional(),
-      voice_enabled: z.boolean().optional(),
-      words_per_minute: z.number().int().min(80).max(400).optional(),
-      test_phrase: z.string().optional().describe("Speak this immediately to test the audio setup."),
       mode: z
         .string()
         .optional()
@@ -605,15 +593,6 @@ server.registerTool(
       activeRoadmap.current_topic = args.current_topic;
       changes.push(`topic → **${activeRoadmap.current_topic}**`);
     }
-    if (typeof args.voice_enabled === "boolean") {
-      voice.enabled = args.voice_enabled;
-      if (!voice.enabled) audioQueue.clear();
-      changes.push(`voice → **${voice.enabled ? "on" : "off"}**`);
-    }
-    if (args.words_per_minute) {
-      voice.words_per_minute = args.words_per_minute;
-      changes.push(`speech rate → **${voice.words_per_minute} wpm**`);
-    }
     if (args.mode !== undefined) {
       const parsed = parseMode(args.mode);
       if (!parsed) {
@@ -623,10 +602,7 @@ server.registerTool(
       } else {
         const req = requestModeChange(session.mode, parsed);
         session.mode = req.mode;
-        if (req.changed) {
-          changes.push(`mode → **${req.policy.label}** — ${req.policy.when}`);
-          if (!req.policy.speak) audioQueue.clear();
-        }
+        if (req.changed) changes.push(`mode → **${req.policy.label}** — ${req.policy.when}`);
       }
     }
 
@@ -636,14 +612,11 @@ server.registerTool(
       `- Category: **${activeRoadmap.category}**`,
       `- Roadmap: **${activeRoadmap.roadmap_name}** (\`${roadmapBar(activeRoadmap)}\`)`,
       `- Topic: **${activeRoadmap.current_topic}**`,
-      `- Voice: **${voice.enabled ? "on" : "off"}** @ ${voice.words_per_minute} wpm via ${audioQueue.engineName()}`,
       `- Mode: **${policyFor(session.mode).label}** — ${policyFor(session.mode).when}`,
-      `- Platform: **${os.platform()}** · queue depth ${audioQueue.pending}`,
+      `- Platform: **${os.platform()}**`,
       `- Review queue: **${counts.due}** due of ${counts.total}`,
       `- Profile: \`${profilePath()}\``,
     ].join("\n");
-
-    if (args.test_phrase && voice.enabled) audioQueue.enqueue(args.test_phrase);
 
     let placementBlocks: string[] = [];
     const placementAsked: Array<{ quiz_id: string; question: string; level: string }> = [];
@@ -668,11 +641,6 @@ server.registerTool(
 
     schedulePersist();
     record({ kind: "config", label: "quick_config", detail: changes.join("; "), xpAwarded: 0 });
-    if (!args.test_phrase && !args.start_placement) {
-      audioQueue.enqueue(
-        `Configuration updated. Teaching at ${session.skillLevel} level on ${activeRoadmap.roadmap_name}.`,
-      );
-    }
 
     const placementNote = args.start_placement
       ? [
@@ -895,9 +863,6 @@ server.registerTool(
       detail: `${args.category} → ${activeRoadmap.current_topic} (step ${activeRoadmap.step_index}/${activeRoadmap.total_steps})`,
       xpAwarded: 0,
     });
-    audioQueue.enqueue(
-      `Roadmap set to ${activeRoadmap.roadmap_name}. Current topic: ${activeRoadmap.current_topic}. Step ${activeRoadmap.step_index} of ${activeRoadmap.total_steps}.`,
-    );
 
     const next = suggestCommand();
     return textResult(
@@ -967,7 +932,6 @@ server.registerTool(
     const screening = screenCommand(next.command);
     const counts = reviewCounts();
 
-    audioQueue.enqueue(`Next up on ${activeRoadmap.roadmap_name}: ${next.rationale}. Try the suggested command.`);
     record({ kind: "concept", label: "Suggested command", detail: next.command, xpAwarded: 0, bin: binOf(next.command) });
 
     const text = [
@@ -1027,7 +991,7 @@ server.registerTool(
   {
     title: "Run Teaching Command",
     description:
-      "Execute (or dry-run) a shell command and return a teaching card. Depth follows the session mode (drill / ride-along / focus): drill is the full card plus quiz and speech; quieter modes defer recall rather than dropping it. If the command is the current roadmap step and that step has a checkpoint, the outcome is verified on disk afterwards and XP is awarded for the verified outcome. Failures return a Hotfix Diagnostic instead of throwing.",
+      "Execute (or dry-run) a shell command and return a teaching card. Depth follows the session mode (drill / ride-along / focus): drill is the full card plus quiz; quieter modes defer recall rather than dropping it. If the command is the current roadmap step and that step has a checkpoint, the outcome is verified on disk afterwards and XP is awarded for the verified outcome. Failures return a Hotfix Diagnostic instead of throwing.",
     annotations: {
       title: "Run Teaching Command",
       readOnlyHint: false,
@@ -1187,17 +1151,6 @@ server.registerTool(
         : `failed (exit ${outcome.code ?? "n/a"}), hotfix diagnostic issued`,
       xpAwarded: xp?.awarded ?? 0,
     });
-
-    if (policy.speak) {
-      const spoken = !outcome
-        ? `Not executed. ${dryRunReason ?? "Dry run"}.` + (quiz ? ` Here is the quiz: ${quiz.question}` : "")
-        : outcome.ok
-        ? `Command succeeded. You earned ${xp?.awarded ?? 0} experience points.` +
-          (quiz ? ` Quiz time: ${quiz.question}` : "")
-        : `The command failed. Do not worry, here is the hotfix diagnostic.` +
-          (quiz ? ` ${quiz.question}` : "");
-      audioQueue.enqueue(spoken);
-    }
 
     const counts = reviewCounts();
     const progressChange = {
@@ -1417,11 +1370,6 @@ server.registerTool(
         xpAwarded: amount,
       });
 
-      audioQueue.enqueue(
-        `Correct! ${quiz.explanation} You earned ${amount} experience points. Your streak is ${player.quizStreak}.` +
-          (xp.leveledUp ? ` Level up! You are now a ${player.title}.` : ""),
-      );
-
       const lines = [
         quiz.review ? "# ✅ Correct — review cleared" : "# ✅ Correct!",
         "",
@@ -1464,10 +1412,6 @@ server.registerTool(
       detail: `Incorrect (answered "${given}", correct: ${quiz.answer}), streak reset from ${lostStreak}`,
       xpAwarded: 5,
     });
-
-    audioQueue.enqueue(
-      `Not quite. The correct answer is ${quiz.answer}. ${quiz.explanation} Your streak resets, but you keep 5 experience points for trying, and this one comes back in ten minutes.`,
-    );
 
     const lines = [
       "# ❌ Not Quite",
@@ -1582,14 +1526,6 @@ server.registerTool(
         player: playerOut(),
       });
     }
-
-    audioQueue.enqueue(
-      outcome.result.passed
-        ? outcome.firstPass
-          ? `Checkpoint passed. ${outcome.criterion}. You earned ${XP_CHECKPOINT_PASS} experience points for the outcome, not the attempt.`
-          : `Checkpoint still passes. Already credited.`
-        : `Checkpoint not passed. ${outcome.result.reason}`,
-    );
 
     const next = outcome.advanced ? suggestCommand() : null;
     const text = [
@@ -1722,9 +1658,6 @@ server.registerTool(
 
     lines.push("", `_Schedule: ${reviewLadder()}._`);
 
-    audioQueue.enqueue(
-      `Review time. ${counts.due} items are due. First question: ${asked[0]?.question ?? "none"}`,
-    );
     record({
       kind: "review",
       label: "Review session started",
@@ -1757,7 +1690,6 @@ server.registerTool(
     description:
       "The player profile: XP, level, title, quiz and practice-day streaks, badges, roadmap position, per-command mastery, weak spots, and review queue state.",
     inputSchema: {
-      speak: z.boolean().default(false).describe("Read the summary aloud."),
       include_mastery: z.boolean().default(true).describe("Include the full per-command table."),
     },
     outputSchema: {
@@ -1786,7 +1718,7 @@ server.registerTool(
       }),
     },
   },
-  async ({ speak, include_mastery }) => {
+  async ({ include_mastery }) => {
     const entries = await readHistory();
     const stats = summarise(entries);
     const counts = reviewCounts();
@@ -1861,7 +1793,6 @@ server.registerTool(
       "## ⚙️ Session",
       `- Teaching depth: **${session.skillLevel}**`,
       `- Mode: **${policyFor(session.mode).label}**`,
-      `- Voice: **${voice.enabled ? "on" : "off"}** @ ${voice.words_per_minute} wpm`,
       `- Profile: \`${profilePath()}\``,
       `- History: \`${historyPath()}\` (${stats.total} events)`,
       `- Checkpoints verified: **${verified.size}** across all tracks (${verifiedCount(lookup.track.name)} in this one)`,
@@ -1874,14 +1805,6 @@ server.registerTool(
         (t) => `- ${player.level >= t.minLevel ? "✅" : "🔒"} **${t.title}** · level ${t.minLevel}+`,
       ),
     );
-
-    if (speak) {
-      audioQueue.enqueue(
-        `You are a ${player.title}, level ${player.level}, with ${player.xp} experience points. ` +
-          `Your practice streak is ${streak.dayStreak} days, and ${counts.due} items are due for review.` +
-          (weak.length ? ` Your weakest command right now is ${weak[0].bin}.` : ""),
-      );
-    }
 
     return result(lines.join("\n"), {
       player: playerOut(),
@@ -1921,7 +1844,6 @@ server.registerTool(
  * same place: a few ideas, each tied to a real line, each with a question that
  * comes back on the review schedule.
  * ------------------------------------------------------------------ */
-
 
 function conceptFamiliarity(id: string): Familiarity {
   const items = questionsForConcept(id)
@@ -1999,7 +1921,6 @@ function teachChanges(input: LessonInput) {
 
   const xp: XpResult | null = discovered ? awardXp(discovered * XP_CONCEPT_DISCOVERED) : null;
   const day: DayResult | null = ranked.teach.length ? touchDay() : null;
-  const policy = policyFor(session.mode);
   const surfaced = shouldSurfaceCard(session.mode, false);
   const quiz =
     input.quiz && surfaced && firstQuestion
@@ -2072,14 +1993,6 @@ function teachChanges(input: LessonInput) {
     })) {
       lines.push("", foot);
     }
-  }
-
-  if (policy.speak && ranked.teach.length) {
-    const top = conceptById(ranked.teach[0].id)!;
-    audioQueue.enqueue(
-      `${ranked.teach.length} idea${ranked.teach.length === 1 ? "" : "s"} from that change. First: ${top.title}. ${top.hook}` +
-        (quiz ? ` Question: ${quiz.question}` : ""),
-    );
   }
 
   const status = (s: Sighting, bucket: "teach" | "later" | "solid") =>
@@ -2429,9 +2342,6 @@ server.registerTool(
     }
 
     await persistNow();
-    audioQueue.enqueue(
-      `Notes exported. ${stats.commands} commands and ${stats.quizzes} quiz questions on record, across ${stats.days} days of practice.`,
-    );
 
     return textResult(
       [
@@ -2581,7 +2491,7 @@ server.registerResource(
           roadmapsDir() +
           "`.",
         "2. **`get_next_roadmap_command`** — the next command, with the reason it comes next and the checkpoint it has to pass.",
-        "3. **Run it yourself**, or through `run_teaching_command`. Default mode is ride-along; `quick_config` with `mode: \"drill\"` is the full card, quiz, and voice.",
+        "3. **Run it yourself**, or through `run_teaching_command`. Default mode is ride-along; `quick_config` with `mode: \"drill\"` is the full card and quiz.",
         "4. **`verify_step`** — a read-only probe confirms the outcome exists on your machine: " +
           `${XP_CHECKPOINT_PASS} XP for a verified outcome against up to ${XP_COMMAND_ATTEMPT} for an attempt.`,
         "",
@@ -2686,7 +2596,7 @@ server.registerPrompt(
   "ride-along",
   {
     title: "Ride along",
-    description: "The quiet default: a short card, no inline quiz, no voice.",
+    description: "The quiet default: a short card, no inline quiz.",
     argsSchema: sessionPromptArgs,
   },
   ({ roadmap, level, interests, project }) =>
@@ -2864,7 +2774,6 @@ process.on("unhandledRejection", (e) => log("unhandledRejection:", e));
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    audioQueue.dispose();
     void persistNow().finally(() => process.exit(0));
   });
 }

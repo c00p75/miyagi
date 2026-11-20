@@ -38,7 +38,7 @@ const valid = (): any => ({
     bestStreak: 7,
     badges: ["Sharpshooter 🔥"],
   },
-  settings: { skillLevel: "Senior", voiceEnabled: false, wordsPerMinute: 220 },
+  settings: { skillLevel: "Senior" },
   roadmap: {
     category: "Role Based",
     roadmap_name: "Backend Developer",
@@ -59,7 +59,6 @@ test("a saved profile round-trips", async () => {
   assert.equal(back.player.xp, 340);
   assert.equal(back.player.bestStreak, 7);
   assert.equal(back.settings.skillLevel, "Senior");
-  assert.equal(back.settings.voiceEnabled, false);
   assert.equal(back.settings.mode, "ride-along", "a file with no mode is the quiet default");
   assert.equal(back.roadmap.roadmap_name, "Backend Developer");
 });
@@ -86,7 +85,7 @@ test("a version 1 profile is migrated, not discarded", () => {
     version: 1,
     updatedAt: new Date().toISOString(),
     player: { xp: 620, level: 7, title: "CLI Artisan", quizStreak: 2, bestStreak: 9, badges: ["Grinder 💪"] },
-    settings: { skillLevel: "Mid", voiceEnabled: false, wordsPerMinute: 200 },
+    settings: { skillLevel: "Mid" },
     roadmap: {
       category: "Skill Based",
       roadmap_name: "Git and GitHub",
@@ -173,8 +172,8 @@ test("out-of-range and wrong-typed values are clamped, not rejected", () => {
   assert.equal(p.player.quizStreak, 0);
   assert.deepEqual(p.player.badges, []);
   assert.equal(p.settings.skillLevel, "Junior", "an unknown skill level falls back");
-  assert.equal(p.settings.voiceEnabled, true, "a non-boolean falls back to the default");
-  assert.equal(p.settings.wordsPerMinute, 400, "wpm clamps to the ceiling");
+  // Voice settings from older versions are read without complaint and dropped.
+  assert.deepEqual(Object.keys(p.settings).sort(), ["mode", "skillLevel"]);
   assert.equal(p.roadmap.step_index, 4, "step cannot exceed total_steps");
 });
 
