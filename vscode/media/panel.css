@@ -1146,3 +1146,212 @@ button.chip:hover:not(:disabled) {
 .mistakes li p {
   margin: 2px 0 0;
 }
+
+/* ---- one-line header -------------------------------------------- */
+
+.who .xp {
+  color: var(--muted);
+}
+
+.top progress {
+  height: 3px;
+  margin: 6px 0 0;
+}
+
+.filters {
+  margin: 0 0 var(--gap);
+}
+
+/* ---- the Now list ----------------------------------------------- */
+
+.day > h3 {
+  margin: 0 0 4px;
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.day {
+  margin-bottom: 16px;
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.row + .row {
+  border-top: 1px solid var(--border);
+}
+
+.row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--vscode-foreground);
+  text-align: left;
+}
+
+.row-head:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+.row.open .row-head {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(128, 128, 128, 0.12));
+}
+
+.row-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.row-title {
+  font-weight: 600;
+}
+
+.row-sub {
+  overflow: hidden;
+  font-size: 0.88em;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row .tags {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.chev {
+  flex-shrink: 0;
+  width: 1em;
+  color: var(--muted);
+  text-align: center;
+  transition: transform 0.15s ease;
+}
+
+.row.open .chev {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chev {
+    transition: none;
+  }
+}
+
+.preview {
+  padding: 0 10px 10px 34px;
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(128, 128, 128, 0.12));
+}
+
+.preview .hook {
+  margin: 0 0 6px;
+}
+
+.preview p {
+  margin-bottom: 6px;
+}
+
+.preview .actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* ---- card pages ------------------------------------------------- */
+
+.pagebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.92em;
+  color: var(--muted);
+}
+
+button.icon {
+  min-width: 26px;
+  padding: 0 6px;
+  font-size: 1.15em;
+  line-height: 22px;
+}
+
+.card.page {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.card.page .card-title {
+  font-size: 1.15em;
+}
+
+.sections {
+  margin: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.section {
+  border-bottom: 1px solid var(--border);
+}
+
+.section > summary {
+  padding: 6px 0;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.section > div {
+  padding: 0 0 8px;
+}
+
+.change {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.change > h3 {
+  margin: 0 0 2px;
+  font-size: 1em;
+}
+
+/* ---- review sets and the dojo stats ----------------------------- */
+
+.actions.center {
+  justify-content: center;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+
+.stats strong {
+  color: var(--vscode-foreground);
+}

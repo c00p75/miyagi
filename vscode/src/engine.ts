@@ -138,6 +138,8 @@ export interface QuizView {
   about: string;
   /** Mixed in from outside the topic the learner chose, on purpose. */
   otherTopic?: boolean;
+  /** The idea behind the question, so the panel can open its page. Absent for terminal questions. */
+  conceptId?: string;
 }
 
 export interface AnswerView {
@@ -493,7 +495,9 @@ function openQuiz(quiz: AskedQuiz, about: string, flags: { transfer?: boolean } 
   open.set(token, { quiz, about, ...flags });
   // Bounded: a question nobody answered is not worth holding forever.
   if (open.size > 60) open.delete(open.keys().next().value as string);
-  return { token, question: quiz.question, choices: quiz.choices, review: quiz.review, about };
+  const view: QuizView = { token, question: quiz.question, choices: quiz.choices, review: quiz.review, about };
+  if (isConceptBin(quiz.bin)) view.conceptId = quiz.bin.slice("concept:".length);
+  return view;
 }
 
 /** The question for one card, asked at the moment the learner opens it. */
