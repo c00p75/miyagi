@@ -36,6 +36,11 @@
       // Which lesson sections are open on a card page, by `<key>|<section>`.
       sections: {},
       scroll: {},
+      // "Why not another way?" opened on a card, by key.
+      altOpen: {},
+      // The glossary word whose page is showing, and words revealed without a guess.
+      term: null,
+      termRevealed: {},
       // Grow tab: which skill row is open, and whether the decision form is.
       skill: null,
       decisionForm: false,
@@ -416,6 +421,63 @@
     return `<div class="block"><h4>Find the bug</h4><div class="code">${lines}</div>${below}<p class="by">Exercise by ${esc(drill.by)}. Your real file was not changed.</p></div>`;
   }
 
+  /**
+   * Why not another way? The learner names one first (or skips), then sees
+   * two real alternatives with what each would win and cost here.
+   */
+  function alternativesBlock(/** @type {any} */ c) {
+    const slot = `${c.key}|alternatives`;
+    const alt = (state.extras[c.key] || {}).alternatives;
+    if (alt) {
+      const options = alt.alternatives
+        .map(
+          (/** @type {any} */ a) => `<li class="alt">
+            <strong>${esc(a.name)}</strong>
+            ${a.sketch ? `<pre><code>${esc(a.sketch)}</code></pre>` : ""}
+            <dl class="alt-facts">
+              ${a.wins ? `<dt>Better at</dt><dd>${inline(a.wins)}</dd>` : ""}
+              <dt>Costs here</dt><dd>${inline(a.costs)}</dd>
+              ${a.when ? `<dt>Pick it when</dt><dd>${inline(a.when)}</dd>` : ""}
+            </dl>
+          </li>`,
+        )
+        .join("");
+      const mine = alt.guess
+        ? `<div class="hint"><span class="muted">Your idea</span><p class="asked">${esc(alt.guess)}</p>${alt.onGuess ? `<p>${inline(alt.onGuess)}</p>` : ""}</div>`
+        : "";
+      return `<div class="block alternatives">
+        <h4>Why not another way?</h4>
+        ${mine}
+        <p><span class="muted">What this code does:</span> <strong>${esc(alt.chosen)}</strong></p>
+        <p>${inline(alt.why)}</p>
+        <ul class="alts">${options}</ul>
+        ${alt.verdict ? `<p class="verdict-line">${inline(alt.verdict)}</p>` : ""}
+        ${
+          alt.saved
+            ? `<p class="muted">Saved to your decision log. It comes back on review, so you can still say why later.</p>`
+            : `<div class="actions"><button data-action="saveAlternative" data-key="${esc(c.key)}">Save to my decision log</button></div>`
+        }
+        ${problem(slot)}
+        <p class="by">Options by ${esc(alt.by)}. They are suggestions from your AI: check them against your project.</p>
+      </div>`;
+    }
+    if (busy(slot)) return waiting(slot);
+    if (!ui.altOpen[c.key]) return problem(slot);
+    const draft = `${c.key}|alternatives`;
+    return `<div class="block">
+      <h4>Why not another way?</h4>
+      <p>Before you look: how else could this have been written? One line is enough.</p>
+      <form data-submit="alternatives" data-key="${esc(c.key)}">
+        <textarea data-draft="${esc(draft)}" rows="2" placeholder="It could also have…" aria-label="Another way it could have been written" maxlength="600">${esc(drafts[draft] || "")}</textarea>
+        <div class="actions">
+          <button type="submit" class="primary">Compare with the real options</button>
+          <button type="button" class="link" data-action="alternatives" data-key="${esc(c.key)}">Skip, just show me</button>
+        </div>
+      </form>
+      ${problem(slot)}
+    </div>`;
+  }
+
   function contrastBlock(/** @type {any} */ c) {
     const slot = `${c.key}|contrast`;
     const x = (state.extras[c.key] || {}).contrast;
@@ -545,6 +607,10 @@
         ? `<button class="${faded ? "" : "primary"}" data-action="${startExplain}" data-key="${esc(c.key)}">Explain in my code</button>`
         : "",
       c.file ? `<button data-action="practice" data-key="${esc(c.key)}" aria-expanded="${Boolean(ui.practice[c.key])}">Practice</button>` : "",
+      // Only on an idea's own page, where there is room to compare.
+      pinned && c.file && state.ai.label && !(state.extras[c.key] || {}).alternatives && !ui.altOpen[c.key] && !busy(`${c.key}|alternatives`)
+        ? `<button data-action="altOpen" data-key="${esc(c.key)}">Why not another way?</button>`
+        : "",
     ].join("");
 
     // Every other way to practise lives behind that one button.
@@ -599,6 +665,7 @@
         ${whyBlock(c)}
         ${asked}
         ${contrastBlock(c)}
+        ${pinned && c.file ? alternativesBlock(c) : ""}
         ${bugBlock(c)}
         ${ownCardBlock(c)}
         ${primary ? `<div class="actions">${primary}</div>` : ""}
@@ -892,6 +959,9 @@
       !state.lessonDecisions[lesson.id] && !busy(`${lesson.id}|decisions`) && state.ai.label
         ? `<button data-action="lessonDecisions" data-lesson="${esc(lesson.id)}">Decisions in it</button>`
         : "",
+      !state.lessonTerms[lesson.id] && !busy(`${lesson.id}|terms`) && state.ai.label
+        ? `<button data-action="findTerms" data-lesson="${esc(lesson.id)}">Project words in it</button>`
+        : "",
     ]
       .filter(Boolean)
       .join("");
@@ -905,6 +975,7 @@
         ${risksBlock(lesson)}
         ${turnBlock(lesson)}
         ${lessonDecisionsBlock(lesson)}
+        ${lessonTermsBlock(lesson)}
         ${
           packages.length
             ? `<p class="chips"><span class="muted">New packages:</span> ${packages
@@ -915,6 +986,20 @@
         ${chips("Also in there:", lesson.later)}
         ${chips("Already yours:", lesson.solid)}
       </section>`;
+  }
+
+  /** The project words found in one change, each a link to its glossary page. */
+  function lessonTermsBlock(/** @type {any} */ lesson) {
+    const slot = `${lesson.id}|terms`;
+    const found = state.lessonTerms[lesson.id];
+    if (!found) return waiting(slot) + problem(slot);
+    const terms = found.ids.map((/** @type {string} */ id) => termById(id)).filter(Boolean);
+    if (!terms.length) return problem(slot);
+    return `<div class="block"><h4>Project words in this change</h4>
+      <p class="chips">${terms
+        .map((/** @type {any} */ t) => `<button class="chip" data-action="term" data-id="${esc(t.id)}">📖 ${esc(t.term)}</button>`)
+        .join("")}</p>
+      <p class="by">Added to your glossary by ${esc(found.by)}. Find them all in the Dojo.</p></div>`;
   }
 
   function cardPage(/** @type {string} */ key) {
@@ -1344,7 +1429,7 @@
 
   function offerBanner() {
     if (!state.coach || !state.coach.offerFindIdeas) return "";
-    return `<div class="banner offer">Most of what your AI writes is not in Miyagi's built-in list, including the tools it installs. Let ${esc(state.ai.label || "your AI")} point out what is worth learning in a change when nothing else matches? At most ${"6"} times an hour, on your account.
+    return `<div class="banner offer">Miyagi only knows a few ideas, so most changes teach nothing. Let ${esc(state.ai.label || "your AI")} spot what's worth learning? Uses your account, at most ${"6"} times an hour.
       <button class="link" data-action="findIdeasOffer" data-accept="1">Turn it on</button>
       <button class="link" data-action="findIdeasOffer" data-accept="0">Not now</button></div>`;
   }
@@ -1654,7 +1739,109 @@
       </div>`;
   }
 
+  const termById = (/** @type {string} */ id) => state.glossary.terms.find((/** @type {any} */ t) => t.id === id);
+
+  /** The Dojo's glossary: every open project's own words, searchable. */
+  function glossaryBlock() {
+    const g = state.glossary;
+    if (!g.projects.length) return "";
+    const query = (drafts["glossary|search"] || "").trim().toLowerCase();
+    const matches = g.terms.filter(
+      (/** @type {any} */ t) => !query || t.term.toLowerCase().includes(query) || t.meaning.toLowerCase().includes(query),
+    );
+    const many = g.projects.length > 1;
+    const rows = matches
+      .map(
+        (/** @type {any} */ t) => `<li class="row">
+          <button class="row-head" data-action="term" data-id="${esc(t.id)}">
+            <span class="emoji" aria-hidden="true">📖</span>
+            <span class="row-main">
+              <span class="row-title">${esc(t.term)}</span>
+              <span class="row-sub">${esc(t.meaning)}</span>
+            </span>
+            ${t.onReview ? `<span class="tags"><span class="tag">On review</span></span>` : ""}
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </li>`,
+      )
+      .join("");
+    const find = g.projects
+      .map((/** @type {any} */ p) => {
+        const slot = `glossary|${p.name}`;
+        if (busy(slot)) return waiting(slot);
+        return `<button data-action="findTerms" data-root="${esc(p.root)}"${state.ai.label ? "" : " disabled title=\"Choose an AI first\""}>Find words in ${many ? esc(p.name) : "this project"}</button>${problem(slot)}`;
+      })
+      .join("");
+    return `<section class="glossary">
+      <h3>Glossary <span class="muted">${g.terms.length ? `${g.terms.length} word${g.terms.length === 1 ? "" : "s"}` : ""}</span></h3>
+      <p class="muted">The words that belong to your project: what a tenant, an invoice or a settlement means here, and where it lives in the code.</p>
+      ${
+        g.terms.length > 6
+          ? `<input type="search" class="search" data-draft="glossary|search" value="${esc(drafts["glossary|search"] || "")}" placeholder="Search the glossary" aria-label="Search the glossary">`
+          : ""
+      }
+      ${rows ? `<ul class="rows">${rows}</ul>` : g.terms.length ? `<p class="muted">No word matches "${esc(query)}".</p>` : ""}
+      <div class="actions">${find}</div>
+    </section>`;
+  }
+
+  /** One word's page: guess first, then what it means and where it lives. */
+  function termPage(/** @type {any} */ t) {
+    const back = pageBar("closeTerm", "Back");
+    if (!t) return `${back}<div class="empty"><p class="muted">This word is no longer in the glossary.</p></div>`;
+    const revealed = t.guess || ui.termRevealed[t.id];
+    const head = `<h2 class="term-title">📖 ${esc(t.term)}</h2>
+      <p class="muted">A word from ${esc(t.project)}${t.onReview ? " · on your review" : ""}</p>`;
+    if (!revealed) {
+      const draft = `term|${t.id}`;
+      return `${back}<article class="card page">${head}
+        <div class="block">
+          <h4>What do you think it means here?</h4>
+          <p class="muted">A guess in your own words first. It does not have to be right.</p>
+          <form data-submit="termGuess" data-key="${esc(t.id)}">
+            <textarea data-draft="${esc(draft)}" rows="2" placeholder="A ${esc(t.term)} is…" aria-label="What you think it means" maxlength="600">${esc(drafts[draft] || "")}</textarea>
+            <div class="actions">
+              <button type="submit" class="primary">Compare</button>
+              <button type="button" class="link" data-action="termReveal" data-id="${esc(t.id)}">Skip, just show me</button>
+            </div>
+          </form>
+        </div>
+      </article>`;
+    }
+    const related = t.related
+      .map((/** @type {string} */ name) => {
+        const other = state.glossary.terms.find((/** @type {any} */ x) => x.project === t.project && x.term.toLowerCase() === name.toLowerCase());
+        return other ? `<button class="chip" data-action="term" data-id="${esc(other.id)}">${esc(other.term)}</button>` : `<span class="chip">${esc(name)}</span>`;
+      })
+      .join("");
+    const where = t.where.map((/** @type {string} */ f) => `<li>${fileLink(t.root, f, null)}</li>`).join("");
+    const slot = `term|${t.id}`;
+    return `${back}<article class="card page">${head}
+      ${t.guess ? `<div class="hint"><span class="muted">You thought</span><p class="asked">${esc(t.guess)}</p></div>` : ""}
+      <div class="block">
+        <h4>What it means</h4>
+        <p>${inline(t.meaning)}</p>
+        ${t.inProject ? `<h4>In this code</h4><p>${inline(t.inProject)}</p>` : ""}
+        ${where ? `<h4>Where it lives</h4><ul class="files">${where}</ul>` : ""}
+        ${related ? `<h4>Goes with</h4><p class="chips">${related}</p>` : ""}
+      </div>
+      <div class="actions">
+        ${
+          t.onReview
+            ? `<span class="muted">On your review. It comes back like any other question.</span>`
+            : t.canReview
+            ? `<button class="primary" data-action="termReview" data-id="${esc(t.id)}">Add to my review</button>`
+            : ""
+        }
+        <button class="link" data-action="termRemove" data-id="${esc(t.id)}">Remove from glossary</button>
+      </div>
+      ${problem(slot)}
+      <p class="by">Written by ${esc(t.by)} from your code. Check anything that matters.</p>
+    </article>`;
+  }
+
   function dojoTab() {
+    if (ui.term) return termPage(termById(ui.term));
     if (ui.idea) {
       const back = pageBar("closeIdea", ui.ideaFrom === "review" ? "Back to review" : "All ideas");
       if (!ideaCard || ideaCard.conceptId !== ui.idea) return `${back}<div class="empty"><p class="muted">Loading…</p></div>`;
@@ -1689,6 +1876,7 @@
           ${week}
         </div>
         <ul class="ideas">${seen.map(row).join("")}</ul>
+        ${glossaryBlock()}
         ${independence()}
         ${calibrationBlock()}
         ${mistakesBlock()}
@@ -1819,8 +2007,9 @@
     if (tab === "now") ui.cardKey = null;
     ui.tab = tab;
     if (tab === "dojo") {
-      // Clicking the tab again returns from a lesson to the list.
+      // Clicking the tab again returns from a lesson or a word to the list.
       ui.idea = null;
+      ui.term = null;
       send({ type: "dojo" });
     }
     if (tab === "grow") send({ type: "grow" });
@@ -1930,6 +2119,43 @@
         return render();
       case "writeOwn":
         writing[key] = !writing[key];
+        return render();
+      case "altOpen":
+        ui.altOpen[key] = true;
+        remember();
+        return render();
+      case "alternatives":
+        // "Skip, just show me": no guess.
+        delete drafts[`${key}|alternatives`];
+        return send({ type: "alternatives", key, guess: "" });
+      case "saveAlternative":
+        return send({ type: "saveAlternative", key });
+      case "findTerms":
+        return send({ type: "findTerms", lesson: d.lesson || undefined, root: d.root || undefined });
+      case "term":
+        if (!ui.term) ui.scroll.dojoList = window.scrollY;
+        ui.tab = "dojo";
+        ui.idea = null;
+        ui.term = d.id || null;
+        remember();
+        render();
+        return window.scrollTo(0, 0);
+      case "closeTerm":
+        ui.term = null;
+        remember();
+        send({ type: "dojo" });
+        render();
+        return restoreScroll("dojoList");
+      case "termReveal":
+        ui.termRevealed[d.id || ""] = true;
+        remember();
+        return render();
+      case "termReview":
+        return send({ type: "termReview", id: d.id });
+      case "termRemove":
+        ui.term = null;
+        remember();
+        send({ type: "termRemove", id: d.id });
         return render();
       case "contrastPick":
         return send({ type: "contrastPick", key, pick: d.pick });
@@ -2094,6 +2320,8 @@
   app.addEventListener("input", (event) => {
     const el = /** @type {HTMLInputElement} */ (event.target);
     if (el.dataset && el.dataset.draft) drafts[el.dataset.draft] = el.value;
+    // The glossary filters as you type; the redraw keeps the caret where it was.
+    if (el.dataset && el.dataset.draft === "glossary|search") render();
   });
 
   app.addEventListener("submit", (event) => {
@@ -2148,6 +2376,23 @@
       case "storyAnswer": {
         const text = (drafts["grow|storyAnswer"] || "").trim();
         return text ? send({ type: "storyAnswer", text }) : undefined;
+      }
+      case "alternatives": {
+        const draft = `${key}|alternatives`;
+        const guess = (drafts[draft] || "").trim();
+        delete drafts[draft];
+        return send({ type: "alternatives", key, guess });
+      }
+      case "termGuess": {
+        const draft = `term|${key}`;
+        const text = (drafts[draft] || "").trim();
+        if (!text) {
+          ui.termRevealed[key] = true;
+          remember();
+          return render();
+        }
+        delete drafts[draft];
+        return send({ type: "termGuess", id: key, text });
       }
       case "decisionTyped": {
         const typed = { title: take("decision|title"), chose: take("decision|chose"), over: take("decision|over"), because: take("decision|because") };
@@ -2280,6 +2525,8 @@
   });
 
   if (!ui.sections) ui.sections = {};
+  if (!ui.altOpen) ui.altOpen = {};
+  if (!ui.termRevealed) ui.termRevealed = {};
   if (!ui.scroll) ui.scroll = {};
   render();
   send({ type: "ready" });

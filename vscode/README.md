@@ -53,6 +53,8 @@ The research behind these choices: Dunlosky et al. (2013) on which study techniq
 - **Practice**, one button per card: a why question, trace it by hand, spot the difference, find the bug, a question on your own lines. At brown belt, a transfer question in another language.
 - **Your turn.** A five-line follow-up to write without the assistant. Miyagi checks the diff to confirm who wrote it and never writes the code.
 - **Walk me through this change** and **check it for risks**.
+- **Why not another way?** On an idea's page: say how else the code could have been written (or skip), then see two real alternatives with a sketch, what each does better, what it would cost in your project, and when to pick it. Save the choice to your decision log and it comes back on review.
+- **Your project's glossary.** The words that belong to your project (a settlement, a tenant, a payout) with what each means, how the code represents it and which files it lives in. Find them from a whole project in the Dojo, or from one change with **Project words in it**. Guess a word first, then read it; add any word to your review. Kept in `~/.miyagi/glossary.json`.
 - **How this project works.** A map of the repository.
 - **Find ideas with AI** (off by default). Lessons for ideas the built-in list does not know, marked as written by your AI.
 

@@ -49,6 +49,7 @@ import { buildSummary, fileNameFor, readSummaries, renderTour, teamReport, tourS
 import { quietNow, tomorrowMorning, type QuietReason } from "./schedule.js";
 import { supportsSecondarySidebar } from "./docking.js";
 import { registerSkillIdeas, restoreTools } from "./coach.js";
+import { restoreGlossary } from "./glossary.js";
 
 const WELCOMED_KEY = "miyagi.welcomed.v1";
 const PAUSED_KEY = "miyagi.pausedUntil.v1";
@@ -196,6 +197,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   // vocabulary of every tool met so far, so their questions are still there.
   registerSkillIdeas();
   await restoreTools().catch(() => 0);
+  // Glossary words on review are ideas too; without this their questions vanish after a restart.
+  await restoreGlossary().catch(() => 0);
 
   /* ---- status bar ----------------------------------------------- */
 
