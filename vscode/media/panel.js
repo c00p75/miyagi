@@ -46,6 +46,8 @@
       // Grow tab: which skill row is open, and whether the decision form is.
       skill: null,
       decisionForm: false,
+      // The depth chosen on one card, when it differs from the learner's default.
+      lessonDepth: {},
     },
     vscode.getState() || {},
   );
@@ -72,6 +74,14 @@
   let grow = null;
   /** A message to show once in the Grow tab (incident saved, decision problem). */
   let growNote = "";
+  /** Lessons received, by `<card key>|<depth>`; which have been asked for; what was picked and done. */
+  /** @type {Record<string, any>} */
+  const lessons = {};
+  const lessonAsked = new Set();
+  /** @type {Record<string, number>} */
+  const lessonPicks = {};
+  /** @type {Record<string, boolean>} */
+  const lessonDone = {};
   let growAsked = 0;
   /** The lesson opened from the dojo, when one is. */
   let ideaCard = null;
@@ -610,11 +620,7 @@
         <summary>${title}</summary><div>${inline(body)}</div>
       </details>`;
     const lesson = lessonOpen && pinned
-      ? `<div class="sections">
-          ${section("what", "What it is", c.what)}
-          ${section("know", "Know this", lens)}
-          ${section("bites", "How it bites", pitfall)}
-        </div>`
+      ? lessonBlock(c.key)
       : lessonOpen
       ? `<dl>
           <dt>What it is</dt><dd>${inline(c.what)}</dd>
@@ -921,8 +927,7 @@
         ${
           open
             ? `<div class="preview">
-                 <p class="hook">${inline(c.hook)}</p>
-                 <p>${inline(c.what)}</p>
+                 ${threeQuestions(cardAnswers(c))}
                  <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(c.key)}">Open ›</button></div>
                </div>`
             : ""
@@ -1127,13 +1132,196 @@
         ${
           open
             ? `<div class="preview">
-                 <p class="hook">${inline(m.hook)}</p>
-                 <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(i.key)}">${esc(m.open)}</button>
+                 ${i.kind === "tool" ? threeQuestions(toolAnswers(i)) : `<p class="hook">${inline(m.hook)}</p>`}
+                 <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(i.key)}">${i.kind === "tool" ? "Open ›" : esc(m.open)}</button>
                  <button class="link" data-action="dismissItem" data-key="${esc(i.key)}">Remove</button></div>
                </div>`
             : ""
         }
       </li>`;
+  }
+
+
+
+  /* ---- the lesson: eight sections, one depth switch ---------------- */
+
+  const LESSON_SECTIONS = [
+    ["problem", "The problem", "Why does it exist?"],
+    ["concept", "The concept", "What is it?"],
+    ["how", "How it works", "What happens inside?"],
+    ["architecture", "Architecture", "Where does it fit in your project?"],
+    ["implementation", "Implementation", "How is it used here?"],
+    ["practical", "Practical considerations", "What to watch for"],
+    ["application", "Application", "Your turn"],
+    ["check", "Knowledge check", "Can you explain it?"],
+  ];
+
+  function lessonDepth(/** @type {string} */ key) {
+    return ui.lessonDepth[key] || state.status.depth;
+  }
+
+  function lessonVisual(/** @type {any} */ v) {
+    if (!v) return "";
+    if (v.type === "compare") {
+      return `<div class="ls-cmp">${v.cols
+        .map(
+          (/** @type {any} */ c) => `<div class="ls-col ${c.good ? "ok" : "bad"}"><b>${esc(c.title)}</b>${c.rows
+            .map((/** @type {string} */ r, /** @type {number} */ i) => `<span${i === c.diff ? ' class="diff"' : ""}>${inline(r)}</span>`)
+            .join("")}${c.result ? `<em>${c.good ? "✓" : "✗"} ${esc(c.result)}</em>` : ""}</div>`,
+        )
+        .join("")}</div>`;
+    }
+    if (v.type === "flow") {
+      return `<div class="ls-flow">${v.steps
+        .map((/** @type {any} */ st, /** @type {number} */ i) => `${i ? '<b aria-hidden="true">→</b>' : ""}<span>${esc(st.label)}${st.note ? `<i>${esc(st.note)}</i>` : ""}</span>`)
+        .join("")}</div>`;
+    }
+    if (v.type === "parts") {
+      return `<div class="ls-parts">${v.items.map((/** @type {any} */ p) => `<span>${esc(p.name)}<i>${esc(p.role)}</i></span>`).join("")}</div>`;
+    }
+    if (v.type === "terms") {
+      return `<div class="ls-terms">${v.items.map((/** @type {any} */ p) => `<div><b>${esc(p.term)}</b><span>${inline(p.meaning)}</span></div>`).join("")}</div>`;
+    }
+    if (v.type === "code") {
+      return `<div class="ls-code">${v.lines
+        .map((/** @type {any} */ l) => `<details><summary><code>${esc(l.code)}</code></summary><p>${inline(l.why)}</p></details>`)
+        .join("")}</div><p class="muted ls-small">Tap a line to see why it is there.</p>`;
+    }
+    if (v.type === "signal") {
+      // Mark each explained part where it appears in the text.
+      let html = esc(v.text);
+      v.notes.forEach((/** @type {any} */ n, /** @type {number} */ i) => {
+        html = html.replace(esc(n.part), `<mark class="m${i}">${esc(n.part)}</mark>`);
+      });
+      return `<div class="ls-signal"><code>${html}</code>${v.notes
+        .map((/** @type {any} */ n, /** @type {number} */ i) => `<p><mark class="m${i}">${esc(n.part)}</mark> ${inline(n.meaning)}</p>`)
+        .join("")}</div>`;
+    }
+    return "";
+  }
+
+  function lessonSection(/** @type {string} */ key, /** @type {string} */ depth, /** @type {any} */ sec, /** @type {number} */ i, /** @type {any} */ L) {
+    const id = `${key}|${depth}|${i}`;
+    const picked = lessonPicks[id];
+    const p = sec.predict;
+    const answered = !p || picked !== undefined;
+    const predict = p
+      ? `<div class="ls-ask"><p class="ls-q">${inline(p.question)}</p><div class="ls-picks">${p.options
+          .map((/** @type {string} */ opt, /** @type {number} */ n) => {
+            const cls = picked === undefined ? "" : n === p.answer ? " right" : n === picked ? " wrong" : "";
+            return `<button class="${cls}" data-action="lessonPick" data-id="${esc(id)}" data-index="${n}"${picked === undefined ? "" : " disabled"}>${inline(opt)}</button>`;
+          })
+          .join("")}</div></div>
+          ${picked === undefined ? "" : `<p class="ls-verdict">${picked === p.answer ? "Right." : "Not quite."} ${inline(p.why || p.options[p.answer])}</p>`}`
+      : "";
+    const draft = `${id}|say`;
+    const t = sec.task;
+    const task = t
+      ? `<div class="ls-task"><p><b>Your goal:</b> ${inline(t.goal)}</p>${t.where ? `<p><b>Where:</b> ${inline(t.where)}</p>` : ""}<p><b>Done when:</b> ${inline(t.doneWhen)}</p>
+          ${t.hint ? `<details><summary>Stuck? A hint</summary><p>${inline(t.hint)}</p></details>` : ""}
+          ${lessonDone[id] ? `<p class="muted">Marked done.</p>` : `<button class="primary" data-action="lessonDone" data-id="${esc(id)}">I did it</button>`}
+          <p class="muted ls-small">Do this one without your assistant.</p></div>
+          ${t.experiments.length ? `<p class="ls-kicker">Then experiment: what happens if…</p><ul class="ls-list">${t.experiments.map((/** @type {string} */ e) => `<li>${inline(e)}</li>`).join("")}</ul><p class="muted ls-small">Guess first, then try it.</p>` : ""}`
+      : "";
+    const concepts = i === 1 && L.concepts.length
+      ? `<p class="ls-kicker">Concepts · tap to open</p><div class="ls-chips">${L.concepts.map((/** @type {string} */ c) => `<button class="chip" data-action="learnName" data-name="${esc(c)}">${esc(c)} ›</button>`).join("")}</div>`
+      : "";
+    const after = answered
+      ? `${lessonVisual(sec.reveal)}
+         ${sec.explain ? prose(sec.explain) : ""}
+         ${sec.oneLine ? `<p class="ls-one"><b>In one line:</b> ${inline(sec.oneLine)}</p>` : ""}
+         ${concepts}
+         ${sec.sayIt ? `<div class="ls-ask"><p class="ls-q">${inline(sec.sayIt)}</p><input type="text" data-draft="${esc(draft)}" value="${esc(drafts[draft] || "")}" placeholder="In your own words…" aria-label="Your answer" maxlength="600"><p class="muted ls-small">Saying it yourself is what makes it stick. Nobody grades this.</p></div>` : ""}
+         ${sec.remember ? `<div class="ls-remember"><b>Remember</b><ul>${sec.remember.map((/** @type {string} */ r) => `<li>${inline(r)}</li>`).join("")}</ul></div>` : ""}
+         ${sec.bridge && i < 7 ? `<p class="ls-bridge">${inline(sec.bridge)} <button class="link" data-action="lessonNext" data-key="${esc(key)}" data-index="${i}">Next section ›</button></p>` : ""}`
+      : "";
+    const body = `${sec.hook ? prose(sec.hook) : ""}${lessonVisual(sec.show)}${task}${predict}${after}`;
+    const sid = `${key}|L${i}`;
+    const open = ui.sections[sid] === undefined ? i === 0 : ui.sections[sid];
+    const [, title, asks] = LESSON_SECTIONS[i];
+    const done = (p && picked !== undefined) || lessonDone[id];
+    return `<details class="ls-sec${done ? " done" : ""}" data-section="${esc(sid)}"${open ? " open" : ""}>
+      <summary><span class="ls-n">${done ? "✓" : i + 1}</span><span class="ls-t"><span>${title}</span><span>${asks}</span></span><span class="chev" aria-hidden="true">›</span></summary>
+      <div class="ls-body">${body.trim() ? body : `<p class="muted">Nothing for this section yet.</p>`}</div>
+    </details>`;
+  }
+
+  /** The whole lesson for a card or a tool: depth switch, eight sections, further reading. */
+  function lessonBlock(/** @type {string} */ key) {
+    const depth = lessonDepth(key);
+    const id = `${key}|${depth}`;
+    const L = lessons[id];
+    if (!L && !lessonAsked.has(id)) {
+      lessonAsked.add(id);
+      queueMicrotask(() => send({ type: "lesson", key, depth }));
+    }
+    const seg = `<div class="ls-seg" role="group" aria-label="Depth">${["Junior", "Mid", "Senior"]
+      .map((d) => `<button class="${d === depth ? "on" : ""}" data-action="lessonDepth" data-key="${esc(key)}" data-depth="${d}" aria-pressed="${d === depth}">${d}</button>`)
+      .join("")}</div>`;
+    if (!L) return `<div class="ls">${seg}<p class="muted">Loading the lesson…</p></div>`;
+    const slot = `${key}|lesson|${depth}`;
+    const note = busy(slot) || busy(`${L.root || ""}|profile`)
+      ? `<p class="ls-note muted"><span class="spinner" aria-hidden="true"></span> ${esc(busy(slot) || "Your AI")} is writing this lesson for your project. Miyagi's built-in lesson shows meanwhile.</p>`
+      : L.by
+      ? `<p class="ls-note muted">Written for your project by ${esc(L.by)}. Check anything that matters.</p>`
+      : state.ai.label
+      ? failed(slot) ? `<p class="ls-note muted">${esc(failed(slot))}</p>` : ""
+      : `<p class="ls-note muted">Miyagi's built-in lesson. <button class="link" data-action="command" data-id="miyagi.chooseAi">Choose an AI</button> for one written about your project.</p>`;
+    const kinds = { video: "▶", article: "📄", book: "📘", docs: "📚" };
+    const sid = `${key}|Ldeeper`;
+    const deeper = L.deeper.length
+      ? `<details class="ls-sec" data-section="${esc(sid)}"${ui.sections[sid] ? " open" : ""}>
+          <summary><span class="ls-n">＋</span><span class="ls-t"><span>Go deeper</span><span>Videos, articles and books for this depth</span></span><span class="chev" aria-hidden="true">›</span></summary>
+          <div class="ls-body">${L.deeper
+            .map((/** @type {any} */ r) => `<button class="ls-res" data-action="link" data-url="${esc(r.url)}"><span aria-hidden="true">${kinds[r.kind] || "↗"}</span><span><span>${esc(r.title)}</span><span>${esc(r.by)}</span></span><span aria-hidden="true">↗</span></button>`)
+            .join("")}<p class="muted ls-small">Links open in your browser. Except for official documentation, each opens a search for that title, so it never leads to a dead page.</p></div>
+        </details>`
+      : "";
+    return `<div class="ls">${seg}${note}
+      <div class="ls-secs">${LESSON_SECTIONS.map(([sidName], i) => lessonSection(key, depth, L.sections[sidName], i, L)).join("")}${deeper}</div>
+    </div>`;
+  }
+
+  /* ---- the three questions in a row's preview ---- */
+
+  /** The first sentence of a text, so a preview stays a glance. */
+  function firstSentence(/** @type {string} */ text) {
+    const t = String(text || "").replace(/\s+/g, " ").trim();
+    const m = /^(.{20,220}?[.!?])(\s|$)/.exec(t);
+    return m ? m[1] : t.length > 220 ? t.slice(0, 219) + "…" : t;
+  }
+
+  /** What is it, where is it in your app, what if it goes wrong. Questions without an answer are left out. */
+  function threeQuestions(/** @type {{ what: string, where: string, wrong: string }} */ a) {
+    const q = (/** @type {string} */ ask, /** @type {string} */ answer) =>
+      answer ? `<section class="tq3"><h4>${ask}</h4><p>${inline(firstSentence(answer))}</p></section>` : "";
+    return `<div class="tq3-list">${q("What is it?", a.what)}${q("Where is it in your app?", a.where)}${q("What if it goes wrong?", a.wrong)}</div>`;
+  }
+
+  /** An idea card: the tailored text when there is one, else where it was seen and the general lesson. */
+  function cardAnswers(/** @type {any} */ c) {
+    const fitted = (state.tailored || {})[c.key];
+    const where = fitted && fitted.hook
+      ? fitted.hook
+      : c.file
+      ? c.evidence
+        ? `In \`${c.file}\`: \`${c.evidence.replace(/`/g, "'").slice(0, 80)}\``
+        : `In \`${c.file}\`.`
+      : "";
+    return { what: c.what, where, wrong: (fitted && fitted.pitfall) || c.pitfall };
+  }
+
+  /** A tool: what it does, what your AI found it doing in this project (or where it was seen), and its first risk. */
+  function toolAnswers(/** @type {any} */ t) {
+    const spec = t.spec || {};
+    const primer = t.primer;
+    const where = primer && primer.summary
+      ? primer.summary
+      : t.file
+      ? `Added in \`${t.file}\`. Open it to see how your project uses it.`
+      : "";
+    const risk = primer && primer.risks && primer.risks[0] ? primer.risks[0].why : (spec.risks || [])[0] || "";
+    return { what: spec.oneLiner || t.job, where, wrong: risk };
   }
 
   function itemPage(/** @type {any} */ i) {
@@ -1347,61 +1535,21 @@
   /* ---- a tool ---- */
 
   function toolPage(/** @type {any} */ t) {
-    const spec = t.spec || { oneLiner: "", flow: [], risks: [], verify: "", terms: [], docs: "" };
-    const primer = t.primer;
-    const tags = t.adopted ? `<span class="tag belt">${t.held} of ${t.terms.length} terms held</span>` : `<span class="tag new">New tool</span>`;
-    const seen = t.evidence
-      ? `<div class="where">${t.file ? fileLink(t.root, t.file, null) : ""}<code class="evidence">${esc(t.evidence)}</code></div>`
-      : "";
+    const spec = t.spec || { docs: "" };
+    const tags = t.adopted ? `<span class="tag belt">${t.held} of ${t.terms.length} concepts held</span>` : `<span class="tag new">New tool</span>`;
+    const seen = t.file ? `<div class="where">${fileLink(t.root, t.file, null)}</div>` : "";
     const head = `${pageHead(t.emoji, t.name, tags)}<p class="hook">${esc(t.job)}</p>${seen}`;
 
-    // Step one: guess before reading. Even a wrong guess makes the answer stick.
-    if (!t.guessDone) {
-      const d = `${t.key}|guess`;
-      return `<article class="card page tool">${head}
-        <div class="block first">
-          <h4>Before you read: what do you think ${esc(t.name)} is for?</h4>
-          <p class="muted">A guess in a few words. Being wrong is fine; guessing first is what makes the real answer stick.</p>
-          <form data-submit="toolGuess" data-key="${esc(t.key)}">
-            <input type="text" data-draft="${esc(d)}" value="${esc(drafts[d] || "")}" placeholder="I think it…" aria-label="Your guess" maxlength="300">
-            <div class="actions"><button type="submit" class="primary">Lock in my guess</button>
-            <button type="button" class="link" data-action="toolGuessSkip" data-key="${esc(t.key)}">Skip, just show me</button></div>
-          </form>
-        </div></article>`;
-    }
-
-    const primerSlot = `${t.key}|primer`;
-    const guess = t.guess
-      ? `<div class="block"><p><span class="muted">You guessed:</span> ${esc(t.guess)}</p>${primer && primer.guessFeedback ? prose(primer.guessFeedback) : ""}</div>`
-      : "";
-    const flow = (primer && primer.flow.length ? primer.flow : spec.flow) || [];
-    const risks = primer && primer.risks.length ? primer.risks.map((/** @type {any} */ r) => `<li><strong>${esc(r.title)}</strong> ${inline(r.why)}</li>`) : (spec.risks || []).map((/** @type {string} */ r) => `<li>${inline(r)}</li>`);
-    const project = primer
-      ? `<div class="block mine"><h4>In your project</h4>${prose(primer.summary)}
-          ${primer.wired.length ? `<ul class="wired">${primer.wired.map((/** @type {any} */ w) => `<li>${fileLink(t.root, w.file, w.line)} ${inline(w.what)}</li>`).join("")}</ul>` : ""}
-          <p class="by">Written by ${esc(primer.by)} from the files that mention ${esc(t.name)}.</p></div>`
-      : busy(primerSlot)
-      ? waiting(primerSlot)
-      : state.ai.label
-      ? `<div class="actions"><button class="primary" data-action="toolPrimer" data-key="${esc(t.key)}">Show me ${esc(t.name)} in my project</button></div>${problem(primerSlot)}`
-      : "";
-
-    const terms = t.terms
+    // The tool's own concepts: each is an idea with a belt and a question.
+    const concepts = t.terms
       .map((/** @type {any} */ x) => {
         const slot = `${t.key}|${x.id}`;
         const q = quizzes[slot];
         const belt = x.seen ? `<span class="tag belt belt-${esc(beltName(x.box))}">${esc(beltName(x.box))}</span>` : "";
         return `<li class="term">
-          <div class="term-head"><strong>${esc(x.term)}</strong>${belt}
+          <div class="term-head"><button class="link term-open" data-action="idea" data-id="${esc(x.id)}" data-from="now">${esc(x.term)} ›</button>${belt}
             ${!q && !busy(slot) ? `<button class="link" data-action="termQuiz" data-slot="${esc(slot)}" data-id="${esc(x.id)}">Check me</button>` : ""}</div>
-          ${
-            // Once on review, the meaning hides: checking yourself with the answer in view is reading, not recall.
-            t.adopted && !q
-              ? `<details class="meaning"><summary class="muted">Show what it means</summary><p>${inline(x.meaning)}</p></details>`
-              : t.adopted
-              ? ""
-              : `<p>${inline(x.meaning)}</p>`
-          }
+          ${t.adopted && !q ? "" : q ? "" : `<p>${inline(x.meaning)}</p>`}
           ${q ? quizBlock(q, "card", slot) : ""}
         </li>`;
       })
@@ -1409,15 +1557,15 @@
     const pct = t.terms.length ? Math.round((t.held / t.terms.length) * 100) : 0;
     const vocab = t.terms.length
       ? `<div class="block vocab">
-          <h4>The words you need (${t.terms.length})</h4>
+          <h4>Its concepts (${t.terms.length})</h4>
           ${
             t.adopted
-              ? `<p class="muted">On your review schedule. Say what each one means before you peek. Conversant means every term at green belt: ${t.held} of ${t.terms.length} so far.</p>
-                 <progress max="100" value="${pct}" aria-label="${t.held} of ${t.terms.length} terms held"></progress>`
-              : `<p class="muted">Read them once, then put them on review. They come back in 10 minutes, then 1, 3, 7 and 16 days, until you can recall each cold.</p>`
+              ? `<p class="muted">On your review schedule. Conversant means every concept at green belt: ${t.held} of ${t.terms.length} so far.</p>
+                 <progress max="100" value="${pct}" aria-label="${t.held} of ${t.terms.length} concepts held"></progress>`
+              : `<p class="muted">Tap one to open it. Put them on review and each comes back in 10 minutes, then 1, 3, 7 and 16 days.</p>`
           }
-          <ul class="terms">${terms}</ul>
-          ${t.adopted ? "" : `<div class="actions"><button class="primary" data-action="toolAdopt" data-key="${esc(t.key)}">Add these ${t.terms.length} terms to my reviews</button></div>`}
+          <ul class="terms">${concepts}</ul>
+          ${t.adopted ? "" : `<div class="actions"><button class="primary" data-action="toolAdopt" data-key="${esc(t.key)}">Add these ${t.terms.length} concepts to my reviews</button></div>`}
         </div>`
       : "";
 
@@ -1442,15 +1590,12 @@
       : "";
 
     return `<article class="card page tool">${head}
-      ${guess}
-      ${project}
-      ${toolSections(t, spec, primer, flow)}
+      ${lessonBlock(t.key)}
       ${vocab}
       ${decision}
       ${toolFoot(t, spec)}
     </article>`;
   }
-
 
   /**
    * The links at the bottom of a tool page: full-width rows, each saying what
@@ -1474,59 +1619,6 @@
           `<button class="tf-row${x.quiet ? " quiet" : ""}" ${x.attrs}><svg viewBox="0 0 16 16" aria-hidden="true">${I[/** @type {keyof typeof I} */ (x.k)]}</svg><span><span class="tf-row-l">${esc(x.label)}</span><span class="tf-row-h">${esc(x.hint)}</span></span><span class="chev" aria-hidden="true">›</span></button>`,
       )
       .join("")}</div>`;
-  }
-
-  /**
-   * The four sections of a tool page, opening with a before and after: the
-   * project without the tool and with it. A contrast says what something is
-   * for faster than a definition does.
-   */
-  function toolSections(/** @type {any} */ t, /** @type {any} */ spec, /** @type {any} */ primer, /** @type {string[]} */ flow) {
-    const what = inline(spec.oneLiner || t.job);
-    const without = (primer && primer.without) || `Your project would need its own way to do this (${esc(String(t.job).toLowerCase())}), or would go without it.`;
-    /** Risks from the AI carry their kind; the catalogue's are labelled from their wording. */
-    const guessKind = (/** @type {string} */ text) =>
-      /expos|leak|secret|credential|password|token|attack|public|anyone/i.test(text) ? "security" : /quota|bill|cost|expens|pay|charge/i.test(text) ? "cost" : /config|install|start|setup|missing value|env/i.test(text) ? "setup" : "reliability";
-    const risks = primer && primer.risks.length
-      ? primer.risks.map((/** @type {any} */ r) => ({ title: r.title, why: r.why, kind: r.kind || guessKind(`${r.title} ${r.why}`) }))
-      : (spec.risks || []).map((/** @type {string} */ r) => {
-          const m = /^([^.:]{6,60})[.:]\s+(.+)$/.exec(r);
-          const title = m ? m[1] : "";
-          const why = m ? m[2] : r;
-          return { title, why, kind: guessKind(r) };
-        });
-    const KIND = { security: ["Security", "hi"], cost: ["Cost", "md"], reliability: ["Reliability", "hi"], setup: ["Setup", "md"] };
-    const verify = (primer && primer.verify) || spec.verify || "";
-    const cmd = /`([^`]{3,80})`/.exec(verify)?.[1] || /\b((?:docker|npm|npx|pnpm|yarn|python|pytest|curl|git)\s[^.,;]{2,60})/.exec(verify)?.[1] || "";
-    const proofSteps = verify
-      .replace(/`/g, "")
-      .split(/(?<=[.!?])\s+|,\s+then\s+|\s+then\s+/)
-      .map((x) => x.trim().replace(/\.$/, ""))
-      .filter((x) => x.length > 3)
-      .slice(0, 4);
-
-    const timeline = `<ol class="ts-timeline">${flow.map((f) => `<li>${inline(f)}</li>`).join("")}</ol>`;
-    const riskCards = `<div class="ts-risks">${risks
-      .map((/** @type {any} */ r) => {
-        const [label, sev] = KIND[/** @type {keyof typeof KIND} */ (r.kind)] || KIND.reliability;
-        return `<div class="ts-risk ${sev}"><div class="ts-risk-t"><strong>${esc(r.title || label)}</strong><span class="ts-sev ${sev}">${label}</span></div><p>${inline(r.why)}</p></div>`;
-      })
-      .join("")}</div>`;
-    const proofBox = `<div class="ts-proof">
-        ${cmd ? `<div class="ts-cmd"><code>${esc(cmd)}</code><button data-action="copy" data-text="${esc(cmd)}">Copy</button></div>` : ""}
-        <ul class="ts-checks">${proofSteps.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>
-      </div>`;
-
-    return `<div class="tg">
-      <div class="tg-pair">
-        <div class="tg-col without"><p class="tg-h">Without ${esc(t.name)}</p><p>${inline(without)}</p></div>
-        <div class="tg-col with"><p class="tg-h">With ${esc(t.name)}</p><p>${what}</p></div>
-      </div>
-      ${spec.analogy ? `<p class="ts-analogy">${inline(spec.analogy)}</p>` : ""}
-      ${flow.length ? `<h4 class="ts-lbl">How it fits</h4>${timeline}` : ""}
-      ${risks.length ? `<h4 class="ts-lbl">How it bites · ${risks.length}</h4>${riskCards}` : ""}
-      ${verify ? `<h4 class="ts-lbl">Prove it works</h4>${proofBox}` : ""}
-    </div>`;
   }
 
   function beltName(/** @type {number} */ box) {
@@ -2186,7 +2278,7 @@
   function dojoTab() {
     if (ui.term) return termPage(termById(ui.term));
     if (ui.idea) {
-      const back = pageBar("closeIdea", ui.ideaFrom === "review" ? "Back to review" : "All ideas");
+      const back = pageBar("closeIdea", ui.ideaFrom === "review" ? "Back to review" : ui.ideaFrom === "now" ? "Back" : "All ideas");
       if (!ideaCard || ideaCard.conceptId !== ui.idea) return `${back}<div class="empty"><p class="muted">Loading…</p></div>`;
       return `${back}${card(ideaCard, true, true)}`;
     }
@@ -2572,6 +2664,12 @@
         return openIdea(d.id || "", d.from || "dojo");
       case "closeIdea":
         ui.idea = null;
+        if (ui.ideaFrom === "now") {
+          // Opened from a tool's page: go back to it.
+          ui.tab = "now";
+          remember();
+          return render();
+        }
         if (ui.ideaFrom === "review") {
           ui.tab = "review";
           remember();
@@ -2670,6 +2768,31 @@
         remember();
         send({ type: "grow" });
         return render();
+      case "lessonDepth":
+        ui.lessonDepth[key] = d.depth;
+        remember();
+        return render();
+      case "lessonPick": {
+        const id = d.id || "";
+        if (lessonPicks[id] !== undefined) return;
+        lessonPicks[id] = Number(d.index);
+        send({ type: "lessonMove" });
+        return render();
+      }
+      case "lessonDone":
+        lessonDone[d.id || ""] = true;
+        send({ type: "lessonMove" });
+        return render();
+      case "lessonNext": {
+        const i = Number(d.index);
+        ui.sections[`${key}|L${i}`] = false;
+        ui.sections[`${key}|L${i + 1}`] = true;
+        remember();
+        render();
+        const next = app.querySelector(`[data-section="${CSS.escape(`${key}|L${i + 1}`)}"]`);
+        if (next) next.scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
       case "growNoteOk":
         growNote = "";
         return render();
@@ -2902,6 +3025,10 @@
         delete drafts["grow|incident"];
         growNote = `Saved: "${m.title}". ${m.related ? `"${m.related}" is up for review today.` : "Its question is on your review schedule."}`;
         break;
+      case "lesson":
+        // The built-in lesson arrives first; one written by the learner's AI replaces it.
+        if (m.lesson && (!lessons[`${m.key}|${m.depth}`] || m.lesson.by || !lessons[`${m.key}|${m.depth}`].by)) lessons[`${m.key}|${m.depth}`] = m.lesson;
+        break;
       case "growNote":
         growNote = m.text || "";
         break;
@@ -2924,6 +3051,7 @@
   }, 1000);
 
   if (!ui.sections) ui.sections = {};
+  if (!ui.lessonDepth) ui.lessonDepth = {};
   if (!ui.altOpen) ui.altOpen = {};
   if (!ui.termRevealed) ui.termRevealed = {};
   if (!ui.scroll) ui.scroll = {};

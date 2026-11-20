@@ -15,6 +15,7 @@ import { TOOL_CATALOG, registerTool, specOf } from "../../src/tools.js";
 import { addStory, count, emptyGrowth, trend } from "../../src/growth.js";
 import { skillMap } from "../../src/skills.js";
 import { checkGuardrails, planInterview } from "../../src/practice.js";
+import { builtInLesson, parseLesson, type Subject } from "../../src/lesson.js";
 
 (async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-harness-"));
@@ -129,9 +130,74 @@ import { checkGuardrails, planInterview } from "../../src/practice.js";
       guessFeedback: "", by: "Claude Code (haiku)",
     },
   };
+
+  // A lesson as a model would return it, read by the real parser, so the preview shows what the panel would.
+  const dockerSubject: Subject = { kind: "tool", name: "Docker", what: dockerSpec.oneLiner, hook: dockerSpec.analogy ?? "", know: dockerSpec.oneLiner, pitfall: dockerSpec.risks[0], analogy: dockerSpec.analogy, flow: dockerSpec.flow, terms: dockerSpec.terms, risks: dockerSpec.risks, verify: dockerSpec.verify, docs: { label: "Docker docs", url: dockerSpec.docs }, file: "docker-compose.yml" };
+  const P = (question: string, options: string[], answer: number, why: string) => ({ question, options, answer, why });
+  const reply = JSON.stringify({
+    sections: {
+      problem: {
+        hook: "You bake a cake at home and it comes out perfect. You give a friend the same recipe. Their oven runs hotter and their flour is different. Same recipe, different cake.\n\nYou finish the order screen. It works on your laptop. A new teammate downloads the project and runs it.",
+        predict: P("What do you think happens?", ["It works the same", "It crashes", "It runs, but slowly"], 1, "It crashes."),
+        reveal: { type: "signal", text: "connect ECONNREFUSED 127.0.0.1:5432", notes: [{ part: "ECONNREFUSED", meaning: "“I knocked and nobody answered.”" }, { part: "5432", meaning: "the door your database normally sits behind." }] },
+        explain: "The app went looking for its database, and there was none. Your code is fine. Their laptop is missing something yours has.",
+        oneLine: "your code is the recipe. It also needs the right kitchen, and every computer's kitchen is different.",
+        sayIt: "Say it yourself: why did it crash on their laptop?",
+        bridge: "What if you could hand them your whole kitchen, not just the recipe?",
+      },
+      concept: {
+        hook: "**Docker lets you hand over the whole kitchen.** It packs a program together with everything it needs, so it runs the same on any computer.",
+        show: { type: "terms", items: [{ term: "Dockerfile", meaning: "The instructions for building the kitchen." }, { term: "Image", meaning: "The finished kitchen, packed in a box." }, { term: "Container", meaning: "The kitchen unpacked and cooking." }] },
+        predict: P("Your teammate starts the app with Docker. What is now running on their laptop?", ["A Dockerfile", "An image", "A container"], 2, "A container."),
+        explain: "The image is the packed box. Once it is opened and running, it is a container. Many containers can start from one image, and each is identical.",
+        oneLine: "an image is the app packed up with everything it needs; a container is that image running.",
+        bridge: "How does a text file turn into a running app?",
+      },
+      how: {
+        hook: "From a file to a running app:",
+        show: { type: "flow", steps: [{ label: "Dockerfile", note: "you write it" }, { label: "Image", note: "built once" }, { label: "Container", note: "run anywhere" }] },
+        predict: P("You run the same image on your laptop and your teammate's. Are the two containers the same?", ["Yes, identical", "No, each laptop changes it", "Only if both have Node installed"], 0, "Yes, identical."),
+        explain: "Everything the app needs is already inside the image, including Node itself. Neither laptop adds or changes anything.",
+        oneLine: "build once, run anywhere: the image never changes, so every container behaves the same.",
+        sayIt: "Explain the difference between an image and a container to a friend.",
+        bridge: "That is one program. Your app is more than one. Where does Docker fit?",
+      },
+      architecture: {
+        hook: "Your app is not one program. It is several, working together.",
+        predict: P("How many containers do you think your app needs?", ["One", "Two", "Four"], 2, "Four."),
+        reveal: { type: "parts", items: [{ name: "Website", role: "what staff click" }, { name: "API", role: "saves orders" }, { name: "Database", role: "keeps orders" }, { name: "Email queue", role: "sends invoices" }] },
+        explain: "Each part runs in its own container. One file lists all four and how they connect: `docker-compose.yml`. One command, `docker compose up`, starts them all.",
+        oneLine: "one container per part of your app, described together in one file.",
+        bridge: "Open that file. What is actually written in it?",
+      },
+      implementation: {
+        hook: "Your `docker-compose.yml`.",
+        predict: P("The API needs the database. What do you think `depends_on: [db]` does?", ["Installs a database inside the API", "Starts the database before the API", "Copies the database's data"], 1, "It starts the database first."),
+        reveal: { type: "code", lines: [{ code: "api:", why: "A name you chose. This is the part that saves orders." }, { code: "  build: ./api", why: "Build this container's image from your `api` folder." }, { code: "  depends_on: [db]", why: "Start the database before the API, so the API has something to connect to." }, { code: "  image: postgres:16", why: "Download a ready-made image: Postgres 16, the same for everyone." }] },
+        explain: "",
+        oneLine: "the file is a list of your app's parts, and for each one, where its image comes from and what it needs.",
+        bridge: "You run it. How do you know it actually worked?",
+      },
+      practical: {
+        hook: "Run `docker compose ps`. Four parts, four times “running”: that is a healthy app.\n\nNow the mistake almost everyone makes. Someone adds a new setting for invoice emails, but forgets to add it to the sample settings file. A new developer starts the app.",
+        predict: P("What happens?", ["The app refuses to start", "Everything starts and looks fine", "The database is deleted"], 1, "Everything starts and looks fine."),
+        explain: "That is the trap. All four say “running”. But the first invoice email silently never sends, and nobody notices for days.",
+        oneLine: "when you add a setting, add it to the sample file in the same commit.",
+        bridge: "Enough reading. Time to change something yourself.",
+      },
+      application: { task: { goal: "make the website open on port 3001 instead of 3000.", where: "`docker-compose.yml`, in the `web` part.", doneWhen: "`localhost:3001` shows the order screen.", hint: "Look for the line with two numbers and a colon. The left number is the door on your laptop.", experiments: ["you open the old address, `localhost:3000`?", "you stop only the database container, then place an order?", "you change `postgres:16` to `postgres:15`?"] } },
+      check: { sayIt: "Without looking back: a friend asks “what is Docker for?” What do you tell them?", predict: P("“It works on my machine but not on yours.” With Docker, why should that stop?", ["Docker makes laptops faster", "Both run the same image", "Docker fixes bugs in the code"], 1, "Both run the same image."), remember: ["Code needs an environment. Docker packs both together.", "Image = packed. Container = running.", "Your app is four containers, listed in one file."] },
+    },
+    concepts: ["Image", "Container", "Dockerfile", "Volume"],
+    deeper: [{ kind: "video", title: "Docker in 100 Seconds", by: "Fireship" }, { kind: "video", title: "Docker Tutorial for Beginners", by: "TechWorld with Nana" }, { kind: "book", title: "Docker Deep Dive", by: "Nigel Poulton" }],
+  });
+  const lessonSample = { Junior: parseLesson(reply, dockerSubject, "Junior", "Claude Code (haiku)"), builtIn: builtInLesson(dockerSubject, "Mid") };
   Object.assign(state, {
     coach: { items: [docker, gateFind, read, readDone, upgrade, gate, debug], tools: [tool], packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {}, today },
     lessonDecisions: {},
+    lessonTerms: {},
+    tailored: {},
+    tailorMode: "off",
     explainBack: true,
   });
 
@@ -175,6 +241,7 @@ import { checkGuardrails, planInterview } from "../../src/practice.js";
   const out = {
     state,
     grow: growData,
+    lessonSample,
     debugDone,
     quiz: await engine.quizForConcept(first.conceptId),
     dojo: await engine.dojo(),

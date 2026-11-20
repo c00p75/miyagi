@@ -63,6 +63,7 @@ import { assistantReasoning } from "./transcript.js";
 import { parseTopic } from "./topics.js";
 import type { Scan } from "./watch.js";
 import { Coach } from "./coach.js";
+import { builtInLesson, lessonPrompt, parseLesson, parseProfile, profilePrompt, type Lesson, type ProjectProfile, type Subject } from "./lesson.js";
 import { addStory, count, updateGrowth } from "./growth.js";
 import {
   alternativesPrompt,
@@ -91,6 +92,11 @@ const METER_KEY = "miyagi.meter.v1";
 const DEPTH_DISMISSED_KEY = "miyagi.depthSuggestionDismissed.v1";
 const MIRROR_KEY = "miyagi.mirror.v1";
 const TAILOR_KEY = "miyagi.tailored.v1";
+const LESSON_KEY = "miyagi.lessons.v1";
+const PROFILE_KEY = "miyagi.profile.v1";
+const MAX_LESSONS_KEPT = 60;
+/** A project's purpose changes slowly; describe it again after this long. */
+const PROFILE_DAYS = 21;
 /** Tailored cards kept per workspace; the oldest go first. */
 const MAX_TAILORED = 300;
 /** In "always" mode, how many cards of one change are tailored before the learner opens any. */
@@ -191,6 +197,8 @@ type Inbound =
   | { type: "alternatives"; key: string; guess?: string }
   | { type: "saveAlternative"; key: string }
   | { type: "tailor"; key: string }
+  | { type: "lesson"; key: string; depth: string }
+  | { type: "lessonMove" }
   | { type: "findTerms"; lesson?: string; root?: string }
   | { type: "termGuess"; id: string; text: string }
   | { type: "termReview"; id: string }
@@ -891,6 +899,132 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   /* ---- a card fitted to the learner's code ----------------------- */
 
   /** What the webview needs: the text and who wrote it, not the hashes. */
+  /* ---- the lesson: what an open card teaches ---------------------- */
+
+  private savedLessons(): Record<string, { lesson: Lesson; at: string }> {
+    return this.deps.context.workspaceState.get<Record<string, { lesson: Lesson; at: string }>>(LESSON_KEY) ?? {};
+  }
+
+  private keepLesson(id: string, lesson: Lesson): void {
+    const all = this.savedLessons();
+    all[id] = { lesson, at: new Date().toISOString() };
+    const ids = Object.keys(all);
+    if (ids.length > MAX_LESSONS_KEPT) {
+      ids.sort((a, b) => all[a].at.localeCompare(all[b].at)).slice(0, ids.length - MAX_LESSONS_KEPT).forEach((k) => delete all[k]);
+    }
+    void this.deps.context.workspaceState.update(LESSON_KEY, all);
+  }
+
+  /** What the project is for, asked once per repository and reused by every lesson. */
+  private async profile(root: string): Promise<ProjectProfile | null> {
+    if (!root) return null;
+    const all = this.deps.context.workspaceState.get<Record<string, { profile: ProjectProfile; at: string }>>(PROFILE_KEY) ?? {};
+    const had = all[root];
+    if (had && Date.now() - Date.parse(had.at) < PROFILE_DAYS * 86_400_000) return had.profile;
+    let found: ProjectProfile | null = null;
+    await this.ask(
+      `${root}|profile`,
+      async () => {
+        const files = await trackedFiles(root).catch(() => [] as string[]);
+        if (!files.length) return "";
+        const chosen = chooseFiles(files, { tree: 160, heads: 6 });
+        const heads: Array<{ file: string; head: string }> = [];
+        for (const file of chosen.heads) {
+          const head = await engine.headOf(root, file, /readme/i.test(file) ? 50 : 30);
+          if (head?.trim()) heads.push({ file, head });
+        }
+        return profilePrompt({ name: path.basename(root), tree: chosen.tree, heads });
+      },
+      (reply) => {
+        found = parseProfile(reply);
+      },
+    );
+    delete this.errors[`${root}|profile`];
+    if (found) {
+      all[root] = { profile: found, at: new Date().toISOString() };
+      void this.deps.context.workspaceState.update(PROFILE_KEY, all);
+    }
+    return found ?? had?.profile ?? null;
+  }
+
+  /** An idea card or a tool, reduced to what a lesson is written from. */
+  private async lessonSubject(key: string, depth: engine.Level): Promise<{ id: string; root: string; subject: Subject; files: ChangedFile[] } | null> {
+    const card = this.card(key);
+    if (card) {
+      const excerpt = card.file ? await this.excerpt(card) : null;
+      return {
+        id: `idea:${card.conceptId}|${card.root}`,
+        root: card.root,
+        subject: {
+          kind: "idea",
+          name: card.title,
+          what: card.what,
+          hook: card.hook,
+          know: card.lens[depth] || card.lens.Junior,
+          pitfall: card.pitfall,
+          docs: card.docs,
+          file: card.file || undefined,
+          evidence: card.evidence || undefined,
+        },
+        files: excerpt && card.file ? [{ file: card.file, excerpt }] : [],
+      };
+    }
+    const tool = await this.coach.toolSubject(key);
+    if (!tool) return null;
+    const spec = tool.spec;
+    return {
+      id: `${key}|${tool.root}`,
+      root: tool.root,
+      subject: {
+        kind: "tool",
+        name: tool.name,
+        what: spec?.oneLiner || tool.job,
+        hook: spec?.analogy || `${tool.name}: ${tool.job.toLowerCase()}.`,
+        know: spec?.oneLiner || tool.job,
+        pitfall: spec?.risks[0] ?? "",
+        analogy: spec?.analogy,
+        flow: spec?.flow,
+        terms: spec?.terms,
+        risks: spec?.risks,
+        verify: spec?.verify,
+        docs: spec?.docs ? { label: `${tool.name} docs`, url: spec.docs } : undefined,
+        file: tool.file || undefined,
+        evidence: tool.file ? tool.evidence : undefined,
+      },
+      files: tool.files,
+    };
+  }
+
+  /**
+   * Sends the lesson for a card at a depth. The built-in lesson goes first, so
+   * the card is never empty; the one written for the learner's project follows
+   * when their AI has written it, and is kept so it is only ever asked for once.
+   */
+  private async openLesson(key: string, rawDepth: string): Promise<void> {
+    const depth: engine.Level = rawDepth === "Mid" || rawDepth === "Senior" ? rawDepth : "Junior";
+    const found = await this.lessonSubject(key, depth);
+    if (!found) return;
+    const id = `${found.id}|${depth}`;
+    const kept = this.savedLessons()[id]?.lesson;
+    if (kept) return this.post({ type: "lesson", key, depth, lesson: kept });
+    this.post({ type: "lesson", key, depth, lesson: builtInLesson(found.subject, depth) });
+    if (!(await this.resolveAi()).provider) return;
+    const slot = `${key}|lesson|${depth}`;
+    if (this.busy.has(slot)) return;
+    // Marked busy before the project is described, so the card says so from the first moment.
+    const profile = await this.profile(found.root);
+    await this.ask(
+      slot,
+      async () => lessonPrompt({ subject: found.subject, depth, profile, files: found.files }),
+      (reply, by) => {
+        const lesson = parseLesson(reply, found.subject, depth, by);
+        if (!lesson) return "The lesson your AI wrote could not be used, so this is Miyagi's built-in one. Switch depth and back to try again.";
+        this.keepLesson(id, lesson);
+        this.post({ type: "lesson", key, depth, lesson });
+      },
+    );
+  }
+
   private tailoredView(): Record<string, Tailored & { by: string }> {
     return Object.fromEntries(
       Object.entries(this.tailored).map(([key, t]) => [key, { hook: t.hook, lens: t.lens, pitfall: t.pitfall, by: t.by }]),
@@ -1782,6 +1916,11 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return this.contrastPick(message.key, message.pick === "b" ? "b" : "a");
         case "alternatives":
           return void (await this.alternatives(message.key, String(message.guess ?? "")));
+        case "lesson":
+          return void (await this.openLesson(String(message.key), String(message.depth)));
+        case "lessonMove":
+          // The learner predicted, explained or did a task before being told.
+          return void (await updateGrowth((g) => count(g, { kind: "first" })));
         case "tailor":
           return void (await this.tailor(String(message.key)));
         case "saveAlternative":

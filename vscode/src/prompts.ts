@@ -12,6 +12,7 @@
 
 import type { Prompt } from "./ai.js";
 import { TOPICS, parseTopic, type Topic } from "./topics.js";
+import { HOUSE_STYLE } from "./standards.js";
 
 export type Depth = "Junior" | "Mid" | "Senior";
 
@@ -26,10 +27,18 @@ const DEPTH_NOTE: Record<Depth, string> = {
   Senior: "The learner is experienced. Go straight to the design choice, its cost, and what to verify.",
 };
 
+/**
+ * Every prompt carries the house style from the teaching standard
+ * (docs/TEACHING.md), so every model writes to the same standard.
+ */
 const prompt = (lines: Array<string | null | false | undefined>): Prompt => ({
   system: SYSTEM,
-  user: lines.filter((l): l is string => typeof l === "string").join("\n"),
+  user: [HOUSE_STYLE, "", ...lines.filter((l): l is string => typeof l === "string")].join("\n"),
 });
+
+/** For prompt modules outside this file: the same builder, system line and house style. */
+export const buildPrompt = prompt;
+export { DEPTH_NOTE, JSON_ONLY, extractJsonObject };
 
 const fenced = (code: string) => "```\n" + code + "\n```";
 
@@ -65,8 +74,10 @@ export function extractJson(text: string): unknown | null {
   return null;
 }
 
-const obj = (v: unknown): Record<string, unknown> =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+const extractJsonObject = (text: string): Record<string, unknown> => obj(extractJson(text));
+function obj(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
 const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const int = (v: unknown): number | null => {
   const n = typeof v === "string" ? Number(v) : v;

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- **Every card opens as a lesson.** Idea cards and tool pages now share one structure of eight sections, each answering one question:
+  1. The problem: why does it exist?
+  2. The concept: what is it?
+  3. How it works
+  4. Architecture: where does it fit in your project?
+  5. Implementation: how is it used here?
+  6. Practical considerations
+  7. Application: your turn
+  8. Knowledge check
+
+  In each section you do something before you are told: predict what happens, read an error with its parts explained, tap code lines to see why each is there, or do a small task. Each ends with the point in one line and a question that leads to the next section.
+- **Depth on the card.** Junior, Mid and Senior switch at the top of every card, for that card only. The sections stay the same; what they say, ask and set as a task changes.
+- **Lessons about your project.** Your AI describes your project once per repository (what it does, who uses it, its parts), and every lesson uses that for its stories and examples. A lesson is written once per card and depth, then kept. Without an AI, a shorter built-in lesson shows in the same order.
+- **Concepts you can open.** Related concepts appear as chips in the lesson, and a tool's own concepts open as cards.
+- **Go deeper.** Each lesson ends with videos, articles and books for its depth. Except for official documentation, each link opens a search for that title, so it never leads to a dead page.
+- **Three questions in the list.** Tapping a card in the Now list shows What is it? Where is it in your app? What if it goes wrong?
+
+### Changed
+
+- **One teaching standard.** `docs/TEACHING.md` sets how Miyagi explains, structures lessons, writes questions and handles depth. Every prompt now carries its house style, and `CLAUDE.md` points coding assistants to it.
+- A tool's "words" are now called concepts.
+
 ## 0.7.3
 
 ### Changed

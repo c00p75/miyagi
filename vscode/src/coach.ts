@@ -1739,6 +1739,16 @@ export class Coach {
   }
 
   /** Tools in the feed, and the tool's own page data, by key. */
+  /** What a tool's lesson is built from, and the files that mention it. */
+  async toolSubject(key: string): Promise<{ root: string; name: string; job: string; spec: ToolSpec | null; file: string; evidence: string; files: ChangedFile[] } | null> {
+    const item = this.item(key);
+    if (item?.kind !== "tool") return null;
+    const catalogued = toolById(item.toolId);
+    const needles = catalogued ? [...catalogued.packages.slice(0, 2), catalogued.name] : [item.name];
+    const files = item.root ? await this.mentions(item.root, needles).catch(() => []) : [];
+    return { root: item.root, name: item.name, job: item.job, spec: item.spec, file: item.file, evidence: item.evidence, files };
+  }
+
   toolKeys(): string[] {
     return [...this.tools.values()].map((t) => `tool:${t.toolId}`);
   }
