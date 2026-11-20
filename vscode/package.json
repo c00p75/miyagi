@@ -532,7 +532,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node esbuild.mjs --tests && node --test dist-test/*.test.cjs",
+    "test": "node esbuild.mjs && node esbuild.mjs --tests && node --test dist-test/*.test.cjs",
     "test:host": "node esbuild.mjs && sh test/host/run.sh",
     "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --baseContentUrl https://github.com/c00p75/miyagi/blob/main/vscode --baseImagesUrl https://github.com/c00p75/miyagi/raw/main/vscode",
     "vscode:prepublish": "node esbuild.mjs --production",
