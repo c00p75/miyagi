@@ -110,8 +110,27 @@ import { checkGuardrails, planInterview } from "../../src/practice.js";
   const upgrade = { kind: "upgrade", key: "upgrade:1", at: new Date(now - 90_000).toISOString(), root, name: "next", from: "^14.2.3", to: "^15.0.1", file: "package.json", guessDone: true, guess: "Maybe the router or images", conceptId: "upgrade-next-15", adopted: false,
     lesson: { summary: "Next.js 15 stops caching fetch requests and GET route handlers by default, and request APIs like cookies() and headers() became async.", changes: [{ title: "cookies() and headers() are now async", why: "Code that reads them without await gets a Promise, not the value, and logic that checks the session quietly misbehaves.", file: "app/dashboard/page.tsx", line: 8 }, { title: "fetch is no longer cached by default", why: "Pages that relied on caching now hit your API on every request, which is slower and can cost more.", file: "", line: null }], checklist: ["Run next build and fix every new type error", "Search for cookies( and headers( and add await", "Load the pages that fetch data and compare their speed"], guessFeedback: "The router is involved, but the bigger changes are caching defaults and async request APIs.", question: null, by: "Claude Code (haiku)" } };
   const today = { due: 4, minutes: 2, missed: ["SQL built by gluing strings together"], next: { id: "testing", title: "Write a test that would catch it", sentence: "14 ideas met so far, and nothing yet on \"write a test that would catch it\". A test is how you change code next month without fear." }, canRead: true, readToday: false, open: { debug: 1, gates: 1, upgrades: 1, tools: 0 } };
+  // Docker, with the project-specific text from the screenshot that started the design comparison.
+  const dockerSpec = specOf(TOOL_CATALOG.find((t) => t.id === "docker")!);
+  const docker = {
+    ...tool, key: "tool:docker", toolId: "docker", name: dockerSpec.name, emoji: dockerSpec.emoji, job: dockerSpec.job, spec: dockerSpec,
+    evidence: "docker-compose.yml", file: "docker-compose.yml", guess: "", guessDone: true, adopted: false, terms: [], termIds: [], held: 0,
+    primer: {
+      summary: "Docker starts the web app, the API, Postgres and Redis together on any machine, so a clean copy runs with one command.",
+      without: "Everyone installs Node, Postgres and Redis by hand at matching versions, and staging drifts from laptops until something works in one place only.",
+      wired: [{ file: "docker-compose.yml", line: 3, what: "defines the four services and their network" }],
+      flow: ["Developer runs one command to start the whole stack.", "Each service starts in its own sealed environment with its own software.", "The four services reach each other over an internal network.", "Sample data loads so the app has something to show.", "The staging server runs the backend API the same way."],
+      risks: [
+        { title: "Production fallback never proven", why: "Production hosting is still undecided, and the risk register relies on this setup as the fallback, so it may fail when needed.", kind: "reliability" },
+        { title: "Clean-copy setup failing unnoticed", why: "Missing values in the sample settings file may only show up at runtime, so a fresh copy could fail without a clear warning.", kind: "setup" },
+        { title: "Staging database exposed", why: "Postgres runs on a shared server reached over SSH, so a mistake in ports or credentials could expose staging data.", kind: "security" },
+      ],
+      verify: "On a clean copy with internet off, run `docker compose up` and time it. Confirm the sample data loads in under five minutes, as TC-104 requires.",
+      guessFeedback: "", by: "Claude Code (haiku)",
+    },
+  };
   Object.assign(state, {
-    coach: { items: [gateFind, read, readDone, upgrade, gate, debug], tools: [tool], packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {}, today },
+    coach: { items: [docker, gateFind, read, readDone, upgrade, gate, debug], tools: [tool], packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {}, today },
     lessonDecisions: {},
     explainBack: true,
   });

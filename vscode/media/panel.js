@@ -1434,26 +1434,99 @@
       : busy(dSlot)
       ? waiting(dSlot)
       : state.ai.label
-      ? `<p><button class="link" data-action="toolDecision" data-key="${esc(t.key)}">Why ${esc(t.name)} and not something else? Log the decision</button></p>${problem(dSlot)}`
+      ? `<div class="tool-why">
+           <div><strong>Why ${esc(t.name)} and not something else?</strong>
+           <p class="muted">Write down the reason now, so you can still give it in six months.</p></div>
+           <button data-action="toolDecision" data-key="${esc(t.key)}">Log the decision</button>
+         </div>${problem(dSlot)}`
       : "";
 
     return `<article class="card page tool">${head}
       ${guess}
       ${project}
-      <dl>
-        <dt>What it does</dt><dd>${inline(spec.oneLiner || t.job)}${spec.analogy ? `<br><span class="muted">${inline(spec.analogy)}</span>` : ""}</dd>
-        ${flow.length ? `<dt>How it fits</dt><dd><ol class="flow">${flow.map((/** @type {string} */ f) => `<li>${inline(f)}</li>`).join("")}</ol></dd>` : ""}
-        ${risks.length ? `<dt>How it bites</dt><dd><ul class="bites">${risks.join("")}</ul></dd>` : ""}
-        ${(primer && primer.verify) || spec.verify ? `<dt>Prove it works</dt><dd>${inline((primer && primer.verify) || spec.verify)}</dd>` : ""}
-      </dl>
+      ${toolSections(t, spec, primer, flow)}
       ${vocab}
       ${decision}
-      <div class="more"><div class="more-list">
-        ${spec.docs ? `<button class="link" data-action="link" data-url="${esc(spec.docs)}">${esc(t.name)} docs</button>` : ""}
-        <button class="link" data-action="copy" data-text="${esc(`Walk me through how ${t.name} is set up in this project: where it is configured, what it sends and when, and how I can see it working.`)}">Copy a question for your AI</button>
-        ${t.inFeed ? `<button class="link" data-action="dismissItem" data-key="${esc(t.key)}">Remove from the feed</button>` : ""}
-      </div></div>
+      ${toolFoot(t, spec)}
     </article>`;
+  }
+
+
+  /**
+   * The links at the bottom of a tool page: full-width rows, each saying what
+   * it does, which reads well in a narrow panel.
+   */
+  function toolFoot(/** @type {any} */ t, /** @type {any} */ spec) {
+    const ask = `Walk me through how ${t.name} is set up in this project: where it is configured, what it sends and when, and how I can see it working.`;
+    const I = {
+      docs: '<path d="M9 3h4v4M13 3L7 9M11 9v4H3V5h4"/>',
+      copy: '<rect x="5" y="5" width="8" height="8" rx="1.5"/><path d="M3 10V4a1 1 0 0 1 1-1h6"/>',
+      remove: '<path d="M4 4l8 8M12 4l-8 8"/>',
+    };
+    const rows = [
+      spec.docs ? { k: "docs", label: `${t.name} docs`, hint: "Opens the official documentation", attrs: `data-action="link" data-url="${esc(spec.docs)}"` } : null,
+      { k: "copy", label: "Copy a question for your AI", hint: "Paste it into your assistant to see how it is set up here", attrs: `data-action="copy" data-text="${esc(ask)}"` },
+      t.inFeed ? { k: "remove", label: "Remove from the feed", hint: "It stays in the Grow tab", attrs: `data-action="dismissItem" data-key="${esc(t.key)}"`, quiet: true } : null,
+    ].filter(Boolean);
+    return `<div class="tf tf-list">${rows
+      .map(
+        (/** @type {any} */ x) =>
+          `<button class="tf-row${x.quiet ? " quiet" : ""}" ${x.attrs}><svg viewBox="0 0 16 16" aria-hidden="true">${I[/** @type {keyof typeof I} */ (x.k)]}</svg><span><span class="tf-row-l">${esc(x.label)}</span><span class="tf-row-h">${esc(x.hint)}</span></span><span class="chev" aria-hidden="true">›</span></button>`,
+      )
+      .join("")}</div>`;
+  }
+
+  /**
+   * The four sections of a tool page, opening with a before and after: the
+   * project without the tool and with it. A contrast says what something is
+   * for faster than a definition does.
+   */
+  function toolSections(/** @type {any} */ t, /** @type {any} */ spec, /** @type {any} */ primer, /** @type {string[]} */ flow) {
+    const what = inline(spec.oneLiner || t.job);
+    const without = (primer && primer.without) || `Your project would need its own way to do this (${esc(String(t.job).toLowerCase())}), or would go without it.`;
+    /** Risks from the AI carry their kind; the catalogue's are labelled from their wording. */
+    const guessKind = (/** @type {string} */ text) =>
+      /expos|leak|secret|credential|password|token|attack|public|anyone/i.test(text) ? "security" : /quota|bill|cost|expens|pay|charge/i.test(text) ? "cost" : /config|install|start|setup|missing value|env/i.test(text) ? "setup" : "reliability";
+    const risks = primer && primer.risks.length
+      ? primer.risks.map((/** @type {any} */ r) => ({ title: r.title, why: r.why, kind: r.kind || guessKind(`${r.title} ${r.why}`) }))
+      : (spec.risks || []).map((/** @type {string} */ r) => {
+          const m = /^([^.:]{6,60})[.:]\s+(.+)$/.exec(r);
+          const title = m ? m[1] : "";
+          const why = m ? m[2] : r;
+          return { title, why, kind: guessKind(r) };
+        });
+    const KIND = { security: ["Security", "hi"], cost: ["Cost", "md"], reliability: ["Reliability", "hi"], setup: ["Setup", "md"] };
+    const verify = (primer && primer.verify) || spec.verify || "";
+    const cmd = /`([^`]{3,80})`/.exec(verify)?.[1] || /\b((?:docker|npm|npx|pnpm|yarn|python|pytest|curl|git)\s[^.,;]{2,60})/.exec(verify)?.[1] || "";
+    const proofSteps = verify
+      .replace(/`/g, "")
+      .split(/(?<=[.!?])\s+|,\s+then\s+|\s+then\s+/)
+      .map((x) => x.trim().replace(/\.$/, ""))
+      .filter((x) => x.length > 3)
+      .slice(0, 4);
+
+    const timeline = `<ol class="ts-timeline">${flow.map((f) => `<li>${inline(f)}</li>`).join("")}</ol>`;
+    const riskCards = `<div class="ts-risks">${risks
+      .map((/** @type {any} */ r) => {
+        const [label, sev] = KIND[/** @type {keyof typeof KIND} */ (r.kind)] || KIND.reliability;
+        return `<div class="ts-risk ${sev}"><div class="ts-risk-t"><strong>${esc(r.title || label)}</strong><span class="ts-sev ${sev}">${label}</span></div><p>${inline(r.why)}</p></div>`;
+      })
+      .join("")}</div>`;
+    const proofBox = `<div class="ts-proof">
+        ${cmd ? `<div class="ts-cmd"><code>${esc(cmd)}</code><button data-action="copy" data-text="${esc(cmd)}">Copy</button></div>` : ""}
+        <ul class="ts-checks">${proofSteps.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>
+      </div>`;
+
+    return `<div class="tg">
+      <div class="tg-pair">
+        <div class="tg-col without"><p class="tg-h">Without ${esc(t.name)}</p><p>${inline(without)}</p></div>
+        <div class="tg-col with"><p class="tg-h">With ${esc(t.name)}</p><p>${what}</p></div>
+      </div>
+      ${spec.analogy ? `<p class="ts-analogy">${inline(spec.analogy)}</p>` : ""}
+      ${flow.length ? `<h4 class="ts-lbl">How it fits</h4>${timeline}` : ""}
+      ${risks.length ? `<h4 class="ts-lbl">How it bites · ${risks.length}</h4>${riskCards}` : ""}
+      ${verify ? `<h4 class="ts-lbl">Prove it works</h4>${proofBox}` : ""}
+    </div>`;
   }
 
   function beltName(/** @type {number} */ box) {

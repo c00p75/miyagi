@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3
+
+### Changed
+
+- **A clearer tool page.** It opens with a before and after: your project without the tool and with it, side by side, with the "without" written by your AI for your project. Then:
+  - **How it fits** as a timeline.
+  - **How it bites** as a card per risk, labelled Security, Cost, Reliability or Setup by your AI.
+  - **Prove it works** as a checklist with a copyable command.
+- **The links at the bottom** (docs, a question for your AI, remove from the feed) are now full-width rows, each with a one-line hint, and "Why this tool?" is a card with one button.
+
 ## 0.7.2
 
 ### Changed

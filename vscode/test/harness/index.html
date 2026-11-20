@@ -35,7 +35,7 @@ if (scene === "noai") {
 }
 if (scene === "debugdone") S.coach.items.push(M.debugDone);
 if (scene === "ownwords") { S.status.dueQuestions = 3; }
-const pages = { tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", gate: "gate:1", gatefind: "gate:2", read: "read:1", readdone: "read:2", upgrade: "upgrade:1" };
+const pages = { docker: "tool:docker", tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", gate: "gate:1", gatefind: "gate:2", read: "read:1", readdone: "read:2", upgrade: "upgrade:1" };
 if (scene === "interview") { M.grow.interview = M.grow.interviewActive; }
 const start = { tab: scene === "dojo" ? "dojo" : scene === "grow" || scene === "interview" ? "grow" : scene === "ownwords" ? "review" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null, cardKey: pages[scene] || null, skill: scene === "grow" ? "testing" : null };
 const reply = (m) => setTimeout(() => window.postMessage(m, "*"), 20);

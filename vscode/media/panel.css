@@ -1868,16 +1868,6 @@ pre.excerpt {
   line-height: 1.4;
 }
 
-.timer {
-  font-family: var(--vscode-editor-font-family, monospace);
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-.timer.over {
-  color: var(--vscode-charts-yellow, #cca700);
-}
-
 pre.signature code {
   white-space: pre-wrap;
   word-break: break-word;
@@ -1969,4 +1959,245 @@ pre.signature code {
   flex-wrap: wrap;
   gap: 4px;
   margin: 8px 0;
+}
+
+/* ---- tool page sections: designs under comparison ---- */
+
+h4.ts-lbl {
+  margin: 3px 0 0;
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ts-analogy {
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ts-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ts-timeline li {
+  position: relative;
+  padding: 0 0 10px 20px;
+}
+
+.ts-timeline li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ts-timeline li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: calc(0.55em + 10px);
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.ts-risks {
+  display: grid;
+  gap: 8px;
+}
+
+.ts-risk {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--vscode-charts-yellow, #cca700);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface);
+}
+
+.ts-risk.hi {
+  border-left-color: var(--miss);
+}
+
+.ts-risk p {
+  color: var(--muted);
+}
+
+.ts-risk-t {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ts-sev {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vscode-charts-yellow, #cca700);
+}
+
+.ts-sev.hi {
+  color: var(--miss);
+}
+
+.ts-proof {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ok) 7%, transparent);
+}
+
+.ts-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--vscode-editor-background, var(--surface));
+}
+
+.ts-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0;
+  background: none;
+  white-space: nowrap;
+}
+
+.ts-checks {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ts-checks li {
+  display: flex;
+  gap: 8px;
+}
+
+.ts-checks li::before {
+  content: "☐";
+  color: var(--ok);
+}
+
+/* ---- the bottom of a tool page ---- */
+
+.tf {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.tf svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* icons */
+.tf-list {
+  display: grid;
+  padding-top: 4px;
+}
+
+button.tf-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--vscode-foreground);
+  text-align: left;
+}
+
+button.tf-row:last-child {
+  border-bottom: 0;
+}
+
+button.tf-row:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+button.tf-row > span:nth-child(2) {
+  display: grid;
+}
+
+.tf-row-h {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+button.tf-row.quiet .tf-row-l {
+  color: var(--muted);
+}
+
+/* segmented */
+.tg { display: grid; gap: 10px; margin-top: 12px; }
+.tg p { margin: 0; }
+.tg-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+@media (max-width: 300px) { .tg-pair { grid-template-columns: 1fr; } }
+.tg-col { display: grid; gap: 4px; align-content: start; padding: 9px 10px; border-radius: var(--radius); border: 1px solid var(--border); }
+.tg-col.without { color: var(--muted); border-style: dashed; }
+.tg-col.with { background: color-mix(in srgb, var(--ok) 8%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.tg-h { font-size: 0.78em; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.tg-col.with .tg-h { color: var(--ok); }
+.tg h4.ts-lbl { margin-top: 6px; }
+
+/* H: reading page */
+
+.tool-why {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tool-why > div {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.tool-why p {
+  margin: 2px 0 0;
+  font-size: 0.92em;
 }

@@ -670,12 +670,17 @@ export function transferQuestionPrompt(req: { title: string; what: string; file:
  * Tools: a primer tied to this project
  * ------------------------------------------------------------------ */
 
+export type RiskKind = "security" | "cost" | "reliability" | "setup";
+const RISK_KINDS: readonly RiskKind[] = ["security", "cost", "reliability", "setup"];
+
 export interface ToolPrimer {
   /** What it does in this project, in a few plain sentences. */
   summary: string;
   wired: Array<{ file: string; line: number | null; what: string }>;
   flow: string[];
-  risks: Array<{ title: string; why: string }>;
+  risks: Array<{ title: string; why: string; kind: RiskKind }>;
+  /** What this project would be like without the tool, for the before-and-after at the top of its page. */
+  without: string;
   verify: string;
   /** Said about the learner's guess, when they made one. */
   guessFeedback: string;
@@ -711,7 +716,8 @@ export function toolPrimerPrompt(req: {
     `- summary: at most 60 words. What ${req.name} does for THIS project specifically, and what would be missing without it.`,
     "- wired: up to 5 places in the lines above where it is set up or used: file, line number, and what that line does in at most 15 words. Only lines that exist above. Empty if none.",
     "- flow: 3 to 5 short steps (at most 15 words each) of what happens at runtime, in order, in this project.",
-    "- risks: up to 3 ways this particular setup could hurt me (cost, leaked data, silently not working), each a title of at most 8 words and why in at most 35 words. Only real ones.",
+    `- without: at most 30 words. What this project would have to do, or would suffer, without ${req.name}. Concrete to this project, no "you would need to".`,
+    '- risks: up to 3 ways this particular setup could hurt me, each a title of at most 8 words, why in at most 35 words, and kind: "security" (leaked data, someone gets in), "cost" (money or quota), "reliability" (fails or breaks in use) or "setup" (fails to start or configure). Only real ones.',
     "- verify: one concrete way to prove it works in this project, in at most 35 words.",
     req.guess
       ? "- guessFeedback: at most 35 words. Say plainly what my guess got right and what it missed. No praise words."
@@ -725,8 +731,8 @@ export function toolPrimerPrompt(req: {
     "",
     JSON_ONLY,
     describe
-      ? '{"summary": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "..."}], "verify": "...", "guessFeedback": "...", "name": "...", "emoji": "...", "job": "...", "oneLiner": "...", "topic": "...", "terms": [{"term": "...", "meaning": "..."}]}'
-      : '{"summary": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "..."}], "verify": "...", "guessFeedback": "..."}',
+      ? '{"summary": "...", "without": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "...", "kind": "security" | "cost" | "reliability" | "setup"}], "verify": "...", "guessFeedback": "...", "name": "...", "emoji": "...", "job": "...", "oneLiner": "...", "topic": "...", "terms": [{"term": "...", "meaning": "..."}]}'
+      : '{"summary": "...", "without": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "...", "kind": "security" | "cost" | "reliability" | "setup"}], "verify": "...", "guessFeedback": "..."}',
   ]);
 }
 
@@ -742,10 +748,13 @@ export function parseToolPrimer(text: string, known: readonly string[], describe
   const flow = (Array.isArray(o.flow) ? o.flow : []).map((s) => str(s, 160)).filter(Boolean).slice(0, 5);
   const risks = (Array.isArray(o.risks) ? o.risks : [])
     .map(obj)
-    .map((r) => ({ title: str(r.title, 100), why: str(r.why, 300) }))
+    .map((r) => {
+      const kind = str(r.kind, 20).toLowerCase();
+      return { title: str(r.title, 100), why: str(r.why, 300), kind: (RISK_KINDS.find((k) => k === kind) ?? "reliability") as RiskKind };
+    })
     .filter((r) => r.title && r.why)
     .slice(0, 3);
-  const primer: ToolPrimer = { summary, wired, flow, risks, verify: str(o.verify, 300), guessFeedback: str(o.guessFeedback, 300) };
+  const primer: ToolPrimer = { summary, wired, flow, risks, without: str(o.without, 300), verify: str(o.verify, 300), guessFeedback: str(o.guessFeedback, 300) };
   if (describe) {
     const terms = (Array.isArray(o.terms) ? o.terms : [])
       .map(obj)

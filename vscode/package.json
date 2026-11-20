@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
