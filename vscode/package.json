@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
@@ -137,7 +137,7 @@
       },
       {
         "command": "miyagi.today",
-        "title": "Show Today's First Five Minutes",
+        "title": "Show Today's Greeting",
         "category": "Miyagi"
       },
       {
@@ -462,7 +462,7 @@
         "miyagi.coach.dailyStart": {
           "type": "boolean",
           "default": true,
-          "description": "Once a day, start the Now tab with your first five minutes: the questions due, one function to read cold, and the one skill to work on next. \"Done for today\" hides it until tomorrow."
+          "description": "Once a day, open the Now tab with a short greeting: a quote, what is waiting, and the one skill to focus on. Questions on the ideas in your recent cards wait at the end of the feed. The × hides the greeting until tomorrow."
         },
         "miyagi.coach.guardrails": {
           "type": "boolean",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.2
+
+### Changed
+
+- **The day starts with a greeting, not a to-do list.** The Now tab opens with good morning (or afternoon), a quote about the craft that changes daily, what is waiting below, and the one skill to focus on. The × hides it until tomorrow.
+- **Questions come after the cards.** "Check what you just saw" sits at the end of the feed: one question for each idea in the last day's cards (up to five), asked after you have read them. Answers count toward review like any other.
+
 ## 0.7.1
 
 ### Added

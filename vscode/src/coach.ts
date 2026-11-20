@@ -530,7 +530,7 @@ export class Coach {
   /* ---- today ----------------------------------------------------- */
 
   /**
-   * The first five minutes: recall what is due, read one function, and the
+   * The daily greeting: what is due, whether a function was read, and the
    * one skill to work on. Once a day, until the learner says they are done;
    * nothing in it is new information, only the order to take it in.
    */

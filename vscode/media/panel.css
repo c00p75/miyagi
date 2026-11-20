@@ -1906,3 +1906,67 @@ pre.signature code {
   gap: 6px;
   flex-wrap: wrap;
 }
+
+/* The daily greeting: a quote and what is waiting, nothing to do. */
+.today.greeting .greet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.today.greeting .greet-head h3 {
+  margin: 0;
+}
+
+.today .quote {
+  margin: 8px 0;
+}
+
+.today .quote blockquote {
+  margin: 0;
+  font-size: 1.05em;
+  line-height: 1.45;
+  font-style: italic;
+}
+
+.today .quote figcaption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.today .quote figcaption::before {
+  content: "— ";
+}
+
+.today .greet-links {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.today .greet-links li {
+  padding: 2px 0;
+}
+
+/* "Check what you just saw", at the end of the feed. */
+.card-quiz {
+  margin-bottom: 12px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card-quiz h3 {
+  margin: 0 0 4px;
+}
+
+.card-quiz .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0;
+}

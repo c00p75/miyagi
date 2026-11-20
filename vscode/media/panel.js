@@ -953,6 +953,7 @@
       const hidden = total - cards.length;
       body += `<p class="muted">${plural(hidden, "card")} in other topics ${hidden === 1 ? "is" : "are"} hidden. <button class="link" data-action="allTopics">Show all topics</button></p>`;
     }
+    body += cardQuizBlock();
     if (state.lessons.length) {
       body += `<p class="tail"><button class="link" data-action="command" data-id="miyagi.clearFeed">Clear the feed</button></p>`;
     }
@@ -1145,48 +1146,108 @@
 
   /* ---- today ---- */
 
+  // Said about the craft by people who practised it. Checked attributions only:
+  // a misattributed quote in a learning tool teaches the wrong thing twice.
+  const QUOTES = [
+    ["Programs must be written for people to read, and only incidentally for machines to execute.", "Harold Abelson"],
+    ["Simplicity is prerequisite for reliability.", "Edsger W. Dijkstra"],
+    ["Debugging is twice as hard as writing the code in the first place.", "Brian Kernighan"],
+    ["Make it work, make it right, make it fast.", "Kent Beck"],
+    ["Any fool can write code that a computer can understand. Good programmers write code that humans can understand.", "Martin Fowler"],
+    ["Talk is cheap. Show me the code.", "Linus Torvalds"],
+    ["We are what we repeatedly do. Excellence, then, is not an act but a habit.", "Will Durant"],
+    ["The beautiful thing about learning is that nobody can take it away from you.", "B.B. King"],
+    ["The only way to learn a new programming language is by writing programs in it.", "Brian Kernighan and Dennis Ritchie"],
+    ["Testing shows the presence, not the absence of bugs.", "Edsger W. Dijkstra"],
+    ["Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away.", "Antoine de Saint-Exupéry"],
+    ["Practice isn't the thing you do once you're good. It's the thing you do that makes you good.", "Malcolm Gladwell"],
+    ["In the beginner's mind there are many possibilities, but in the expert's there are few.", "Shunryu Suzuki"],
+    ["Fall seven times, stand up eight.", "Japanese proverb"],
+    ["A journey of a thousand miles begins with a single step.", "Lao Tzu"],
+    ["Premature optimization is the root of all evil.", "Donald Knuth"],
+    ["Adding manpower to a late software project makes it later.", "Fred Brooks"],
+    ["Before software can be reusable it first has to be usable.", "Ralph Johnson"],
+    ["Code never lies, comments sometimes do.", "Ron Jeffries"],
+    ["The function of good software is to make the complex appear to be simple.", "Grady Booch"],
+    ["Walking on water and developing software from a specification are easy if both are frozen.", "Edward V. Berard"],
+    ["It is not enough for code to work.", "Robert C. Martin"],
+  ];
+
+  /** The same quote all day, a different one tomorrow. */
+  function quoteOfTheDay() {
+    const now = new Date();
+    const day = Math.floor((now.getTime() - now.getTimezoneOffset() * 60000) / 86400000);
+    return QUOTES[day % QUOTES.length];
+  }
+
+  /**
+   * Once a day, a greeting before the work: a quote, what is new, and the one
+   * thing worth focusing on. Nothing here asks for anything; the questions
+   * wait at the bottom of the feed, after the cards they are about.
+   */
   function todayCard() {
     const t = state.coach && state.coach.today;
     if (!t) return "";
-    const step = (/** @type {boolean} */ done, /** @type {string} */ body) =>
-      `<li class="${done ? "done" : ""}"><span class="tick" aria-hidden="true">${done ? "✓" : "○"}</span><div>${body}</div></li>`;
+    const hour = new Date().getHours();
+    const hello = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const [quote, author] = quoteOfTheDay();
+    const since = Date.now() - 24 * 3600000;
+    const fresh = new Set(
+      state.lessons.filter((/** @type {any} */ l) => Date.parse(l.at) > since).flatMap((/** @type {any} */ l) => l.cards.map((/** @type {any} */ c) => c.conceptId)),
+    ).size;
     const open = t.open || {};
-    const waiting = [
-      open.debug ? plural(open.debug, "error") + " to read" : "",
+    const news = [
+      fresh ? `${plural(fresh, "idea")} from your AI's work` : "",
+      open.debug ? `${plural(open.debug, "error")} to read` : "",
       open.gates ? plural(open.gates, "commit check") : "",
       open.upgrades ? plural(open.upgrades, "upgrade") : "",
       open.tools ? plural(open.tools, "new tool") : "",
     ].filter(Boolean);
-    return `<section class="today" aria-label="Today">
-      <h3><span aria-hidden="true">☀️</span> Your first five minutes</h3>
-      <ol class="steps">
-        ${step(
-          !t.due,
-          t.due
-            ? `<strong>Recall first.</strong> ${plural(Math.min(5, t.due), "question")}, about ${plural(t.minutes, "minute")}.${t.missed.length ? ` <span class="muted">Yesterday you missed: ${esc(list(t.missed))}.</span>` : ""}
-               <div class="actions"><button class="primary" data-action="startReview">Start</button></div>`
-            : `<strong>Recall:</strong> nothing is due. <span class="muted">Your memory is up to date.</span>`,
-        )}
-        ${
-          t.canRead
-            ? step(
-                t.readToday,
-                t.readToday
-                  ? `<strong>Read one function:</strong> done today.`
-                  : `<strong>Read one function you did not write.</strong> Guess what it does from its name, then read it. Three minutes.
-                     <div class="actions"><button data-action="readStart">Give me one</button></div>`,
-              )
-            : ""
-        }
-        ${
-          t.next
-            ? step(false, `<strong>Focus:</strong> ${esc(t.next.title)}. <span class="muted">${esc(t.next.sentence)}</span>
-                <div class="actions"><button class="link" data-action="openSkill" data-id="${esc(t.next.id)}">Open it in Grow</button></div>`)
-            : ""
-        }
-      </ol>
-      ${waiting.length ? `<p class="muted">Also waiting below: ${esc(list(waiting))}.</p>` : ""}
-      <p class="tail"><button class="link" data-action="todayDone">Done for today</button></p>
+    const extras = [
+      t.next ? `<li>Focus: <button class="link" data-action="openSkill" data-id="${esc(t.next.id)}">${esc(t.next.title)}</button></li>` : "",
+      t.canRead && !t.readToday ? `<li><button class="link" data-action="readStart">Read one function you did not write</button> <span class="muted">· 3 min</span></li>` : "",
+    ].filter(Boolean);
+    return `<section class="today greeting" aria-label="Today">
+      <div class="greet-head">
+        <h3>${hello}.</h3>
+        <button class="icon" data-action="todayDone" aria-label="Hide until tomorrow" title="Hide until tomorrow">×</button>
+      </div>
+      <figure class="quote">
+        <blockquote>${esc(quote)}</blockquote>
+        <figcaption>${esc(author)}</figcaption>
+      </figure>
+      <p class="muted">${news.length ? `Waiting below: ${esc(list(news))}.` : "Nothing new yet. Cards appear here as your AI works."}${
+        news.length && fresh ? " A few questions on them wait at the end." : ""
+      }</p>
+      ${extras.length ? `<ul class="greet-links">${extras.join("")}</ul>` : ""}
+    </section>`;
+  }
+
+  /**
+   * "Check what you just saw": one question per idea from recent cards, at the
+   * end of the feed, so it comes after the reading it is about.
+   */
+  function cardQuizBlock() {
+    const since = Date.now() - 24 * 3600000;
+    /** @type {Map<string, any>} */
+    const ideas = new Map();
+    for (const { c, lesson } of visibleCards()) {
+      if (Date.parse(lesson.at) <= since || !c.hasQuiz || c.status === "locked" || ideas.has(c.conceptId)) continue;
+      ideas.set(c.conceptId, c);
+    }
+    const picked = [...ideas.values()].slice(0, 5);
+    if (!picked.length) return "";
+    const sig = picked.map((c) => c.conceptId).join(",");
+    const done = ui.cardQuizDone === `${new Date().toDateString()}|${sig}`;
+    return `<section class="card-quiz" aria-label="Check what you just saw">
+      <h3>${done ? "✓ Checked today" : "Check what you just saw"}</h3>
+      <p class="muted">${
+        done
+          ? "Those ideas are in your review now, and come back when they are about to fade."
+          : `${plural(picked.length, "question")}, one per idea in your recent cards. Recalling it now, while it is fresh, is what makes it stay.`
+      }</p>
+      <div class="chips">${picked.map((c) => `<span class="chip">${esc(c.emoji)} ${esc(c.title)}</span>`).join("")}</div>
+      <div class="actions"><button class="${done ? "" : "primary"}" data-action="cardQuiz" data-ids="${esc(sig)}">${done ? "Ask me again" : "Quiz me"}</button></div>
     </section>`;
   }
 
@@ -1875,13 +1936,13 @@
     const scope = state.topic ? ` in ${esc(state.topic)}` : "";
     if (review.quiz) {
       const inCheck = state.check;
-      const setOver = !inCheck && (review.setAnswered >= review.setSize || !due);
+      const setOver = !inCheck && (review.setAnswered >= review.setSize || (!due && !review.cardQuiz));
       const label = inCheck ? (inCheck.asked < inCheck.of ? "Next question" : "See the result") : setOver ? "Finish" : "Next question";
       const next = review.answer
         ? `<div class="actions"><button class="primary" data-action="${setOver ? "finishSet" : "nextReview"}">${label}</button></div>`
         : "";
       const n = Math.min(review.setAnswered + (review.answer ? 0 : 1), review.setSize);
-      const right = inCheck ? `Unaided check: ${inCheck.asked} of ${inCheck.of}` : `${n} of ${review.setSize}`;
+      const right = inCheck ? `Unaided check: ${inCheck.asked} of ${inCheck.of}` : review.cardQuiz ? `From your cards: ${n} of ${review.setSize}` : `${n} of ${review.setSize}`;
       const ideaLink =
         review.answer && review.quiz.conceptId && !inCheck
           ? `<p><button class="link" data-action="idea" data-id="${esc(review.quiz.conceptId)}" data-from="review">Open this idea ›</button></p>`
@@ -1894,6 +1955,16 @@
           ${ideaLink}
           ${next}
         </section>`;
+    }
+    if (review.cardQuiz && review.cardQuizEnded && !review.quiz) {
+      return `
+        <div class="empty">
+          <h2>Checked: ${plural(review.setAnswered, "idea")} from your cards</h2>
+          <p>They are in your review now, and come back just before you would forget them.</p>
+          <div class="actions center">
+            <button class="primary" data-action="tab" data-tab="now">Back to the feed</button>
+          </div>
+        </div>`;
     }
     if (checked) {
       const pct = Math.round((checked.correct / checked.asked) * 100);
@@ -2243,8 +2314,21 @@
     remember();
     const setSize = fresh ? Math.max(1, Math.min(SET_SIZE, dueCount())) : review.setSize;
     const setAnswered = fresh ? 0 : review.setAnswered;
-    review = { asked: true, quiz: null, answer: null, picked: -1, cleared: review.cleared, setSize, setAnswered, setDone: false };
-    send({ type: "review" });
+    const cardQuiz = fresh ? false : review.cardQuiz;
+    review = { asked: true, quiz: null, answer: null, picked: -1, cleared: review.cleared, setSize: cardQuiz ? review.setSize : setSize, setAnswered, setDone: false, cardQuiz };
+    send({ type: "review", fresh });
+    render();
+  }
+
+  function startCardQuiz(/** @type {string} */ ids) {
+    const list = ids.split(",").filter(Boolean);
+    if (!list.length) return;
+    ui.tab = "review";
+    ui.cardQuizSig = `${new Date().toDateString()}|${ids}`;
+    checked = null;
+    remember();
+    review = { asked: true, quiz: null, answer: null, picked: -1, cleared: 0, setSize: list.length, setAnswered: 0, setDone: false, cardQuiz: true };
+    send({ type: "cardQuiz", ids: list });
     render();
   }
 
@@ -2286,6 +2370,12 @@
         render();
         return restoreScroll("now");
       case "finishSet":
+        if (review.cardQuiz) {
+          review = Object.assign({}, review, { quiz: null, answer: null, cardQuizEnded: true });
+          ui.cardQuizDone = ui.cardQuizSig;
+          remember();
+          return render();
+        }
         review = Object.assign({}, review, { quiz: null, answer: null, setDone: true });
         return render();
       case "toggle":
@@ -2401,6 +2491,8 @@
       }
       case "startReview":
         return startReview(true);
+      case "cardQuiz":
+        return startCardQuiz(d.ids || "");
       case "nextReview":
         return startReview(false);
       case "idea":
@@ -2676,6 +2768,11 @@
       }
       case "review":
         review = Object.assign({}, review, { asked: true, quiz: m.quiz, answer: null, picked: -1, setDone: false, choicesInstead: false, confidence: undefined });
+        if (!m.quiz && review.cardQuiz) {
+          review.cardQuizEnded = true;
+          ui.cardQuizDone = ui.cardQuizSig;
+          remember();
+        }
         if (m.checked) checked = m.checked;
         break;
       case "dojo":

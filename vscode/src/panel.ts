@@ -201,7 +201,8 @@ type Inbound =
   | { type: "turnHint"; lesson: string }
   | { type: "check" }
   | { type: "recap"; text: string }
-  | { type: "review" }
+  | { type: "review"; fresh?: boolean }
+  | { type: "cardQuiz"; ids: string[] }
   | { type: "dojo" }
   | { type: "setDepth"; depth: engine.Level }
   | { type: "dismissDepth"; depth: string }
@@ -315,6 +316,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private week: { at: number; value: WeekProgress } | null = null;
   /** An unaided check in progress. */
   private check: { plan: string[]; asked: number; correct: number; token: string | null } | null = null;
+  /** "Check what you just saw": the ideas from recent cards still to ask about, in order. */
+  private cardQuiz: string[] | null = null;
   /** A capped review, such as the three questions offered after the first commit of the day. */
   private reviewCap: number | null = null;
   /** Lines each file had added when a "your turn" task was proposed. */
@@ -1208,6 +1211,24 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     void this.pushState();
   }
 
+  /* ---- check what you just saw ----------------------------------- */
+
+  /**
+   * One question per idea from the cards the learner just read, asked after
+   * the cards rather than before them: reading first, then retrieving what was
+   * read while it is still close, is what makes it stick. Answers count like
+   * any review, so the ideas' boxes move as usual.
+   */
+  private async cardQuizNext(): Promise<void> {
+    while (this.cardQuiz?.length) {
+      const id = this.cardQuiz.shift() as string;
+      const quiz = await engine.quizForConcept(id);
+      if (quiz) return this.post({ type: "review", quiz });
+    }
+    this.cardQuiz = null;
+    this.post({ type: "review", quiz: null });
+  }
+
   /* ---- the unaided check ----------------------------------------- */
 
   private async checkNext(): Promise<void> {
@@ -1717,7 +1738,14 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           this.week = null;
           return void (await this.pushState());
         }
+        case "cardQuiz":
+          this.check = null;
+          this.reviewCap = null;
+          this.cardQuiz = (Array.isArray(message.ids) ? message.ids : []).filter((id) => typeof id === "string").slice(0, 8);
+          return void (await this.cardQuizNext());
         case "review": {
+          if (message.fresh) this.cardQuiz = null;
+          if (this.cardQuiz) return void (await this.cardQuizNext());
           if (this.check) return void (await this.checkNext());
           if (this.reviewCap !== null && this.reviewCap <= 0) {
             this.reviewCap = null;
