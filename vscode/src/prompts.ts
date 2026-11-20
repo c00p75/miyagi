@@ -1221,3 +1221,117 @@ export function parseGlossary(text: string, knownFiles: readonly string[], exist
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ *
+ * Reading code you did not write
+ * ------------------------------------------------------------------ */
+
+export interface ReadingFeedback {
+  verdict: Verdict;
+  feedback: string;
+  /** What the function really does, in plain words. */
+  summary: string;
+  /** The one thing in it most worth noticing: an edge case, a side effect, a hidden assumption. */
+  notice: string;
+}
+
+export function readCodePrompt(req: { file: string; name: string; signature: string; code: string; guess: string; depth: Depth }): Prompt {
+  return prompt([
+    `I am practising reading code I did not write. From only the name and signature of \`${req.name}\` in ${req.file}, I predicted what it does:`,
+    `Signature: ${req.signature.slice(0, 200)}`,
+    `My prediction: "${req.guess.slice(0, 800)}"`,
+    "",
+    "Here is the whole function:",
+    fenced(req.code),
+    "",
+    "Rules:",
+    '- verdict: "right" if my prediction has what it does, "partly" if I have the gist but missed something that matters, "wrong" otherwise.',
+    "- feedback: at most 45 words. What I read correctly from the name, then what the name hid.",
+    "- summary: at most 40 words, what it actually does, including inputs, output and side effects.",
+    "- notice: at most 30 words, the one thing in the body most worth noticing (an edge case, a side effect, an assumption that would break). Point at a line number.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "...", "summary": "...", "notice": "..."}',
+  ]);
+}
+
+export function parseReading(text: string): ReadingFeedback | null {
+  const graded = parseAttemptFeedback(text);
+  const o = obj(extractJson(text));
+  const summary = str(o.summary, 400);
+  if (!graded || !summary) return null;
+  return { ...graded, summary, notice: str(o.notice, 300) };
+}
+
+/* ------------------------------------------------------------------ *
+ * A major version upgrade
+ * ------------------------------------------------------------------ */
+
+export interface UpgradeLesson {
+  summary: string;
+  changes: Array<{ title: string; why: string; file: string; line: number | null }>;
+  checklist: string[];
+  guessFeedback: string;
+  question: OwnQuestion | null;
+}
+
+export function upgradePrompt(req: { name: string; from: string; to: string; files: readonly ChangedFile[]; guess: string; depth: Depth }): Prompt {
+  return prompt([
+    `My project just upgraded ${req.name} from ${req.from} to ${req.to}, a major version. I want to understand what that means for my code.`,
+    "",
+    req.files.length ? "Where my project uses it:\n" + changeBlock(req.files) : "I could not find where my project uses it.",
+    req.guess ? `\nBefore reading anything, I guessed this might break: "${req.guess.slice(0, 400)}"` : "",
+    "",
+    "Rules:",
+    `- summary: at most 50 words, what changed between these versions that a user of ${req.name} must know. If you are not sure of the details of these exact versions, say so plainly instead of inventing them.`,
+    "- changes: up to 4 breaking or important changes, each a title (at most 8 words), why it matters (at most 35 words), and the file and line above it affects if any (else empty file and null line). Only lines that exist above.",
+    "- checklist: 2 to 4 short things to check or run to know the upgrade is safe in this project.",
+    req.guess ? "- guessFeedback: at most 30 words on my guess, plainly." : '- guessFeedback: "".',
+    "- question: one multiple-choice question about the most important change, with one answer, three plausible wrong answers of similar length, and a one-sentence explanation.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"summary": "...", "changes": [{"title": "...", "why": "...", "file": "path or empty", "line": 12}], "checklist": ["..."], "guessFeedback": "...", "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}',
+  ]);
+}
+
+export function parseUpgrade(text: string, known: readonly string[]): UpgradeLesson | null {
+  const o = obj(extractJson(text));
+  const summary = str(o.summary, 500);
+  if (!summary) return null;
+  return {
+    summary,
+    changes: (Array.isArray(o.changes) ? o.changes : [])
+      .map(obj)
+      .map((c) => ({ title: str(c.title, 100), why: str(c.why, 300), file: matchFile(str(c.file, 300), known), line: int(c.line) }))
+      .filter((c) => c.title && c.why)
+      .slice(0, 4),
+    checklist: (Array.isArray(o.checklist) ? o.checklist : []).map((s) => str(s, 200)).filter(Boolean).slice(0, 4),
+    guessFeedback: str(o.guessFeedback, 300),
+    question: o.question ? parseOwnQuestion(JSON.stringify(o.question)) : null,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Mock interview: one open answer, judged like an interviewer would
+ * ------------------------------------------------------------------ */
+
+export function interviewGradePrompt(req: { question: string; truth: string; why: string; answer: string; seconds: number; depth: Depth }): Prompt {
+  return prompt([
+    "This is a mock technical interview. Judge my answer the way a fair interviewer would.",
+    `Question: ${req.question.slice(0, 600)}`,
+    `A good answer covers: ${req.truth.slice(0, 300)}. ${req.why.slice(0, 400)}`,
+    `I took ${Math.round(req.seconds)} seconds.`,
+    "",
+    `My answer: ${req.answer.slice(0, 1_500)}`,
+    "",
+    "Rules:",
+    '- verdict: "right" if an interviewer would be satisfied, "partly" if it is on track but thin or partly wrong, "wrong" otherwise.',
+    "- feedback: at most 60 words. What landed, the one thing a stronger answer would add, and whether it was clear and concrete. No praise words.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
+  ]);
+}

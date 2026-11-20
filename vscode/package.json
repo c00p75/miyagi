@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
@@ -133,6 +133,21 @@
       {
         "command": "miyagi.tour",
         "title": "Tour the Ideas in This Codebase",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.today",
+        "title": "Show Today's First Five Minutes",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.readCode",
+        "title": "Read a Function I Did Not Write",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.interview",
+        "title": "Start a Mock Interview",
         "category": "Miyagi"
       },
       {
@@ -429,6 +444,21 @@
           "default": true,
           "description": "When a command fails, in your terminal or your assistant's, offer to read the error with you before the fix: pick the line that matters, say what you think broke, then compare. Only the error lines are kept, never the full output."
         },
+        "miyagi.coach.dailyStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Once a day, start the Now tab with your first five minutes: the questions due, one function to read cold, and the one skill to work on next. \"Done for today\" hides it until tomorrow."
+        },
+        "miyagi.coach.guardrails": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you stage a change, look for what it could cost: a secret exposed to the browser, an env file, open database rules, a webhook that trusts anyone, a 100% trace sample rate, a query with no limit, an AI call with no output cap. You are asked what is risky before you are told. Never blocks the commit."
+        },
+        "miyagi.coach.upgrades": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a dependency jumps a major version, offer a lesson on what changed and what to check in your project."
+        },
         "miyagi.coach.commitCheckLines": {
           "type": "number",
           "default": 60,
@@ -564,6 +594,21 @@
           "command": "miyagi.story",
           "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
           "group": "0_grow@5"
+        },
+        {
+          "command": "miyagi.today",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@0"
+        },
+        {
+          "command": "miyagi.readCode",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@6"
+        },
+        {
+          "command": "miyagi.interview",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@7"
         }
       ],
       "commandPalette": [

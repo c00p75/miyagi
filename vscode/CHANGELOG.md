@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- **Your first five minutes.** Once a day the Now tab opens with three steps:
+  1. Recall what is due, with yesterday's misses named.
+  2. Read one function you did not write.
+  3. The one skill to work on next.
+
+  **Done for today** hides it until tomorrow; **Show Today's First Five Minutes** brings it back.
+- **Read it cold.** Miyagi picks a function from the files changed most recently and shows only its name and signature. You say what it does, then the body appears. Your AI compares your prediction with the code: what the name told you, what it hid, and the one line most worth noticing. Without an AI you judge it yourself. "Read code you did not write" is a new skill on the map.
+- **Guardrails before you commit.** Staging a change now checks it for what it could cost:
+  - a committed env file
+  - a secret behind a `NEXT_PUBLIC_`/`VITE_` prefix
+  - a service-role key in client code
+  - open Firebase rules or a wildcard CORS origin
+  - unescaped HTML
+  - an unsigned webhook
+  - a secret in a log line
+  - a 100% trace sample rate
+  - a query with no limit
+  - an AI call with no output cap
+  - a job that runs every minute
+
+  Each finding asks you a question about its line before it shows the answer and the fix, and you can mark it as intended. The idea it is an instance of comes up for review that day. It never blocks a commit.
+- **Major version upgrades.** When a dependency jumps a major version (or a 0.x minor), a card asks what you think might break, then your AI explains what changed, where it touches your code, and what to check, with a question you can put on review. Without an AI it points you to the changelog.
+- **Mock interview.** Four questions in the Grow tab:
+  - two on ideas you hold
+  - one on a tool your project uses
+  - one "tell me about a time" from your own story
+
+  You type your answers against a soft timer, and each one is judged as an interviewer would. At the end you see what to work on, and ideas that did not land come back for review today.
+
+### Fixed
+
+- Questions from decisions, incidents and saved alternatives disappeared from review after the editor restarted. They are now kept in `~/.miyagi/coach-ideas.json` and registered at startup.
+
 ## 0.6.0
 
 ### Added

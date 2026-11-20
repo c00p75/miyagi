@@ -14,6 +14,7 @@ import * as engine from "../../src/engine.js";
 import { TOOL_CATALOG, registerTool, specOf } from "../../src/tools.js";
 import { addStory, count, emptyGrowth, trend } from "../../src/growth.js";
 import { skillMap } from "../../src/skills.js";
+import { checkGuardrails, planInterview } from "../../src/practice.js";
 
 (async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "miyagi-harness-"));
@@ -96,8 +97,21 @@ import { skillMap } from "../../src/skills.js";
   };
   const debugDone = { ...debug, key: "debug:2", picked: 3, guess: "getUser gets no user back from the db so .id blows up", result: { verdict: "right", feedback: "You found the line and the reason: the lookup returns undefined for an unknown id. The test passes an id that was never inserted.", cause: "getUser reads `.id` from the result of `db.users.find`, which is undefined when no user matches.", where: { file: "src/api/users.ts", line: 14 }, fix: "Return a 404 when the lookup finds nothing, before reading its id.", clue: 3, habit: "Find the first frame in your own files, then ask what value that line assumed was there.", by: "Claude Code (haiku)" } };
   const gate = { kind: "gate", key: "gate:1", at: new Date(now - 10_000).toISOString(), root, files: ["src/api/pay.ts", "src/lib/stripe.ts", "src/db/schema.ts"], lines: 142, signature: "s" };
+  const added = (file: string, ...lines: string[]) => lines.map((text, i) => ({ file, line: 10 + i, text, sign: "+" as const }));
+  const findings = checkGuardrails([
+    ...added("app/api/webhooks/stripe/route.ts", "const event = await req.json();"),
+    ...added("sentry.server.config.ts", "  tracesSampleRate: 1.0,"),
+    ...added("src/api/orders.ts", "const orders = await prisma.order.findMany();"),
+  ]);
+  const gateFind = { kind: "gate", key: "gate:2", at: new Date(now - 5_000).toISOString(), root, files: ["app/api/webhooks/stripe/route.ts", "sentry.server.config.ts", "src/api/orders.ts"], lines: 38, signature: "f", findings, shown: [1], kept: [], noQuestion: true };
+  const code = ["14: export async function chargeCustomer(id: string, cents: number) {", "15:   const user = await db.users.find(id);", '16:   if (!user) throw new Error("no user");', "17:   if (cents <= 0) return null;", "18:   const charge = await stripe.charges.create({ amount: cents, customer: user.stripeId });", "19:   await db.payments.insert({ userId: id, chargeId: charge.id });", "20:   return charge;", "21: }"].join("\n");
+  const read = { kind: "read", key: "read:1", at: new Date(now - 3_000).toISOString(), root, file: "src/lib/billing.ts", name: "chargeCustomer", signature: "export async function chargeCustomer(id: string, cents: number)", start: 14, end: 21, code: "", revealed: false };
+  const readDone = { ...read, key: "read:2", code, revealed: true, guess: "Charges the customer the amount through Stripe and returns the charge", result: { verdict: "partly", feedback: "You read the name right: it charges through Stripe. The name hid two things: it records the payment in your database, and it quietly returns null for zero or negative amounts instead of failing.", summary: "Looks up the user, refuses unknown ids, skips non-positive amounts, charges their Stripe customer, records the payment, and returns the charge.", notice: "Line 17 returns null for a zero amount, so a caller that expects a charge object will crash later, not here.", by: "Claude Code (haiku)" } };
+  const upgrade = { kind: "upgrade", key: "upgrade:1", at: new Date(now - 90_000).toISOString(), root, name: "next", from: "^14.2.3", to: "^15.0.1", file: "package.json", guessDone: true, guess: "Maybe the router or images", conceptId: "upgrade-next-15", adopted: false,
+    lesson: { summary: "Next.js 15 stops caching fetch requests and GET route handlers by default, and request APIs like cookies() and headers() became async.", changes: [{ title: "cookies() and headers() are now async", why: "Code that reads them without await gets a Promise, not the value, and logic that checks the session quietly misbehaves.", file: "app/dashboard/page.tsx", line: 8 }, { title: "fetch is no longer cached by default", why: "Pages that relied on caching now hit your API on every request, which is slower and can cost more.", file: "", line: null }], checklist: ["Run next build and fix every new type error", "Search for cookies( and headers( and add await", "Load the pages that fetch data and compare their speed"], guessFeedback: "The router is involved, but the bigger changes are caching defaults and async request APIs.", question: null, by: "Claude Code (haiku)" } };
+  const today = { due: 4, minutes: 2, missed: ["SQL built by gluing strings together"], next: { id: "testing", title: "Write a test that would catch it", sentence: "14 ideas met so far, and nothing yet on \"write a test that would catch it\". A test is how you change code next month without fear." }, canRead: true, readToday: false, open: { debug: 1, gates: 1, upgrades: 1, tools: 0 } };
   Object.assign(state, {
-    coach: { items: [gate, debug], tools: [tool], packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {} },
+    coach: { items: [gateFind, read, readDone, upgrade, gate, debug], tools: [tool], packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {}, today },
     lessonDecisions: {},
     explainBack: true,
   });
@@ -116,7 +130,16 @@ import { skillMap } from "../../src/skills.js";
   addStory(g, { kind: "tool", title: "Started learning Sentry", detail: "Error monitoring. Added its 6 key terms to spaced review." });
   addStory(g, { kind: "debug", title: "Diagnosed a failing `npm test` before the AI", detail: "getUser read .id from an undefined lookup result." });
   addStory(g, { kind: "decision", title: "Chose Sentry over console logs", detail: "Free tier covers us, and it maps stack traces back to source." });
+  const ivPlan = planInterview({ ideas: await engine.ideaStates(), tools: [], story: [{ kind: "debug", title: "Diagnosed a failing npm test before the AI", detail: "getUser read .id from an undefined lookup." }], seed: 1 });
+  const interview = {
+    questions: ivPlan.map((q) => ({ kind: q.kind, prompt: q.prompt || "Tell me about a time you had to debug something you did not write. What did you do first?", about: q.about })),
+    at: 0, shownAt: Date.now() - 95_000, seconds: 150, answers: [], done: false,
+  };
   const growData = {
+    interviews: [{ at: new Date().toISOString(), asked: 4, right: 2, partly: 1 }],
+    reads: 3,
+    interview: null as unknown,
+    interviewActive: interview,
     trend: trend(g),
     map: skillMap({ ideas: await engine.ideaStates(), growth: g, changesSeen: 14 }),
     tools: [tool],

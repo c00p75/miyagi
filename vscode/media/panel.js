@@ -907,7 +907,7 @@
     const cards = visibleCards();
     const entries = feedEntries();
     const total = state.lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
-    let body = filters() + offerBanner() + pulse() + teachMeBox();
+    let body = filters() + offerBanner() + todayCard() + pulse() + teachMeBox();
     if (!entries.length) {
       body += emptyNow();
     } else {
@@ -1063,6 +1063,21 @@
       const who = i.by === "you" ? "your terminal" : i.by;
       return { emoji: "🩺", title: `Something broke: ${i.command}`, sub: [who, i.repeats > 1 ? `${i.repeats} times` : "", time].filter(Boolean).join(" · "), tag, hook: "Read the error before your AI fixes it. One minute, and the next one costs less.", open: "Read it ›" };
     }
+    if (i.kind === "read") {
+      const v = i.result && i.result.verdict;
+      const tag = v ? `<span class="tag verdict-${esc(v)}">${VERDICT[v]}</span>` : i.revealed ? `<span class="tag">Read</span>` : `<span class="tag new">Predict it</span>`;
+      return { emoji: "📖", title: `Read it cold: ${i.name}`, sub: [i.file, time].filter(Boolean).join(" · "), tag, hook: "A function you did not write. Say what it does from its name, then read it.", open: "Read it ›" };
+    }
+    if (i.kind === "upgrade") {
+      const tag = i.lesson ? `<span class="tag">Read</span>` : `<span class="tag risk">Major</span>`;
+      return { emoji: "⬆️", title: `${i.name}: ${i.from} → ${i.to}`, sub: [i.file, time].filter(Boolean).join(" · "), tag, hook: "A major version: things may have changed underneath your code without an error.", open: "What changed? ›" };
+    }
+    if (i.kind === "gate" && i.findings && i.findings.length) {
+      const sec = i.findings.filter((/** @type {any} */ f) => f.kind === "security").length;
+      const left = i.findings.filter((/** @type {any} */ _f, /** @type {number} */ n) => !(i.shown || []).includes(n)).length;
+      const tag = left ? `<span class="tag risk">${plural(i.findings.length, sec ? "risk" : "cost")}</span>` : `<span class="tag">Checked</span>`;
+      return { emoji: sec ? "🔐" : "💸", title: `Before you commit: ${plural(i.findings.length, "thing")} to check`, sub: [`${i.files.length} file${i.files.length === 1 ? "" : "s"} staged`, time].join(" · "), tag, hook: sec ? "Something in what you staged could leak or let someone in." : "Something in what you staged could cost you money or time later.", open: "Check it ›" };
+    }
     const tag = i.committed && !i.answered ? `<span class="tag">Committed</span>` : i.answered ? `<span class="tag verdict-${i.correct ? "right" : "wrong"}">${i.correct ? "Ready" : "Re-read"}</span>` : `<span class="tag new">1 question</span>`;
     return { emoji: "🚦", title: `Before you commit: ${i.lines} lines`, sub: [`${i.files.length} file${i.files.length === 1 ? "" : "s"} staged`, time].join(" · "), tag, hook: "One question about what you are about to commit. About thirty seconds.", open: "Ask me ›" };
   }
@@ -1096,7 +1111,145 @@
   function itemPage(/** @type {any} */ i) {
     if (i.kind === "tool") return toolPage(i);
     if (i.kind === "debug") return debugPage(i);
+    if (i.kind === "read") return readPage(i);
+    if (i.kind === "upgrade") return upgradePage(i);
     return gatePage(i);
+  }
+
+  /* ---- today ---- */
+
+  function todayCard() {
+    const t = state.coach && state.coach.today;
+    if (!t) return "";
+    const step = (/** @type {boolean} */ done, /** @type {string} */ body) =>
+      `<li class="${done ? "done" : ""}"><span class="tick" aria-hidden="true">${done ? "✓" : "○"}</span><div>${body}</div></li>`;
+    const open = t.open || {};
+    const waiting = [
+      open.debug ? plural(open.debug, "error") + " to read" : "",
+      open.gates ? plural(open.gates, "commit check") : "",
+      open.upgrades ? plural(open.upgrades, "upgrade") : "",
+      open.tools ? plural(open.tools, "new tool") : "",
+    ].filter(Boolean);
+    return `<section class="today" aria-label="Today">
+      <h3><span aria-hidden="true">☀️</span> Your first five minutes</h3>
+      <ol class="steps">
+        ${step(
+          !t.due,
+          t.due
+            ? `<strong>Recall first.</strong> ${plural(Math.min(5, t.due), "question")}, about ${plural(t.minutes, "minute")}.${t.missed.length ? ` <span class="muted">Yesterday you missed: ${esc(list(t.missed))}.</span>` : ""}
+               <div class="actions"><button class="primary" data-action="startReview">Start</button></div>`
+            : `<strong>Recall:</strong> nothing is due. <span class="muted">Your memory is up to date.</span>`,
+        )}
+        ${
+          t.canRead
+            ? step(
+                t.readToday,
+                t.readToday
+                  ? `<strong>Read one function:</strong> done today.`
+                  : `<strong>Read one function you did not write.</strong> Guess what it does from its name, then read it. Three minutes.
+                     <div class="actions"><button data-action="readStart">Give me one</button></div>`,
+              )
+            : ""
+        }
+        ${
+          t.next
+            ? step(false, `<strong>Focus:</strong> ${esc(t.next.title)}. <span class="muted">${esc(t.next.sentence)}</span>
+                <div class="actions"><button class="link" data-action="openSkill" data-id="${esc(t.next.id)}">Open it in Grow</button></div>`)
+            : ""
+        }
+      </ol>
+      ${waiting.length ? `<p class="muted">Also waiting below: ${esc(list(waiting))}.</p>` : ""}
+      <p class="tail"><button class="link" data-action="todayDone">Done for today</button></p>
+    </section>`;
+  }
+
+  /* ---- reading code cold ---- */
+
+  function readPage(/** @type {any} */ r) {
+    const tag = r.result ? `<span class="tag verdict-${esc(r.result.verdict)}">${VERDICT[r.result.verdict]}</span>` : r.revealed ? `<span class="tag">Read</span>` : `<span class="tag new">Predict it</span>`;
+    const head = `${pageHead("📖", `Read it cold: ${r.name}`, tag)}
+      <div class="where">${fileLink(r.root, r.file, r.start)}</div>
+      <pre class="signature"><code>${esc(r.signature)}</code></pre>`;
+    if (!r.revealed) {
+      const d = `${r.key}|guess`;
+      return `<article class="card page read">${head}
+        <div class="block first">
+          <h4>From the name and signature alone: what does it do?</h4>
+          <p class="muted">Say what goes in, what comes out, and anything it changes along the way. The body is hidden until you commit to a guess; reading code starts with guessing what it is for.</p>
+          <form data-submit="readSubmit" data-key="${esc(r.key)}">
+            <textarea data-draft="${esc(d)}" rows="3" placeholder="It takes… and returns… along the way it…" aria-label="Your prediction" maxlength="800">${esc(drafts[d] || "")}</textarea>
+            <div class="actions">
+              <button type="submit" class="primary">Show me the code</button>
+              <button type="button" class="link" data-action="readSkip" data-key="${esc(r.key)}">Skip, just show me</button>
+            </div>
+          </form>
+        </div></article>`;
+    }
+    const slot = `${r.key}|read`;
+    const res = r.result;
+    const judge = res
+      ? `<div class="result ${res.verdict === "wrong" ? "miss" : "ok"}"><strong>${VERDICT[res.verdict]}</strong>${prose(res.feedback)}</div>
+         <dl><dt>What it really does</dt><dd>${inline(res.summary)}</dd>${res.notice ? `<dt>Worth noticing</dt><dd>${inline(res.notice)}</dd>` : ""}</dl>
+         <p class="by">Judged by ${esc(res.by)}</p>`
+      : busy(slot)
+      ? waiting(slot)
+      : r.guess && !r.self
+      ? `${problem(slot)}<p>Read the code against your prediction. Did it hold?
+           <button class="link" data-action="readSelf" data-key="${esc(r.key)}" data-right="1">Mostly, yes</button>
+           <button class="link" data-action="readSelf" data-key="${esc(r.key)}" data-right="0">No, it surprised me</button></p>`
+      : r.self
+      ? `<p class="muted">${r.self === "right" ? "Counted as read right." : "Counted. The surprises are where the learning is: what did the name hide?"}</p>`
+      : "";
+    return `<article class="card page read">${head}
+      ${r.guess ? `<p><span class="muted">You predicted:</span> ${esc(r.guess)}</p>` : ""}
+      <pre class="excerpt"><code>${esc(r.code)}</code></pre>
+      ${judge}
+      <div class="actions"><button data-action="readStart">Another one</button>
+      <button class="link" data-action="openAt" data-root="${esc(r.root)}" data-file="${esc(r.file)}" data-line="${r.start}">Open it in the editor</button></div>
+    </article>`;
+  }
+
+  /* ---- a major upgrade ---- */
+
+  function upgradePage(/** @type {any} */ u) {
+    const head = `${pageHead("⬆️", `${u.name}: ${u.from} → ${u.to}`, `<span class="tag risk">Major version</span>`)}
+      <p class="hook">A major version is the maintainers telling you something changed in a way that can break code like yours, sometimes without any error.</p>
+      <div class="where">${fileLink(u.root, u.file, null)}</div>`;
+    if (!u.guessDone) {
+      const d = `${u.key}|guess`;
+      return `<article class="card page upgrade">${head}
+        <div class="block first">
+          <h4>Before you read: what might have changed that could break your code?</h4>
+          <p class="muted">A guess in a few words: an API renamed, a default flipped, something removed. Guessing first makes the real list stick.</p>
+          <form data-submit="upgradeGuess" data-key="${esc(u.key)}">
+            <input type="text" data-draft="${esc(d)}" value="${esc(drafts[d] || "")}" placeholder="Probably…" aria-label="Your guess" maxlength="400">
+            <div class="actions"><button type="submit" class="primary">Lock in my guess</button>
+            <button type="button" class="link" data-action="upgradeSkip" data-key="${esc(u.key)}">Skip, just show me</button></div>
+          </form>
+        </div></article>`;
+    }
+    const slot = `${u.key}|lesson`;
+    const l = u.lesson;
+    const npm = `https://www.npmjs.com/package/${encodeURIComponent(u.name).replace("%40", "@").replace("%2F", "/")}?activeTab=versions`;
+    const body = l
+      ? `${u.guess ? `<div class="block"><p><span class="muted">You guessed:</span> ${esc(u.guess)}</p>${l.guessFeedback ? prose(l.guessFeedback) : ""}</div>` : ""}
+         <div class="block mine"><h4>What changed</h4>${prose(l.summary)}</div>
+         ${l.changes.length ? `<div class="block risks"><h4>What could touch your code</h4><ul>${l.changes.map((/** @type {any} */ c) => `<li><strong>${esc(c.title)}</strong><p>${inline(c.why)}</p>${c.file ? `<p>${fileLink(u.root, c.file, c.line)}</p>` : ""}</li>`).join("")}</ul></div>` : ""}
+         ${l.checklist.length ? `<div class="block"><h4>Check before you trust it</h4><ol class="flow">${l.checklist.map((/** @type {string} */ c) => `<li>${inline(c)}</li>`).join("")}</ol></div>` : ""}
+         ${u.conceptId ? (u.adopted ? `<p class="muted">Its question is on your review schedule.</p>` : `<div class="actions"><button class="primary" data-action="upgradeAdopt" data-key="${esc(u.key)}">Add a question to my reviews</button></div>`) : ""}
+         <p class="by">Written by ${esc(l.by)}. Version details can be wrong; the changelog is the source of truth.</p>`
+      : busy(slot)
+      ? waiting(slot)
+      : state.ai.label
+      ? `<div class="actions"><button class="primary" data-action="upgradeLesson" data-key="${esc(u.key)}">What changed, for my code?</button></div>${problem(slot)}`
+      : `<div class="block"><h4>Read the changelog</h4><p>Look for a "Breaking changes" or "Migration" section between ${esc(u.from)} and ${esc(u.to)}, then search your project for each thing it names. Run your tests and click through the screens that use it.</p></div>`;
+    return `<article class="card page upgrade">${head}${body}
+      <div class="more"><div class="more-list">
+        ${/^[\w@/.-]+$/.test(u.name) ? `<button class="link" data-action="link" data-url="${esc(npm)}">Versions on npm</button>` : ""}
+        <button class="link" data-action="copy" data-text="${esc(`We upgraded ${u.name} from ${u.from} to ${u.to}. What breaking changes affect this project, and where?`)}">Copy a question for your AI</button>
+        <button class="link" data-action="dismissItem" data-key="${esc(u.key)}">Remove from the feed</button>
+      </div></div>
+    </article>`;
   }
 
   function pageHead(/** @type {string} */ emoji, /** @type {string} */ title, /** @type {string} */ tags) {
@@ -1336,12 +1489,35 @@
     const after = q && q.answer
       ? `<p class="muted">${q.answer.correct ? "Ready to commit." : "Worth one more read of the diff before you commit. Nothing is blocked; it is your call."}</p>`
       : "";
+    const findings = (g.findings || [])
+      .map((/** @type {any} */ f, /** @type {number} */ n) => {
+        const shown = (g.shown || []).includes(n);
+        const kept = (g.kept || []).includes(n);
+        return `<li class="finding ${esc(f.kind)}${kept ? " kept" : ""}">
+          <p><span class="tag ${f.kind === "security" ? "risk" : "cost"}">${f.kind === "security" ? "Security" : "Cost"}</span> ${fileLink(g.root, f.file, f.line)}</p>
+          <pre><code>${esc(f.code)}</code></pre>
+          ${
+            shown
+              ? `<p><strong>${esc(f.title)}.</strong> ${inline(f.why)}</p><p><span class="muted">Fix:</span> ${inline(f.fix)}</p>
+                 ${kept ? `<p class="muted">Marked as intended.</p>` : `<button class="link" data-action="findingKeep" data-key="${esc(g.key)}" data-index="${n}">It is intended</button>`}`
+              : `<p class="ask-first">${esc(f.ask)}</p>
+                 <button data-action="findingReveal" data-key="${esc(g.key)}" data-index="${n}">Think about it, then show me</button>`
+          }
+        </li>`;
+      })
+      .join("");
+    const findingsBlock = findings
+      ? `<div class="block findings"><h4>What these lines could cost you</h4>
+          <p class="muted">Look at each line before you read the answer: spotting it yourself is the habit that matters at the next commit.</p>
+          <ul>${findings}</ul></div>`
+      : "";
     return `<article class="card page gate">
       ${pageHead("🚦", "Before you commit", `<span class="tag">${g.lines} lines</span>`)}
-      <p class="hook">One question to check you know what you are about to commit. About thirty seconds. Nothing is blocked.</p>
-      <ul class="files">${files}${g.files.length > 6 ? `<li class="muted">and ${g.files.length - 6} more</li>` : ""}</ul>
+      ${findingsBlock}
+      ${g.noQuestion && findings ? "" : `<p class="hook">One question to check you know what you are about to commit. About thirty seconds. Nothing is blocked.</p>`}
+      ${g.noQuestion && findings ? "" : `<ul class="files">${files}${g.files.length > 6 ? `<li class="muted">and ${g.files.length - 6} more</li>` : ""}</ul>`}
       ${g.committed && !q ? `<p class="muted">Already committed. The question still works as practice.</p>` : ""}
-      ${g.noQuestion ? `<p class="muted">No question for this one: nothing in it matches an idea Miyagi knows, and no AI is set up to write one.</p>` : ""}
+      ${g.noQuestion && !findings ? `<p class="muted">No question for this one: nothing in it matches an idea Miyagi knows, and no AI is set up to write one.</p>` : ""}
       ${q ? quizBlock(q, "card", g.key) : busy(slot) ? waiting(slot) : g.noQuestion ? "" : `<div class="actions"><button class="primary" data-action="gateAsk" data-key="${esc(g.key)}">Ask me</button><button class="link" data-action="dismissItem" data-key="${esc(g.key)}">Not this time</button></div>`}
       ${problem(slot)}
       ${after}
@@ -1390,12 +1566,14 @@
     if (!grow) return `<div class="empty"><p class="muted">Loading…</p></div>`;
     const g = grow;
     const note = growNote ? `<div class="banner" role="status">${esc(growNote)} <button class="link" data-action="growNoteOk">OK</button></div>` : "";
+    if (g.interview) return `<section class="grow">${note}${interviewPage(g.interview)}</section>`;
     return `<section class="grow">${note}
       ${trendBlock(g)}
       ${mapBlock(g)}
       ${toolsBlock(g)}
       ${decisionsBlock(g)}
       ${incidentBlock(g)}
+      ${practiceBlock(g)}
       ${storyBlock(g)}
       <p class="muted tail">${g.gates.asked ? `Commit checks: ${g.gates.right} of ${g.gates.asked} right. ` : ""}Everything here stays on this machine, in ~/.miyagi/growth.json.</p>
     </section>`;
@@ -1552,6 +1730,70 @@
       ${problem(slot)}
       ${items ? `<ul class="log">${items}</ul>` : ""}
     </details>`;
+  }
+
+  /** Reading code cold, and the mock interview: practice you start yourself. */
+  function practiceBlock(/** @type {any} */ g) {
+    const last = (g.interviews || [])[0];
+    return `<div class="block practice-block"><h4>Practise</h4>
+      <div class="practice-row">
+        <div><strong>Read a function cold</strong><p class="muted">Name and signature first, body after your guess. ${g.reads ? `${plural(g.reads, "function")} read so far.` : ""}</p></div>
+        <button data-action="readStart">Start</button>
+      </div>
+      <div class="practice-row">
+        <div><strong>Mock interview</strong><p class="muted">Four questions from what you hold, a tool you use and your own story. About ten minutes, typed answers, a soft timer.${last ? ` Last time: ${last.right} of ${last.asked}.` : ""}</p></div>
+        <button data-action="interviewStart"${busy("grow|interviewQ") ? " disabled" : ""}>Start</button>
+      </div>
+    </div>`;
+  }
+
+  function interviewPage(/** @type {any} */ iv) {
+    const n = iv.questions.length;
+    if (iv.done) {
+      const right = iv.answers.filter((/** @type {any} */ a) => a && a.verdict === "right").length;
+      const rows = iv.questions
+        .map((/** @type {any} */ q, /** @type {number} */ i) => {
+          const a = iv.answers[i] || {};
+          const tag = a.verdict ? `<span class="tag verdict-${esc(a.verdict)}">${VERDICT[a.verdict]}</span>` : `<span class="tag">${a.skipped ? "Skipped" : "Not judged"}</span>`;
+          return `<li><p>${tag} <span class="muted">${esc(q.about)} · ${a.seconds ? `${Math.round(a.seconds / 60 * 10) / 10} min` : ""}</span></p><p>${inline(q.prompt)}</p>${a.feedback ? prose(a.feedback) : ""}</li>`;
+        })
+        .join("");
+      const weakest = iv.questions.find((/** @type {any} */ _q, /** @type {number} */ i) => !iv.answers[i] || iv.answers[i].verdict !== "right");
+      return `<div class="block interview">
+        <h4>Mock interview: ${right} of ${n}</h4>
+        <p>${right === n ? "Every answer would have landed." : weakest ? `Work on: <strong>${esc(weakest.about)}</strong>. Ideas that did not land are back in your reviews today.` : ""}</p>
+        <ul class="log">${rows}</ul>
+        <div class="actions"><button class="primary" data-action="interviewStart">Another interview</button><button class="link" data-action="interviewClose">Back to Grow</button></div>
+      </div>`;
+    }
+    const q = iv.questions[iv.at];
+    const a = iv.answers[iv.at];
+    const slot = "grow|interview";
+    const kind = { idea: "Technical", tool: "Your stack", story: "Behavioural" }[q.kind] || "";
+    const answered = a && (a.verdict || a.skipped);
+    return `<div class="block interview">
+      <p class="interview-bar"><span class="muted">Question ${iv.at + 1} of ${n} · ${kind}</span>
+        ${answered ? "" : `<span class="timer" data-timer="${iv.shownAt}" data-soft="${iv.seconds}">0:00</span>`}</p>
+      ${q.prompt ? `<h4 class="interview-q">${inline(q.prompt)}</h4>` : waiting("grow|interviewQ") || `<p class="muted">Preparing the question…</p>`}
+      ${
+        answered
+          ? `${a.text ? `<p class="asked">${esc(a.text)}</p>` : ""}
+             ${a.verdict ? `<div class="result ${a.verdict === "wrong" ? "miss" : "ok"}"><strong>${VERDICT[a.verdict]}</strong>${prose(a.feedback || "")}<p class="by">Judged by ${esc(a.by || "")}</p></div>` : `<p class="muted">Skipped.</p>`}
+             <div class="actions"><button class="primary" data-action="interviewNext">${iv.at + 1 < n ? "Next question" : "See how it went"}</button></div>`
+          : busy(slot)
+          ? `<p class="asked">${esc(drafts["grow|interview.sent"] || "")}</p>${waiting(slot)}`
+          : q.prompt
+          ? `<p class="muted">${q.kind === "story" ? "Situation, what you did (not the AI), the result, what you learned." : "Answer as you would out loud: say what it is, then why it matters, with an example."}</p>
+             <form data-submit="interviewAnswer" data-key="grow">
+               <textarea data-draft="grow|interview" rows="6" placeholder="I would say…" aria-label="Your answer" maxlength="2000">${esc(drafts["grow|interview"] || "")}</textarea>
+               <div class="actions"><button type="submit" class="primary">${state.ai.label ? "Submit answer" : "Done with this one"}</button>
+               <button type="button" class="link" data-action="interviewSkip">Skip</button></div>
+             </form>${!state.ai.label ? `<p class="muted">No AI is set up, so answers are not judged; the practice of answering out loud is still the point.</p>` : ""}`
+          : ""
+      }
+      ${problem(slot)}
+      <p class="tail"><button class="link" data-action="interviewClose">End the interview</button></p>
+    </div>`;
   }
 
   function storyBlock(/** @type {any} */ g) {
@@ -2207,6 +2449,31 @@
         ui.decisionForm = !ui.decisionForm;
         remember();
         return render();
+      case "todayDone":
+      case "readStart":
+      case "interviewStart":
+      case "interviewSkip":
+      case "interviewNext":
+      case "interviewClose":
+        return send({ type: d.action });
+      case "readSkip":
+      case "upgradeLesson":
+      case "upgradeAdopt":
+        return send({ type: d.action, key });
+      case "upgradeSkip":
+        return send({ type: "upgradeGuess", key, text: "" });
+      case "readSelf":
+        return send({ type: "readSelf", key, right: d.right === "1" });
+      case "findingReveal":
+      case "findingKeep":
+        return send({ type: d.action, key, index: Number(d.index) });
+      case "openSkill":
+        ui.tab = "grow";
+        ui.skill = d.id;
+        ui.cardKey = null;
+        remember();
+        send({ type: "grow" });
+        return render();
       case "growNoteOk":
         growNote = "";
         return render();
@@ -2266,6 +2533,16 @@
       }
       case "toolGuess":
         return send({ type: "toolGuess", key, text: take(`${key}|guess`) });
+      case "readSubmit":
+        return send({ type: "readSubmit", key, text: take(`${key}|guess`) });
+      case "upgradeGuess":
+        return send({ type: "upgradeGuess", key, text: take(`${key}|guess`) });
+      case "interviewAnswer": {
+        const text = take("grow|interview");
+        if (!text) return;
+        drafts["grow|interview.sent"] = text;
+        return send({ type: "interviewAnswer", text });
+      }
       case "debugSubmit": {
         const text = take(`${key}|read`);
         drafts[`${key}|read.sent`] = text;
@@ -2424,6 +2701,9 @@
         delete drafts["grow|incident"];
         growNote = `Saved: "${m.title}". ${m.related ? `"${m.related}" is up for review today.` : "Its question is on your review schedule."}`;
         break;
+      case "growNote":
+        growNote = m.text || "";
+        break;
       case "decisionProblem":
         growNote = m.problem;
         ui.decisionForm = true;
@@ -2431,6 +2711,16 @@
     }
     render();
   });
+
+  // The interview's soft timer: only its own text changes, so typing is never interrupted.
+  setInterval(() => {
+    for (const el of /** @type {NodeListOf<HTMLElement>} */ (app.querySelectorAll("[data-timer]"))) {
+      const secs = Math.max(0, Math.floor((Date.now() - Number(el.dataset.timer)) / 1000));
+      el.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+      el.classList.toggle("over", secs > Number(el.dataset.soft || 150));
+      el.title = secs > Number(el.dataset.soft || 150) ? "Past the suggested time. Finish your thought; nothing is cut off." : "Time on this question";
+    }
+  }, 1000);
 
   if (!ui.sections) ui.sections = {};
   if (!ui.altOpen) ui.altOpen = {};

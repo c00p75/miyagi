@@ -223,7 +223,22 @@ type Inbound =
   | { type: "skillExercise"; id: string }
   | { type: "skillDone"; id: string }
   | { type: "storyAsk" }
-  | { type: "storyAnswer"; text: string };
+  | { type: "storyAnswer"; text: string }
+  | { type: "todayDone" }
+  | { type: "readStart" }
+  | { type: "readSubmit"; key: string; text: string }
+  | { type: "readSkip"; key: string }
+  | { type: "readSelf"; key: string; right: boolean }
+  | { type: "findingReveal"; key: string; index: number }
+  | { type: "findingKeep"; key: string; index: number }
+  | { type: "upgradeGuess"; key: string; text: string }
+  | { type: "upgradeLesson"; key: string }
+  | { type: "upgradeAdopt"; key: string }
+  | { type: "interviewStart" }
+  | { type: "interviewAnswer"; text: string }
+  | { type: "interviewSkip" }
+  | { type: "interviewNext" }
+  | { type: "interviewClose" };
 
 export interface PanelDeps {
   context: vscode.ExtensionContext;
@@ -1726,6 +1741,36 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.coach.skillExercise(String(message.id ?? "")));
         case "skillDone":
           return void (await this.coach.skillDone(String(message.id ?? "")));
+        case "todayDone":
+          return void (await this.coach.todayDone());
+        case "readStart":
+          return void (await this.coach.readStart());
+        case "readSubmit":
+          return void (await this.coach.readSubmit(message.key, String(message.text ?? "")));
+        case "readSkip":
+          return void (await this.coach.readSubmit(message.key, "", true));
+        case "readSelf":
+          return void (await this.coach.readSelf(message.key, message.right === true));
+        case "findingReveal":
+          return void (await this.coach.findingReveal(message.key, Number(message.index)));
+        case "findingKeep":
+          return this.coach.findingKeep(message.key, Number(message.index));
+        case "upgradeGuess":
+          return void (await this.coach.upgradeGuess(message.key, String(message.text ?? "")));
+        case "upgradeLesson":
+          return void (await this.coach.upgradeLesson(message.key));
+        case "upgradeAdopt":
+          return void (await this.coach.upgradeAdopt(message.key));
+        case "interviewStart":
+          return void (await this.coach.interviewStart());
+        case "interviewAnswer":
+          return void (await this.coach.interviewAnswer(String(message.text ?? "")));
+        case "interviewSkip":
+          return void (await this.coach.interviewAnswer("", true));
+        case "interviewNext":
+          return void (await this.coach.interviewNext());
+        case "interviewClose":
+          return this.coach.interviewClose();
         case "storyAsk":
           return void (await this.coach.storyAsk());
         case "storyAnswer":

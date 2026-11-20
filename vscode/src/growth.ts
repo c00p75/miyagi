@@ -143,10 +143,14 @@ export interface Growth {
   weeks: WeekCounts[];
   /** Commit checks answered, and how many were right. */
   gates: { asked: number; right: number };
+  /** Functions read cold, by name only first: which, and how the prediction was judged. */
+  reads: Array<{ at: string; file: string; name: string; verdict: Verdict | "self-right" | "self-wrong" | "skipped" }>;
+  /** Mock interviews finished: how many questions, and how many an interviewer would have taken. */
+  interviews: Array<{ at: string; asked: number; right: number; partly: number }>;
 }
 
 export function emptyGrowth(): Growth {
-  return { version: 1, tools: [], predictions: [], debug: [], decisions: [], incidents: [], story: [], weeks: [], gates: { asked: 0, right: 0 } };
+  return { version: 1, tools: [], predictions: [], debug: [], decisions: [], incidents: [], story: [], weeks: [], gates: { asked: 0, right: 0 }, reads: [], interviews: [] };
 }
 
 export function growthPath(): string {
@@ -290,6 +294,19 @@ export function normaliseGrowth(raw: unknown): Growth {
       }))
       .slice(-26),
     gates: isObj(raw.gates) ? { asked: n(raw.gates.asked), right: n(raw.gates.right) } : { asked: 0, right: 0 },
+    reads: list("reads")
+      .filter((r) => typeof r.at === "string" && typeof r.name === "string")
+      .map((r) => ({
+        at: s(r.at, 40),
+        file: s(r.file, 300),
+        name: s(r.name, 120),
+        verdict: (["right", "partly", "wrong", "self-right", "self-wrong", "skipped"] as const).find((x) => x === r.verdict) ?? "skipped",
+      }))
+      .slice(-300),
+    interviews: list("interviews")
+      .filter((i) => typeof i.at === "string")
+      .map((i) => ({ at: s(i.at, 40), asked: n(i.asked), right: n(i.right), partly: n(i.partly) }))
+      .slice(-60),
   };
 }
 
