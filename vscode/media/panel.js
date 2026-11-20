@@ -68,9 +68,6 @@
   /** The Grow tab's data, fetched when the tab opens. */
   /** @type {any} */
   let grow = null;
-  /** Files ticked in the "predict it" strip. */
-  /** @type {string[]} */
-  let predictPicks = [];
   /** A message to show once in the Grow tab (incident saved, decision problem). */
   let growNote = "";
   let growAsked = 0;
@@ -764,7 +761,7 @@
     const h = state.heartbeat;
     if (!h) {
       return state.repos.length + state.folders.length
-        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.${predictLink()}</p>`
+        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.</p>`
         : "";
     }
     const outcome = h.taught
@@ -776,13 +773,7 @@
       : busy(`${h.root}|findIdeas`)
       ? "nothing in the built-in list; asking your AI"
       : "nothing new to teach";
-    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.${predictLink()}</p>`;
-  }
-
-  /** "Predict the next change", unless one is already open or predictions are off. */
-  function predictLink() {
-    if (state.predictions === "off" || (state.coach && state.coach.predicting) || !state.repos.length) return "";
-    return ` <button class="link" data-action="predictOpen">Predict the next change</button>`;
+    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.</p>`;
   }
 
   function commands() {
@@ -916,7 +907,7 @@
     const cards = visibleCards();
     const entries = feedEntries();
     const total = state.lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
-    let body = filters() + offerBanner() + predictStrip() + pulse() + teachMeBox();
+    let body = filters() + offerBanner() + pulse() + teachMeBox();
     if (!entries.length) {
       body += emptyNow();
     } else {
@@ -1072,10 +1063,6 @@
       const who = i.by === "you" ? "your terminal" : i.by;
       return { emoji: "🩺", title: `Something broke: ${i.command}`, sub: [who, i.repeats > 1 ? `${i.repeats} times` : "", time].filter(Boolean).join(" · "), tag, hook: "Read the error before your AI fixes it. One minute, and the next one costs less.", open: "Read it ›" };
     }
-    if (i.kind === "prediction") {
-      const pct = Math.round(i.score * 100);
-      return { emoji: "🎯", title: `Your prediction: ${i.hits.length} of ${i.files.length} files`, sub: [`${i.surprises.length} surprise${i.surprises.length === 1 ? "" : "s"}`, time].join(" · "), tag: `<span class="tag ${pct >= 60 ? "verdict-right" : pct >= 30 ? "verdict-partly" : "verdict-wrong"}">${pct}%</span>`, hook: "What you named, what it touched, and what you did not see coming.", open: "Compare ›" };
-    }
     const tag = i.committed && !i.answered ? `<span class="tag">Committed</span>` : i.answered ? `<span class="tag verdict-${i.correct ? "right" : "wrong"}">${i.correct ? "Ready" : "Re-read"}</span>` : `<span class="tag new">1 question</span>`;
     return { emoji: "🚦", title: `Before you commit: ${i.lines} lines`, sub: [`${i.files.length} file${i.files.length === 1 ? "" : "s"} staged`, time].join(" · "), tag, hook: "One question about what you are about to commit. About thirty seconds.", open: "Ask me ›" };
   }
@@ -1109,7 +1096,6 @@
   function itemPage(/** @type {any} */ i) {
     if (i.kind === "tool") return toolPage(i);
     if (i.kind === "debug") return debugPage(i);
-    if (i.kind === "prediction") return predictionPage(i);
     return gatePage(i);
   }
 
@@ -1341,32 +1327,6 @@
     </article>`;
   }
 
-  /* ---- a prediction ---- */
-
-  function predictionPage(/** @type {any} */ p) {
-    const pct = Math.round(p.score * 100);
-    const list = (/** @type {string[]} */ items, /** @type {string} */ mark, /** @type {string} */ cls) =>
-      items.map((f) => `<li class="${cls}"><span aria-hidden="true">${mark}</span> ${fileLink(p.root, f, null) || esc(f)}</li>`).join("");
-    const slot = `${p.key}|approach`;
-    const ar = p.approachResult;
-    return `<article class="card page prediction">
-      ${pageHead("🎯", "Your prediction", `<span class="tag">${pct}%</span>`)}
-      <p class="hook">${p.hits.length ? `You named ${p.hits.length} of the places it changed.` : "None of what you named changed."} ${p.surprises.length ? `It also touched ${p.surprises.length} you did not name.` : "Nothing it touched surprised you."}</p>
-      ${p.hits.length ? `<h4>Right</h4><ul class="pred">${list(p.hits, "✓", "hit")}</ul>` : ""}
-      ${p.misses.length ? `<h4>Named, not touched</h4><ul class="pred">${p.misses.map((/** @type {string} */ f) => `<li class="miss"><span aria-hidden="true">✗</span> ${esc(f)}</li>`).join("")}</ul>` : ""}
-      ${p.surprises.length ? `<h4>Surprises</h4><ul class="pred">${list(p.surprises, "＋", "surprise")}</ul>
-         <p class="muted">Surprises are the best part: each one is a connection in the project you did not know about yet.</p>
-         ${p.lessonId ? `<p><button class="link" data-action="predictWalk" data-key="${esc(p.key)}">Walk me through why it touched these</button></p>` : ""}` : ""}
-      ${
-        p.approach
-          ? `<div class="block"><p><span class="muted">How you said it would go:</span> ${esc(p.approach)}</p>
-              ${ar ? `<p><span class="tag verdict-${esc(ar.verdict)}">${VERDICT[ar.verdict]}</span></p>${prose(ar.feedback)}<p class="by">Compared by ${esc(ar.by)}</p>` : busy(slot) ? waiting(slot) : state.ai.label && p.lessonId ? `<button data-action="predictApproach" data-key="${esc(p.key)}">Compare my approach</button>` : ""}
-              ${problem(slot)}</div>`
-          : ""
-      }
-    </article>`;
-  }
-
   /* ---- before you commit ---- */
 
   function gatePage(/** @type {any} */ g) {
@@ -1389,35 +1349,6 @@
   }
 
   /* ---- the strip, the box, the offer ---- */
-
-  function predictStrip() {
-    const p = state.coach && state.coach.predicting;
-    if (!p) return "";
-    if (p.locked) {
-      return `<div class="strip locked" role="status">
-        <p><span aria-hidden="true">🎯</span> <strong>Prediction locked in:</strong> ${esc(list(p.locked.files.map((/** @type {string} */ f) => f.split("/").pop() || f)))}. It is compared when the change lands.
-        <button class="link" data-action="predictDismiss">Cancel</button></p>
-      </div>`;
-    }
-    const picks = predictPicks;
-    const chip = (/** @type {string} */ f) =>
-      `<button type="button" class="chip file-chip${picks.includes(f) ? " on" : ""}" data-action="predictToggle" data-file="${esc(f)}" aria-pressed="${picks.includes(f)}" title="${esc(f)}">${esc(f.split("/").pop() || f)}</button>`;
-    const extra = picks.filter((f) => !p.suggestions.includes(f));
-    return `<div class="strip">
-      <p><span aria-hidden="true">🎯</span> <strong>${p.trigger === "task" ? "Your AI just got a new task." : "Predict the next change."}</strong> Before it writes anything: which files will it touch?</p>
-      <div class="file-chips">${p.suggestions.map(chip).join("")}${extra.map(chip).join("")}</div>
-      <form data-submit="predictAdd" data-key="predict" class="ask">
-        <input type="text" list="miyagi-files" data-draft="predict|file" value="${esc(drafts["predict|file"] || "")}" placeholder="Add a file or folder: src/api, checkout.tsx" aria-label="Add a file or folder" maxlength="200">
-        <button type="submit">Add</button>
-      </form>
-      <datalist id="miyagi-files">${(p.all || []).map((/** @type {string} */ f) => `<option value="${esc(f)}">`).join("")}</datalist>
-      <input type="text" data-draft="predict|approach" value="${esc(drafts["predict|approach"] || "")}" placeholder="How will it do it? (optional, one line)" aria-label="How you think it will be done" maxlength="400">
-      <div class="actions">
-        <button class="primary" data-action="predictLock"${picks.length ? "" : " disabled"}>Lock in${picks.length ? ` ${plural(picks.length, "guess")}` : ""}</button>
-        <button class="link" data-action="predictDismiss">Not this time</button>
-      </div>
-    </div>`;
-  }
 
   function teachMeBox() {
     const slot = "learn|about";
@@ -1466,7 +1397,7 @@
       ${decisionsBlock(g)}
       ${incidentBlock(g)}
       ${storyBlock(g)}
-      <p class="muted tail">${g.gates.asked ? `Commit checks: ${g.gates.right} of ${g.gates.asked} right. ` : ""}${g.predictions ? `${plural(g.predictions, "prediction")} compared. ` : ""}Everything here stays on this machine, in ~/.miyagi/growth.json.</p>
+      <p class="muted tail">${g.gates.asked ? `Commit checks: ${g.gates.right} of ${g.gates.asked} right. ` : ""}Everything here stays on this machine, in ~/.miyagi/growth.json.</p>
     </section>`;
   }
 
@@ -1485,14 +1416,13 @@
     const moves = [
       w.explainedTried ? `${plural(w.explainedTried, "explanation")} in your words` : "",
       w.debugReads ? `${plural(w.debugReads, "error")} read` : "",
-      w.predictions ? plural(w.predictions, "prediction") : "",
       w.unaided ? `${plural(w.unaided, "piece")} written unaided` : "",
     ]
       .filter(Boolean)
       .map((label) => `<span class="chip static">${esc(label)}</span>`)
       .join("");
     return `<div class="block trend"><h4>Going first</h4>
-      <p>${t.sentence ? esc(t.sentence) : "How often you try before your AI explains: explaining a card yourself, reading an error, predicting a change, writing a piece unaided. Make a few of those moves and your trend shows here."}</p>
+      <p>${t.sentence ? esc(t.sentence) : "How often you try before your AI explains: explaining a card yourself, reading an error, writing a piece unaided. Make a few of those moves and your trend shows here."}</p>
       <div class="bars" aria-label="Share of moves where you went first, by week">${bars}</div>
       ${moves ? `<p class="chips"><span class="muted">This week:</span> ${moves}</p>` : ""}
     </div>`;
@@ -2233,8 +2163,6 @@
       case "toolDecision":
       case "debugSkip":
       case "gateAsk":
-      case "predictApproach":
-      case "predictWalk":
       case "debugLesson":
         return send({ type: d.action, key });
       case "dismissItem":
@@ -2256,21 +2184,6 @@
         return send({ type: "debugHint", key, step: d.step });
       case "debugSelf":
         return send({ type: "debugSelf", key, right: d.right === "1" });
-      case "predictToggle": {
-        const f = d.file || "";
-        predictPicks = predictPicks.includes(f) ? predictPicks.filter((x) => x !== f) : predictPicks.concat(f);
-        return render();
-      }
-      case "predictLock":
-        send({ type: "predictLock", files: predictPicks, approach: drafts["predict|approach"] || "" });
-        predictPicks = [];
-        delete drafts["predict|approach"];
-        return;
-      case "predictDismiss":
-        predictPicks = [];
-        return send({ type: "predictDismiss" });
-      case "predictOpen":
-        return send({ type: "predictOpen" });
       case "aiOffer":
         return send({ type: "aiOffer", accept: d.accept === "1" });
       case "learnName":
@@ -2357,11 +2270,6 @@
         const text = take(`${key}|read`);
         drafts[`${key}|read.sent`] = text;
         return send({ type: "debugSubmit", key, text });
-      }
-      case "predictAdd": {
-        const text = take("predict|file");
-        if (text && !predictPicks.includes(text)) predictPicks = predictPicks.concat(text);
-        return render();
       }
       case "answerOwn": {
         const text = take("review|own");

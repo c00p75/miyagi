@@ -30,13 +30,12 @@ if (scene === "dojo") {
     mistakes: [{ at: "", concept: "password-hashing", about: "Storing passwords as hashes", question: "Why are password hashing algorithms deliberately slow?", believed: "To give the database time to write the row", truth: "To make guessing many candidates expensive", why: "", confident: true }] };
 }
 if (scene === "empty") { S.lessons = []; S.status.dueQuestions = 6; S.commands = []; }
-if (scene === "strip") {
-  S.coach.predicting = { root: "shop-api", trigger: "task", locked: null, suggestions: ["src/api/pay.ts", "src/lib/stripe.ts", "app/checkout/page.tsx"], all: ["src/api/pay.ts", "src/lib/stripe.ts", "src/db/schema.ts"] };
+if (scene === "noai") {
   S.coach.offerAi = true; S.ai = { label: null, reason: "No AI found." };
 }
 if (scene === "debugdone") S.coach.items.push(M.debugDone);
 if (scene === "ownwords") { S.status.dueQuestions = 3; }
-const pages = { tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", prediction: "pred:1", gate: "gate:1" };
+const pages = { tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", gate: "gate:1" };
 const start = { tab: scene === "dojo" ? "dojo" : scene === "grow" ? "grow" : scene === "ownwords" ? "review" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null, cardKey: pages[scene] || null, skill: scene === "grow" ? "testing" : null };
 const reply = (m) => setTimeout(() => window.postMessage(m, "*"), 20);
 window.acquireVsCodeApi = () => ({

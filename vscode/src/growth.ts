@@ -457,50 +457,6 @@ function weeksAgo(week: string, now: Date): string {
 }
 
 /* ------------------------------------------------------------------ *
- * Predictions
- * ------------------------------------------------------------------ */
-
-const normPath = (p: string) => p.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "").toLowerCase();
-
-/**
- * Does a name the learner typed refer to a changed file? A full path, the end
- * of one, a bare file name, or a folder it sits in all count: the skill is
- * knowing where the change goes, not spelling the path.
- */
-export function namesFile(guess: string, file: string): boolean {
-  const g = normPath(guess);
-  const f = normPath(file);
-  if (!g || !f) return false;
-  if (f === g || f.endsWith("/" + g)) return true;
-  // A folder: `src/api` covers `src/api/pay.ts`.
-  if (!/\.[a-z0-9]{1,6}$/.test(g) && (f.startsWith(g + "/") || f.includes("/" + g + "/"))) return true;
-  // A bare name without its extension: `checkout` for `src/checkout.tsx`.
-  const base = f.split("/").pop() ?? "";
-  return !g.includes("/") && base.replace(/\.[^.]+$/, "") === g.replace(/\.[^.]+$/, "") && g.length >= 3;
-}
-
-/**
- * Compares what was named with what changed. A guess that names a folder
- * counts once however many files under it changed; a changed file nobody
- * named is a surprise, and surprises are where the lesson is.
- */
-export function scorePrediction(guesses: readonly string[], actual: readonly string[]): NonNullable<Prediction["resolved"]> {
-  const named = guesses.map((g) => g.trim()).filter(Boolean);
-  const hits = named.filter((g) => actual.some((f) => namesFile(g, f)));
-  const misses = named.filter((g) => !hits.includes(g));
-  const surprises = actual.filter((f) => !named.some((g) => namesFile(g, f)));
-  const denominator = named.length + surprises.length;
-  return {
-    at: new Date().toISOString(),
-    actual: [...actual],
-    hits,
-    misses,
-    surprises,
-    score: denominator ? hits.length / denominator : 0,
-  };
-}
-
-/* ------------------------------------------------------------------ *
  * Debugging
  * ------------------------------------------------------------------ */
 

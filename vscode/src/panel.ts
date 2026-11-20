@@ -198,7 +198,7 @@ type Inbound =
   | { type: "command"; id: string }
   | { type: "openLink"; url: string }
   | { type: "copy"; text: string }
-  // The coach: tools, debugging, predictions, commit checks, decisions, growth.
+  // The coach: tools, debugging, commit checks, decisions, growth.
   | { type: "learnAbout"; text: string }
   | { type: "toolGuess"; key: string; text: string }
   | { type: "toolPrimer"; key: string }
@@ -214,11 +214,6 @@ type Inbound =
   | { type: "debugHint"; key: string; step: Hint }
   | { type: "debugSelf"; key: string; right: boolean }
   | { type: "debugLesson"; key: string }
-  | { type: "predictOpen" }
-  | { type: "predictLock"; files: string[]; approach: string }
-  | { type: "predictDismiss" }
-  | { type: "predictApproach"; key: string }
-  | { type: "predictWalk"; key: string }
   | { type: "gateAsk"; key: string }
   | { type: "dismissItem"; key: string }
   | { type: "answerOwn"; token: string; text: string; confidence?: string }
@@ -336,10 +331,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       lessonInfo: (id) => {
         const lesson = this.lesson(id);
         return lesson ? { root: lesson.root, files: lesson.files } : null;
-      },
-      walk: (id) => {
-        this.post({ type: "openLesson", lesson: id });
-        void this.walk(id);
       },
       roots: () => this.deps.roots(),
       rootOf: (dir) => this.deps.rootOf(dir),
@@ -520,7 +511,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       glossary: this.glossaryView(),
       lessonTerms: this.lessonTerms,
       explainBack: setting("explainBack", true) && Boolean(resolved.provider),
-      predictions: setting<string>("coach.predictions", "onNewTask"),
     });
   }
 
@@ -1721,16 +1711,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.coach.debugSelf(message.key, message.right === true));
         case "debugLesson":
           return this.post({ type: "incidentPrefill", text: this.coach.incidentFrom(message.key) });
-        case "predictOpen":
-          return void (await this.coach.predictOpen("manual"));
-        case "predictLock":
-          return void (await this.coach.predictLock(Array.isArray(message.files) ? message.files.map(String) : [], String(message.approach ?? "")));
-        case "predictDismiss":
-          return this.coach.predictDismiss();
-        case "predictApproach":
-          return void (await this.coach.predictApproach(message.key));
-        case "predictWalk":
-          return this.coach.walk(message.key);
         case "gateAsk":
           return void (await this.coach.gateAsk(message.key));
         case "dismissItem":

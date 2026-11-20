@@ -583,7 +583,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
 
   register("miyagi.clearFeed", () => panel.clear());
 
-  /* ---- growing: tools, predictions, incidents, the story -------- */
+  /* ---- growing: tools, incidents, the story -------- */
 
   register("miyagi.learnAbout", async () => {
     const text = await vscode.window.showInputBox({
@@ -594,11 +594,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     if (!text?.trim()) return;
     await open();
     await panel.coach.learnAbout(text);
-  });
-  register("miyagi.predict", async () => {
-    await open();
-    panel.showTab("now");
-    await panel.coach.predictOpen("manual");
   });
   register("miyagi.growth", async () => {
     await open();
@@ -860,7 +855,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       `  find ideas with AI: ${config().get("ai.findIdeas", "whenNothingFound")}`,
       "",
       "COACH",
-      `  tools: ${config().get("coach.tools", true)}, debugging: ${config().get("coach.debugging", true)}, predictions: ${config().get("coach.predictions", "onNewTask")}, commit check from: ${config().get("coach.commitCheckLines", 60)} lines`,
+      `  tools: ${config().get("coach.tools", true)}, debugging: ${config().get("coach.debugging", true)}, commit check from: ${config().get("coach.commitCheckLines", 60)} lines`,
       `  explain in your own words: ${config().get("explainBack", true)}`,
       `  terminal failures: ${(vscode.window as { onDidEndTerminalShellExecution?: unknown }).onDidEndTerminalShellExecution ? "read through shell integration" : "not available in this editor"}`,
       "",

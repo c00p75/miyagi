@@ -1005,22 +1005,6 @@ export function recallGradePrompt(req: { idea: string; question: string; truth: 
   ]);
 }
 
-export function approachPrompt(req: { approach: string; files: readonly ChangedFile[]; depth: Depth }): Prompt {
-  return prompt([
-    `Before my AI assistant made this change, I predicted how it would do it: "${req.approach.slice(0, 500)}"`,
-    "",
-    changeBlock(req.files),
-    "",
-    "Rules:",
-    '- verdict: "right" if the change took essentially my approach, "partly" if some of it, "wrong" if it went another way.',
-    "- feedback: at most 50 words. Where my prediction matched, and the one difference most worth understanding, with why the change did it that way.",
-    `- ${DEPTH_NOTE[req.depth]}`,
-    "",
-    JSON_ONLY,
-    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
-  ]);
-}
-
 /* ------------------------------------------------------------------ *
  * Blind spots: one exercise for a skill not met yet
  * ------------------------------------------------------------------ */
