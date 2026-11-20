@@ -857,7 +857,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       ...found.map((a) => `  found: ${a.id}: ${a.label}  [${a.detail}]`),
       `  editor language-model API: ${options.editor ? `present, ${editorList.length} model(s)${editorList.length ? ": " + editorList.join(", ") : ""}` : "not offered by this editor"}`,
       `  ${describeMeter(currentMeter(context.globalState.get(METER_KEY)))}`,
-      `  find ideas with AI: ${config().get("ai.findIdeas", "off")}`,
+      `  find ideas with AI: ${config().get("ai.findIdeas", "whenNothingFound")}`,
       "",
       "COACH",
       `  tools: ${config().get("coach.tools", true)}, debugging: ${config().get("coach.debugging", true)}, predictions: ${config().get("coach.predictions", "onNewTask")}, commit check from: ${config().get("coach.commitCheckLines", 60)} lines`,

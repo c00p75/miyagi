@@ -89,7 +89,7 @@ import { trackedFiles, chooseFiles } from "./reports.js";
 
 const COACH_KEY = "miyagi.coach.v1";
 const TOOLS_KEY = "miyagi.coachTools.v1";
-const FIND_IDEAS_OFFER_KEY = "miyagi.findIdeasOffered.v1";
+const NO_AI_OFFER_KEY = "miyagi.noAiOffered.v1";
 
 /** XP for going first. Smaller than an answer recalled cold, larger than nothing. */
 const XP_DEBUG: Record<Verdict, number> = { right: 20, partly: 10, wrong: 5 };
@@ -401,8 +401,7 @@ export class Coach {
         all: this.predicting.all,
       },
       packages: this.packages,
-      offerFindIdeas:
-        ai && setting<string>("ai.findIdeas", "off") === "off" && !this.host.context.globalState.get<boolean>(FIND_IDEAS_OFFER_KEY),
+      offerAi: !ai && !this.host.context.globalState.get<boolean>(NO_AI_OFFER_KEY),
       ownWords: Object.fromEntries(this.ownWords),
     };
   }
@@ -1345,9 +1344,13 @@ export class Coach {
 
   /* ---- odds and ends --------------------------------------------- */
 
-  async offerFindIdeas(accept: boolean): Promise<void> {
-    await this.host.context.globalState.update(FIND_IDEAS_OFFER_KEY, true);
-    if (accept) await vscode.workspace.getConfiguration("miyagi").update("ai.findIdeas", "whenNothingFound", vscode.ConfigurationTarget.Global);
+  /**
+   * The banner shown when no AI is available. Choosing one hides it, because
+   * the banner only shows without an AI; "use built-in ideas" hides it for good.
+   */
+  async aiOffer(accept: boolean): Promise<void> {
+    if (accept) return void (await vscode.commands.executeCommand("miyagi.chooseAi"));
+    await this.host.context.globalState.update(NO_AI_OFFER_KEY, true);
     this.host.push();
   }
 

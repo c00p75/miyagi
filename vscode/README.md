@@ -73,7 +73,7 @@ You do, through an assistant you already use. Miyagi has no account, no API key 
 
 In `auto` (the default) Miyagi uses the assistant it saw doing the work, else the first one it finds. Run **Miyagi: Choose Which AI Writes Explanations** to pick, or to turn AI off. Cards, questions and belts all work without any AI.
 
-Nothing is sent to an AI unless you press a button, with two exceptions you have to turn on yourself: `miyagi.ai.explain: auto` (an explanation for every card) and `miyagi.ai.findIdeas` (ask your AI what is worth learning in a change, at most `miyagi.ai.findIdeasPerHour` times an hour). The footer of the panel shows how many AI calls Miyagi has made this week and roughly how many tokens.
+Miyagi uses the AI you already have. When a change matches none of its built-in ideas, it asks that AI what is worth learning in it, at most `miyagi.ai.findIdeasPerHour` times an hour (`miyagi.ai.findIdeas`; set it to `off` to stop this). Everything else waits for a button press, unless you set `miyagi.ai.explain: auto`. If no AI is available, the panel says so once and Miyagi teaches only its built-in ideas. The footer of the panel shows how many AI calls Miyagi has made this week and roughly how many tokens.
 
 Each request is a separate, short-lived process: no tools, no project context, no saved session. It cannot reach the conversation your assistant is working in.
 

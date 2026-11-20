@@ -222,7 +222,7 @@ type Inbound =
   | { type: "gateAsk"; key: string }
   | { type: "dismissItem"; key: string }
   | { type: "answerOwn"; token: string; text: string; confidence?: string }
-  | { type: "findIdeasOffer"; accept: boolean }
+  | { type: "aiOffer"; accept: boolean }
   | { type: "grow" }
   | { type: "incident"; text: string }
   | { type: "skillExercise"; id: string }
@@ -506,7 +506,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       skipped,
       quiet: quiet.quiet ? { why: quiet.why, until: quiet.why === "paused" ? quiet.until.toISOString() : null } : null,
       meter: describeMeter(this.meter()),
-      findIdeas: setting<string>("ai.findIdeas", "off"),
+      findIdeas: setting<string>("ai.findIdeas", "whenNothingFound"),
       recallFirst: setting("recallFirst", true),
       explainFirst: setting("explainFirst", true),
       fadeSupport: setting("fadeSupport", true),
@@ -1360,7 +1360,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     if (this.heartbeat && this.heartbeat.root === root) this.heartbeat.taught += cards;
     await this.coach.changes(root, changes, lesson?.id ?? null);
 
-    const mode = setting<string>("ai.findIdeas", "off");
+    const mode = setting<string>("ai.findIdeas", "whenNothingFound");
     if (!repeat && (mode === "always" || (mode === "whenNothingFound" && !cards))) {
       void this.findIdeas(root, source, changes);
     }
@@ -1735,8 +1735,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.coach.gateAsk(message.key));
         case "dismissItem":
           return this.coach.dismiss(message.key);
-        case "findIdeasOffer":
-          return void (await this.coach.offerFindIdeas(message.accept === true));
+        case "aiOffer":
+          return void (await this.coach.aiOffer(message.accept === true));
         case "grow":
           return void (await this.coach.refreshGrow());
         case "incident":

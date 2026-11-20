@@ -32,7 +32,7 @@ if (scene === "dojo") {
 if (scene === "empty") { S.lessons = []; S.status.dueQuestions = 6; S.commands = []; }
 if (scene === "strip") {
   S.coach.predicting = { root: "shop-api", trigger: "task", locked: null, suggestions: ["src/api/pay.ts", "src/lib/stripe.ts", "app/checkout/page.tsx"], all: ["src/api/pay.ts", "src/lib/stripe.ts", "src/db/schema.ts"] };
-  S.coach.offerFindIdeas = true;
+  S.coach.offerAi = true; S.ai = { label: null, reason: "No AI found." };
 }
 if (scene === "debugdone") S.coach.items.push(M.debugDone);
 if (scene === "ownwords") { S.status.dueQuestions = 3; }

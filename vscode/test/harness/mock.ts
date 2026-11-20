@@ -53,7 +53,7 @@ import { skillMap } from "../../src/skills.js";
     skipped: 0,
     quiet: null,
     meter: "7 AI calls this week, about 9,400 tokens.",
-    findIdeas: "off",
+    findIdeas: "whenNothingFound",
     recallFirst: true,
     explainFirst: true,
     fadeSupport: true,
@@ -98,7 +98,7 @@ import { skillMap } from "../../src/skills.js";
   const prediction = { kind: "prediction", key: "pred:1", at: new Date(now - 120_000).toISOString(), root, predictionId: "p1", files: ["src/api/pay.ts", "src/lib/stripe.ts", "README.md"], approach: "A new route that creates a Checkout Session", hits: ["src/api/pay.ts", "src/lib/stripe.ts"], misses: ["README.md"], surprises: ["src/db/schema.ts"], score: 0.5, lessonId: lesson.id };
   const gate = { kind: "gate", key: "gate:1", at: new Date(now - 10_000).toISOString(), root, files: ["src/api/pay.ts", "src/lib/stripe.ts", "src/db/schema.ts"], lines: 142, signature: "s" };
   Object.assign(state, {
-    coach: { items: [gate, debug, prediction], tools: [tool], predicting: null, packages: { [lesson.id]: ["left-pad"] }, offerFindIdeas: false, ownWords: {} },
+    coach: { items: [gate, debug, prediction], tools: [tool], predicting: null, packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {} },
     lessonDecisions: {},
     explainBack: true,
     predictions: "onNewTask",

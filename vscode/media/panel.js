@@ -1428,10 +1428,10 @@
   }
 
   function offerBanner() {
-    if (!state.coach || !state.coach.offerFindIdeas) return "";
-    return `<div class="banner offer">Miyagi only knows a few ideas, so most changes teach nothing. Let ${esc(state.ai.label || "your AI")} spot what's worth learning? Uses your account, at most ${"6"} times an hour.
-      <button class="link" data-action="findIdeasOffer" data-accept="1">Turn it on</button>
-      <button class="link" data-action="findIdeasOffer" data-accept="0">Not now</button></div>`;
+    if (!state.coach || !state.coach.offerAi || state.ai.label) return "";
+    return `<div class="banner offer">Miyagi found no AI it can use, so it can only teach its built-in ideas, not what your assistant is building. Connect one to learn from your own code.
+      <button class="link" data-action="aiOffer" data-accept="1">Choose an AI</button>
+      <button class="link" data-action="aiOffer" data-accept="0">Use built-in ideas</button></div>`;
   }
 
   function lessonDecisionsBlock(/** @type {any} */ lesson) {
@@ -2271,8 +2271,8 @@
         return send({ type: "predictDismiss" });
       case "predictOpen":
         return send({ type: "predictOpen" });
-      case "findIdeasOffer":
-        return send({ type: "findIdeasOffer", accept: d.accept === "1" });
+      case "aiOffer":
+        return send({ type: "aiOffer", accept: d.accept === "1" });
       case "learnName":
         return send({ type: "learnAbout", text: d.name });
       case "openTool":
