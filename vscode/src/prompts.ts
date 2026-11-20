@@ -1335,3 +1335,92 @@ export function interviewGradePrompt(req: { question: string; truth: string; why
     '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
   ]);
 }
+
+/* ------------------------------------------------------------------ *
+ * A card's lesson, fitted to the learner's own code
+ * ------------------------------------------------------------------ */
+
+/**
+ * The three parts of a card a learner reads first, rewritten around their
+ * own lines. Each field may be "" when the model's version failed a check;
+ * the panel then shows Miyagi's general text for that part.
+ */
+export interface Tailored {
+  hook: string;
+  lens: string;
+  pitfall: string;
+}
+
+export function tailorPrompt(req: {
+  title: string;
+  what: string;
+  hook: string;
+  lens: string;
+  pitfall: string;
+  file: string;
+  excerpt: string;
+  depth: Depth;
+}): Prompt {
+  return prompt([
+    `An AI assistant wrote this code in ${req.file} for my project. It uses the idea "${req.title}": ${req.what}`,
+    fenced(req.excerpt),
+    "",
+    "Here is Miyagi's general lesson on the idea, written for any project:",
+    `- hook: ${req.hook}`,
+    `- lens: ${req.lens}`,
+    `- pitfall: ${req.pitfall}`,
+    "",
+    "Rewrite those three parts about THIS code, so I learn the idea from what is in front of me. Keep what the general lesson teaches; change the examples to mine.",
+    "",
+    "Rules:",
+    "- hook: one sentence, at most 25 words, saying what this code does with the idea.",
+    "- lens: at most 70 words on how the idea works in these lines. Name the real functions, variables or values.",
+    "- pitfall: at most 50 words on the concrete way it could go wrong HERE: the input or situation, and what the user would see. If the code already guards against the general pitfall, say what guards it and what still could go wrong.",
+    "- Put every name from the code in backticks, exactly as written in it, like `fetchUser`. Do not invent names that are not in the lines shown.",
+    "- When you point at a line, write \"line N\" using the numbers shown. Only use numbers that appear above.",
+    "- Plain language, no praise, no headings, no markdown other than backticks.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"hook": "...", "lens": "...", "pitfall": "..."}',
+  ]);
+}
+
+/** Line numbers shown in an excerpt (`12: code`). */
+function excerptLines(excerpt: string): Set<number> {
+  const out = new Set<number>();
+  for (const m of excerpt.matchAll(/^(\d+): /gm)) out.add(Number(m[1]));
+  return out;
+}
+
+/**
+ * Whether a sentence only claims things the excerpt can back: every
+ * backticked name appears in the code, and every "line N" was shown.
+ * A model that names a function that is not there would teach a fiction
+ * about the learner's own project, which is worse than a general lesson.
+ */
+export function groundedIn(text: string, excerpt: string): boolean {
+  const code = excerpt.replace(/^\d+: /gm, "");
+  for (const m of text.matchAll(/`([^`\n]{1,120})`/g)) {
+    const name = m[1].trim().replace(/\(\)$/, "");
+    if (name && !code.includes(name)) return false;
+  }
+  const shown = excerptLines(excerpt);
+  for (const m of text.matchAll(/\blines? (\d+)(?:\s*(?:-|–|to|and)\s*(\d+))?/gi)) {
+    if (!shown.has(Number(m[1]))) return false;
+    if (m[2] && !shown.has(Number(m[2]))) return false;
+  }
+  return true;
+}
+
+/** Null when no part survives; a part that is ungrounded is "" and falls back. */
+export function parseTailored(text: string, excerpt: string): Tailored | null {
+  const o = obj(extractJson(text));
+  const keep = (v: unknown, max: number) => {
+    const s = str(v, max * 2);
+    if (!s || s.length > max) return "";
+    return groundedIn(s, excerpt) ? s : "";
+  };
+  const out = { hook: keep(o.hook, 240), lens: keep(o.lens, 700), pitfall: keep(o.pitfall, 500) };
+  return out.hook || out.lens || out.pitfall ? out : null;
+}

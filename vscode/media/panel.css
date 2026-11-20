@@ -1896,3 +1896,13 @@ pre.signature code {
 .interview .tail {
   margin-top: 12px;
 }
+
+/* A card's lesson fitted to the learner's code: who wrote it, and the way back. */
+.tailor-note {
+  margin: 4px 0 0;
+  font-size: 0.88em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}

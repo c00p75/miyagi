@@ -15,6 +15,7 @@
 
 import * as vscode from "vscode";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { conceptsIn, gitChanges } from "../../src/changes.js";
 import { CONCEPTS, scrub, type FileChange } from "../../src/concepts.js";
 import type { Observation } from "../../src/observe.js";
@@ -65,6 +66,9 @@ import { Coach } from "./coach.js";
 import { addStory, count, updateGrowth } from "./growth.js";
 import {
   alternativesPrompt,
+  tailorPrompt,
+  parseTailored,
+  type Tailored,
   glossaryPrompt,
   parseAlternatives,
   parseGlossary,
@@ -86,6 +90,11 @@ const TOPIC_KEY = "miyagi.topic.v1";
 const METER_KEY = "miyagi.meter.v1";
 const DEPTH_DISMISSED_KEY = "miyagi.depthSuggestionDismissed.v1";
 const MIRROR_KEY = "miyagi.mirror.v1";
+const TAILOR_KEY = "miyagi.tailored.v1";
+/** Tailored cards kept per workspace; the oldest go first. */
+const MAX_TAILORED = 300;
+/** In "always" mode, how many cards of one change are tailored before the learner opens any. */
+const TAILOR_AHEAD = 3;
 /** Questions in an unaided check. */
 const CHECK_LENGTH = 10;
 /** XP for a small change written without the assistant: more than any single answer. */
@@ -130,6 +139,8 @@ interface CardExtra {
   /** "Why not another way?": the learner's own idea first, then the real options. */
   alternatives?: Alternatives & { by: string; guess: string; saved?: boolean };
 }
+
+type StoredTailored = Tailored & { hash: string; by: string; at: string };
 
 interface LessonExtra {
   risks?: { items: Risk[]; by: string };
@@ -179,6 +190,7 @@ type Inbound =
   | { type: "contrastPick"; key: string; pick: "a" | "b" }
   | { type: "alternatives"; key: string; guess?: string }
   | { type: "saveAlternative"; key: string }
+  | { type: "tailor"; key: string }
   | { type: "findTerms"; lesson?: string; root?: string }
   | { type: "termGuess"; id: string; text: string }
   | { type: "termReview"; id: string }
@@ -269,6 +281,11 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private lessons: engine.LessonView[] = [];
   private explanations: Record<string, Explanation> = {};
   private lastSeen: Record<string, engine.Where> = {};
+  /**
+   * Card text rewritten around the learner's own lines, by card key. `hash`
+   * is of the lines it was written from: when they change, it is redone.
+   */
+  private tailored: Record<string, StoredTailored> = {};
   /** Lessons opened from the dojo. They live outside the feed. */
   private readonly ideaCards = new Map<string, engine.CardView>();
   private topic: engine.Topic | null;
@@ -326,6 +343,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       this.lastSeen = saved.lastSeen ?? {};
     }
     this.topic = parseTopic(deps.context.globalState.get<string>(TOPIC_KEY));
+    this.tailored = deps.context.workspaceState.get<Record<string, StoredTailored>>(TAILOR_KEY) ?? {};
     void loadGlossary().then((g) => {
       this.glossary = g;
       void this.pushState();
@@ -497,6 +515,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       topic: this.topic,
       lessons: this.lessons,
       explanations: this.explanations,
+      tailored: this.tailoredView(),
+      tailorMode: setting<string>("ai.tailorCards", "onOpen"),
       extras: this.extras,
       lessonExtras: this.lessonExtras,
       busy: Object.fromEntries([...this.busy].map(([slot, b]) => [slot, b.by])),
@@ -865,6 +885,76 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   /* ---- why not another way? ------------------------------------ */
 
   /** The other ways this idea could have been written here. The learner's guess goes first, if they gave one. */
+  /* ---- a card fitted to the learner's code ----------------------- */
+
+  /** What the webview needs: the text and who wrote it, not the hashes. */
+  private tailoredView(): Record<string, Tailored & { by: string }> {
+    return Object.fromEntries(
+      Object.entries(this.tailored).map(([key, t]) => [key, { hook: t.hook, lens: t.lens, pitfall: t.pitfall, by: t.by }]),
+    );
+  }
+
+  private saveTailored(): void {
+    const keys = Object.keys(this.tailored);
+    if (keys.length > MAX_TAILORED) {
+      keys
+        .sort((a, b) => this.tailored[a].at.localeCompare(this.tailored[b].at))
+        .slice(0, keys.length - MAX_TAILORED)
+        .forEach((k) => delete this.tailored[k]);
+    }
+    void this.deps.context.workspaceState.update(TAILOR_KEY, this.tailored);
+  }
+
+  /**
+   * Rewrites a card's hook, lens and pitfall around the lines it was seen in.
+   * Called when a card's page opens (or, in "always" mode, when it arrives).
+   * Costs nothing when the lines have not changed since the last rewrite.
+   * A failure is silent: the card keeps Miyagi's general text, which is
+   * still right, just less personal.
+   */
+  private async tailor(key: string, background = false): Promise<void> {
+    if (setting<string>("ai.tailorCards", "onOpen") === "off") return;
+    const card = this.card(key);
+    if (!card?.file || card.status === "locked") return;
+    const excerpt = await this.excerpt(card);
+    if (!excerpt) return;
+    const hash = createHash("sha1").update(excerpt).digest("hex").slice(0, 16);
+    const had = this.tailored[key];
+    if (had?.hash === hash) return;
+    if (had) {
+      // The code moved on; text about the old lines would now be wrong.
+      delete this.tailored[key];
+      this.saveTailored();
+      void this.pushState();
+    }
+    const slot = `${key}|tailor`;
+    if (background && !(await this.resolveAi()).provider) return;
+    await this.ask(
+      slot,
+      async () => {
+        const depth = (await engine.status()).depth;
+        return tailorPrompt({
+          title: card.title,
+          what: card.what,
+          hook: card.hook,
+          lens: card.lens[depth] || card.lens.Junior,
+          pitfall: card.pitfall,
+          file: card.file,
+          excerpt,
+          depth,
+        });
+      },
+      (reply, by) => {
+        const found = parseTailored(reply, excerpt);
+        if (!found) return "unusable";
+        this.tailored[key] = { ...found, hash, by, at: new Date().toISOString() };
+        this.saveTailored();
+      },
+    );
+    // Not the learner's problem: the general lesson is still on screen.
+    if (this.errors[slot]) this.errors[slot] = "quiet";
+  }
+
   private async alternatives(key: string, guess: string): Promise<void> {
     const card = this.card(key);
     if (!card) return;
@@ -1448,6 +1538,9 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       };
     }
     this.save();
+    if (setting<string>("ai.tailorCards", "onOpen") === "always") {
+      for (const card of lesson.cards.filter((c) => c.file).slice(0, TAILOR_AHEAD)) void this.tailor(card.key, true);
+    }
     this.reflect((m) => {
       m.cards += lesson.cards.length;
       // Only files an assistant is known to have written belong in the mirror.
@@ -1540,6 +1633,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     // What was written for a dojo idea is kept; it was not part of the feed.
     for (const key of Object.keys(this.explanations)) if (!key.startsWith("dojo:")) delete this.explanations[key];
     for (const key of Object.keys(this.extras)) if (!key.startsWith("dojo:")) delete this.extras[key];
+    for (const key of Object.keys(this.tailored)) if (!key.startsWith("dojo:")) delete this.tailored[key];
+    this.saveTailored();
     for (const key of Object.keys(this.lessonExtras)) delete this.lessonExtras[key];
     for (const key of Object.keys(this.errors)) delete this.errors[key];
     this.changes.clear();
@@ -1659,6 +1754,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return this.contrastPick(message.key, message.pick === "b" ? "b" : "a");
         case "alternatives":
           return void (await this.alternatives(message.key, String(message.guess ?? "")));
+        case "tailor":
+          return void (await this.tailor(String(message.key)));
         case "saveAlternative":
           return void (await this.saveAlternative(message.key));
         case "findTerms":

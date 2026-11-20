@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+### Added
+
+- **Cards that talk about your code.** When you open a card, your AI rewrites its hook, "Know this" and "How it bites" around the lines it was seen in, naming your own functions and values instead of a textbook example.
+  - Every name in backticks and every "line N" is checked against your lines. A part that mentions something not there is dropped, and Miyagi's general text shows for that part instead.
+  - Saved per card and redone only when those lines change, so reopening a card costs nothing.
+  - **Show the general lesson** switches back on any card.
+  - New setting `miyagi.ai.tailorCards`: `onOpen` (default), `always` (also the first three cards of each change as they arrive), or `off`.
+
 ## 0.7.0
 
 ### Added

@@ -38,6 +38,8 @@
       scroll: {},
       // "Why not another way?" opened on a card, by key.
       altOpen: {},
+      // Cards switched back to Miyagi's general lesson, by key.
+      generic: {},
       // The glossary word whose page is showing, and words revealed without a guess.
       term: null,
       termRevealed: {},
@@ -75,6 +77,9 @@
   let ideaCard = null;
 
   const send = (/** @type {any} */ message) => vscode.postMessage(message);
+  // Cards whose page has asked the host to fit the lesson to the code, this session.
+  // The host answers at once when the lines have not changed, so once is enough.
+  const tailorAsked = new Set();
   const remember = () => vscode.setState(ui);
 
   /* ---- text ------------------------------------------------------ */
@@ -536,13 +541,35 @@
         : `<span class="tag belt belt-${esc(c.belt)}">${esc(c.belt)} belt</span>`,
       c.risk ? `<span class="tag risk" title="Misunderstanding this one costs data, money or a breach">Risk</span>` : "",
     ].join("");
+    // The lesson rewritten around the learner's own lines, part by part. A part
+    // that failed Miyagi's check is empty and the general text shows instead.
+    const fitted = (state.tailored || {})[c.key];
+    const t = fitted && !ui.generic[c.key] ? fitted : null;
+    const hook = (t && t.hook) || c.hook;
+    const lens = (t && t.lens) || c.lens[state.status.depth] || c.lens.Junior;
+    const pitfall = (t && t.pitfall) || c.pitfall;
+    if (pinned && c.file && c.status !== "locked" && state.tailorMode !== "off" && state.ai.label && !tailorAsked.has(c.key)) {
+      tailorAsked.add(c.key);
+      queueMicrotask(() => send({ type: "tailor", key: c.key }));
+    }
+    const tailorNote = !pinned || !c.file
+      ? ""
+      : busy(`${c.key}|tailor`) && !fitted
+      ? `<p class="tailor-note muted"><span class="spinner" aria-hidden="true"></span> Fitting this lesson to your code…</p>`
+      : fitted
+      ? `<p class="tailor-note muted">${
+          t
+            ? `Written about your code by ${esc(fitted.by)}. <button class="link" data-action="genericLesson" data-key="${esc(c.key)}">Show the general lesson</button>`
+            : `Miyagi's general lesson. <button class="link" data-action="genericLesson" data-key="${esc(c.key)}">Show it for your code</button>`
+        }</p>`
+      : "";
     const head = `
       <button class="card-head" data-action="toggle" data-key="${esc(c.key)}" aria-expanded="${isOpen}"${pinned ? " disabled" : ""}>
         <span class="emoji" aria-hidden="true">${esc(c.emoji)}</span>
         <span class="card-title">${esc(c.title)}</span>
         <span class="tags">${tags}</span>
       </button>
-      <p class="hook">${inline(c.hook)}</p>`;
+      <p class="hook">${inline(hook)}</p>${tailorNote}`;
     if (!isOpen) return `<article class="card closed">${head}</article>`;
 
     const others = c.otherFiles > 0 ? `<span class="muted"> and ${plural(c.otherFiles, "other file")}</span>` : "";
@@ -585,14 +612,14 @@
     const lesson = lessonOpen && pinned
       ? `<div class="sections">
           ${section("what", "What it is", c.what)}
-          ${section("know", "Know this", c.lens[state.status.depth] || c.lens.Junior)}
-          ${section("bites", "How it bites", c.pitfall)}
+          ${section("know", "Know this", lens)}
+          ${section("bites", "How it bites", pitfall)}
         </div>`
       : lessonOpen
       ? `<dl>
           <dt>What it is</dt><dd>${inline(c.what)}</dd>
-          <dt>Know this</dt><dd>${inline(c.lens[state.status.depth] || c.lens.Junior)}</dd>
-          <dt>How it bites</dt><dd>${inline(c.pitfall)}</dd>
+          <dt>Know this</dt><dd>${inline(lens)}</dd>
+          <dt>How it bites</dt><dd>${inline(pitfall)}</dd>
         </dl>`
       : `<p class="faded">You hold a ${esc(c.belt)} belt in this, so the question comes first.
           <button class="link" data-action="showLesson" data-key="${esc(c.key)}">Show the lesson</button></p>`;
@@ -2249,6 +2276,10 @@
         remember();
         render();
         return window.scrollTo(0, 0);
+      case "genericLesson":
+        ui.generic[key] = !ui.generic[key];
+        remember();
+        return render();
       case "closeCard":
         ui.cardKey = null;
         remember();
