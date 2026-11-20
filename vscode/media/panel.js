@@ -36,6 +36,9 @@
       // Which lesson sections are open on a card page, by `<key>|<section>`.
       sections: {},
       scroll: {},
+      // Grow tab: which skill row is open, and whether the decision form is.
+      skill: null,
+      decisionForm: false,
     },
     vscode.getState() || {},
   );
@@ -57,6 +60,15 @@
   let review = { asked: false, quiz: null, answer: null, picked: -1, cleared: 0, setSize: 0, setAnswered: 0, setDone: false };
   /** @type {{rows: any[], belts: string[]} | null} */
   let dojo = null;
+  /** The Grow tab's data, fetched when the tab opens. */
+  /** @type {any} */
+  let grow = null;
+  /** Files ticked in the "predict it" strip. */
+  /** @type {string[]} */
+  let predictPicks = [];
+  /** A message to show once in the Grow tab (incident saved, decision problem). */
+  let growNote = "";
+  let growAsked = 0;
   /** The lesson opened from the dojo, when one is. */
   let ideaCard = null;
 
@@ -212,7 +224,7 @@
       <button role="tab" class="tab${ui.tab === id ? " on" : ""}" aria-selected="${ui.tab === id}" data-action="tab" data-tab="${id}">
         ${label}${count ? `<span class="count">${count}</span>` : ""}
       </button>`;
-    return `<nav class="tabs" role="tablist">${tab("now", "Now")}${tab("review", "Review", dueCount())}${tab("dojo", "Dojo")}</nav>`;
+    return `<nav class="tabs" role="tablist">${tab("now", "Now")}${tab("review", "Review", dueCount())}${tab("dojo", "Dojo")}${tab("grow", "Grow")}</nav>`;
   }
 
   /* ---- questions ------------------------------------------------- */
@@ -228,6 +240,27 @@
     const top = `${heading ? `<h4>${esc(heading)}</h4>` : ""}${
       quiz.otherTopic ? `<p class="muted from-other">From another topic, mixed in on purpose.</p>` : ""
     }<div class="question">${prose(quiz.question)}</div>`;
+
+    // From green belt up, some review questions are answered in the learner's
+    // own words and judged by their AI: producing an answer, not recognising it.
+    if (scope === "review" && quiz.explainBack && state.explainBack && !answer && !entry.choicesInstead) {
+      const slotOwn = "review|own";
+      return `<div class="quiz own-words">${top}
+        <p class="muted">You hold this at green belt or above, so answer in your own words. Producing it from memory is stronger evidence than picking it out.</p>
+        ${
+          busy(slotOwn)
+            ? `<p class="asked">${esc(drafts[slotOwn + ".sent"] || "")}</p>${waiting(slotOwn)}`
+            : `<form data-submit="answerOwn" data-key="review">
+                 <textarea data-draft="${slotOwn}" rows="3" placeholder="In a sentence or two…" aria-label="Your answer" maxlength="800">${esc(drafts[slotOwn] || "")}</textarea>
+                 <div class="actions">
+                   <button type="submit" class="primary">Check my answer</button>
+                   <button type="button" class="link" data-action="showChoices">Show the choices instead</button>
+                 </div>
+               </form>`
+        }
+        ${problem(slotOwn)}
+      </div>`;
+    }
 
     // Recall before recognition: the choices stay hidden until the learner has
     // tried to answer in their head and said how sure they are. One tap.
@@ -255,6 +288,20 @@
       })
       .join("");
     let result = "";
+    if (answer && answer.ownWords) {
+      const label = { right: "You had it", partly: "Partly", wrong: "Not yet" }[answer.ownWords.verdict];
+      const again = answer.nextDueAt ? ` · back in ${until(answer.nextDueAt)}` : "";
+      return `<div class="quiz own-words">${top}
+        <p class="asked">${esc(drafts["review|own.sent"] || "")}</p>
+        <div class="result ${answer.correct ? "ok" : "miss"}">
+          <p><span class="tag verdict-${esc(answer.ownWords.verdict)}">${label}</span> <span class="muted">+${answer.xpAwarded} XP${again}</span></p>
+          ${prose(answer.ownWords.feedback)}
+          <p><span class="muted">Expected:</span> ${inline(quiz.choices[answer.answerIndex] || "")}</p>
+          <p class="extra">${inline(answer.explanation)}</p>
+          ${answer.ownWords.verdict === "partly" ? `<p class="extra">Partly right counts, but the belt holds until it comes out whole.</p>` : ""}
+          <p class="by">Judged by ${esc(answer.ownWords.by)}</p>
+        </div></div>`;
+    }
     if (answer) {
       const again = answer.nextDueAt ? ` · back in ${until(answer.nextDueAt)}` : "";
       const belt = answer.correct && answer.nextDueAt ? ` · ${esc(answer.belt)} belt` : "";
@@ -651,7 +698,7 @@
     const h = state.heartbeat;
     if (!h) {
       return state.repos.length + state.folders.length
-        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.</p>`
+        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.${predictLink()}</p>`
         : "";
     }
     const outcome = h.taught
@@ -663,7 +710,13 @@
       : busy(`${h.root}|findIdeas`)
       ? "nothing in the built-in list; asking your AI"
       : "nothing new to teach";
-    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.</p>`;
+    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.${predictLink()}</p>`;
+  }
+
+  /** "Predict the next change", unless one is already open or predictions are off. */
+  function predictLink() {
+    if (state.predictions === "off" || (state.coach && state.coach.predicting) || !state.repos.length) return "";
+    return ` <button class="link" data-action="predictOpen">Predict the next change</button>`;
   }
 
   function commands() {
@@ -795,17 +848,18 @@
 
   function nowList() {
     const cards = visibleCards();
+    const entries = feedEntries();
     const total = state.lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
-    let body = filters() + pulse();
-    if (!cards.length) {
+    let body = filters() + offerBanner() + predictStrip() + pulse() + teachMeBox();
+    if (!entries.length) {
       body += emptyNow();
     } else {
       /** @type {Map<string, string[]>} */
       const days = new Map();
-      for (const { c, lesson } of cards) {
-        const label = dayLabel(lesson.at);
+      for (const e of entries) {
+        const label = dayLabel(e.at);
         if (!days.has(label)) days.set(label, []);
-        /** @type {string[]} */ (days.get(label)).push(row(c, lesson));
+        /** @type {string[]} */ (days.get(label)).push(e.kind === "card" ? row(e.c, e.lesson) : itemRow(e.item));
       }
       body += [...days.entries()]
         .map(([label, rows]) => `<section class="day"><h3>${esc(label)}</h3><ul class="rows">${rows.join("")}</ul></section>`)
@@ -836,9 +890,13 @@
       !extra.walk && !busy(`${lesson.id}|walk`) ? `<button data-action="walk" data-lesson="${esc(lesson.id)}">Walk me through it</button>` : "",
       !extra.risks && !busy(`${lesson.id}|risks`) ? `<button data-action="risks" data-lesson="${esc(lesson.id)}">Check it for risks</button>` : "",
       !extra.turn && state.turnsLeft && !busy(`${lesson.id}|turn`) ? `<button data-action="turn" data-lesson="${esc(lesson.id)}">Your turn</button>` : "",
+      !state.lessonDecisions[lesson.id] && !busy(`${lesson.id}|decisions`) && state.ai.label
+        ? `<button data-action="lessonDecisions" data-lesson="${esc(lesson.id)}">Decisions in it</button>`
+        : "",
     ]
       .filter(Boolean)
       .join("");
+    const packages = (state.coach.packages || {})[lesson.id] || [];
     return `
       <section class="change">
         <h3>This change</h3>
@@ -847,24 +905,37 @@
         ${walkBlock(lesson)}
         ${risksBlock(lesson)}
         ${turnBlock(lesson)}
+        ${lessonDecisionsBlock(lesson)}
+        ${
+          packages.length
+            ? `<p class="chips"><span class="muted">New packages:</span> ${packages
+                .map((/** @type {string} */ n) => `<button class="chip" data-action="learnName" data-name="${esc(n)}" title="Learn what ${esc(n)} is and how this project uses it">📦 ${esc(n)}</button>`)
+                .join("")}</p>`
+            : ""
+        }
         ${chips("Also in there:", lesson.later)}
         ${chips("Already yours:", lesson.solid)}
       </section>`;
   }
 
   function cardPage(/** @type {string} */ key) {
-    const cards = visibleCards();
-    const at = cards.findIndex((x) => x.c.key === key);
-    if (at === -1) return null;
-    const { c, lesson } = cards[at];
-    const prev = at > 0 ? cards[at - 1].c.key : "";
-    const next = at < cards.length - 1 ? cards[at + 1].c.key : "";
-    const arrows = cards.length > 1
-      ? `${at + 1} of ${cards.length}
-         <button class="icon" data-action="openCard" data-key="${esc(prev)}" aria-label="Previous idea"${prev ? "" : " disabled"}>‹</button>
-         <button class="icon" data-action="openCard" data-key="${esc(next)}" aria-label="Next idea"${next ? "" : " disabled"}>›</button>`
+    const entries = feedEntries();
+    const at = entries.findIndex((x) => x.key === key);
+    // A tool opened from the Grow tab need not be in the feed.
+    if (at === -1) {
+      const tool = coachItem(key);
+      return tool ? `${pageBar("closeCard", "Back")}${itemPage(tool)}` : null;
+    }
+    const entry = entries[at];
+    const prev = at > 0 ? entries[at - 1].key : "";
+    const next = at < entries.length - 1 ? entries[at + 1].key : "";
+    const arrows = entries.length > 1
+      ? `${at + 1} of ${entries.length}
+         <button class="icon" data-action="openCard" data-key="${esc(prev)}" aria-label="Previous"${prev ? "" : " disabled"}>‹</button>
+         <button class="icon" data-action="openCard" data-key="${esc(next)}" aria-label="Next"${next ? "" : " disabled"}>›</button>`
       : "";
-    return `${pageBar("closeCard", "Back", arrows)}${card(c, true, true)}${changeSection(lesson)}`;
+    if (entry.kind === "item") return `${pageBar("closeCard", "Back", arrows)}${itemPage(entry.item)}`;
+    return `${pageBar("closeCard", "Back", arrows)}${card(entry.c, true, true)}${changeSection(entry.lesson)}`;
   }
 
   function nowTab() {
@@ -876,6 +947,634 @@
       remember();
     }
     return nowList();
+  }
+
+  /* ---- the coach: items in the feed ------------------------------ */
+
+  /** Cards and coach items together, newest first, as one list for the feed and its arrows. */
+  function feedEntries() {
+    /** @type {Array<any>} */
+    const out = visibleCards().map(({ c, lesson }) => ({ kind: "card", key: c.key, at: lesson.at, c, lesson }));
+    for (const item of (state.coach && state.coach.items) || []) out.push({ kind: "item", key: item.key, at: item.at, item });
+    // Stable within a lesson: cards of one lesson share a time and keep their order.
+    return out.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? 1 : -1));
+  }
+
+  function coachItem(/** @type {string} */ key) {
+    const c = state.coach || {};
+    return (c.items || []).find((/** @type {any} */ i) => i.key === key) || (c.tools || []).find((/** @type {any} */ t) => t.key === key) || null;
+  }
+
+  const VERDICT = { right: "You had it", partly: "Partly", wrong: "Not yet" };
+
+  function itemSummary(/** @type {any} */ i) {
+    const time = (() => {
+      const d = new Date(i.at);
+      return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    })();
+    if (i.kind === "tool") {
+      const tag = i.adopted
+        ? `<span class="tag belt">${i.held} of ${i.terms.length} terms</span>`
+        : `<span class="tag new">New tool</span>`;
+      return { emoji: i.emoji, title: i.name, sub: [i.job, time].filter(Boolean).join(" · "), tag, hook: (i.spec && i.spec.oneLiner) || i.job, open: "Get to know it ›" };
+    }
+    if (i.kind === "debug") {
+      const v = i.result && i.result.verdict;
+      const tag = v
+        ? `<span class="tag verdict-${esc(v)}">${VERDICT[v]}</span>`
+        : i.result || i.revealed
+        ? `<span class="tag">Read</span>`
+        : `<span class="tag risk">Read it</span>`;
+      const who = i.by === "you" ? "your terminal" : i.by;
+      return { emoji: "🩺", title: `Something broke: ${i.command}`, sub: [who, i.repeats > 1 ? `${i.repeats} times` : "", time].filter(Boolean).join(" · "), tag, hook: "Read the error before your AI fixes it. One minute, and the next one costs less.", open: "Read it ›" };
+    }
+    if (i.kind === "prediction") {
+      const pct = Math.round(i.score * 100);
+      return { emoji: "🎯", title: `Your prediction: ${i.hits.length} of ${i.files.length} files`, sub: [`${i.surprises.length} surprise${i.surprises.length === 1 ? "" : "s"}`, time].join(" · "), tag: `<span class="tag ${pct >= 60 ? "verdict-right" : pct >= 30 ? "verdict-partly" : "verdict-wrong"}">${pct}%</span>`, hook: "What you named, what it touched, and what you did not see coming.", open: "Compare ›" };
+    }
+    const tag = i.committed && !i.answered ? `<span class="tag">Committed</span>` : i.answered ? `<span class="tag verdict-${i.correct ? "right" : "wrong"}">${i.correct ? "Ready" : "Re-read"}</span>` : `<span class="tag new">1 question</span>`;
+    return { emoji: "🚦", title: `Before you commit: ${i.lines} lines`, sub: [`${i.files.length} file${i.files.length === 1 ? "" : "s"} staged`, time].join(" · "), tag, hook: "One question about what you are about to commit. About thirty seconds.", open: "Ask me ›" };
+  }
+
+  function itemRow(/** @type {any} */ i) {
+    const open = ui.expanded === i.key;
+    const m = itemSummary(i);
+    return `
+      <li class="row coach-row${open ? " open" : ""}">
+        <button class="row-head" data-action="expand" data-key="${esc(i.key)}" aria-expanded="${open}">
+          <span class="emoji" aria-hidden="true">${esc(m.emoji)}</span>
+          <span class="row-main">
+            <span class="row-title">${esc(m.title)}</span>
+            <span class="row-sub">${esc(m.sub)}</span>
+          </span>
+          <span class="tags">${m.tag}</span>
+          <span class="chev" aria-hidden="true">›</span>
+        </button>
+        ${
+          open
+            ? `<div class="preview">
+                 <p class="hook">${inline(m.hook)}</p>
+                 <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(i.key)}">${esc(m.open)}</button>
+                 <button class="link" data-action="dismissItem" data-key="${esc(i.key)}">Remove</button></div>
+               </div>`
+            : ""
+        }
+      </li>`;
+  }
+
+  function itemPage(/** @type {any} */ i) {
+    if (i.kind === "tool") return toolPage(i);
+    if (i.kind === "debug") return debugPage(i);
+    if (i.kind === "prediction") return predictionPage(i);
+    return gatePage(i);
+  }
+
+  function pageHead(/** @type {string} */ emoji, /** @type {string} */ title, /** @type {string} */ tags) {
+    return `<div class="card-head static"><span class="emoji" aria-hidden="true">${esc(emoji)}</span><span class="card-title">${esc(title)}</span><span class="tags">${tags}</span></div>`;
+  }
+
+  /* ---- a tool ---- */
+
+  function toolPage(/** @type {any} */ t) {
+    const spec = t.spec || { oneLiner: "", flow: [], risks: [], verify: "", terms: [], docs: "" };
+    const primer = t.primer;
+    const tags = t.adopted ? `<span class="tag belt">${t.held} of ${t.terms.length} terms held</span>` : `<span class="tag new">New tool</span>`;
+    const seen = t.evidence
+      ? `<div class="where">${t.file ? fileLink(t.root, t.file, null) : ""}<code class="evidence">${esc(t.evidence)}</code></div>`
+      : "";
+    const head = `${pageHead(t.emoji, t.name, tags)}<p class="hook">${esc(t.job)}</p>${seen}`;
+
+    // Step one: guess before reading. Even a wrong guess makes the answer stick.
+    if (!t.guessDone) {
+      const d = `${t.key}|guess`;
+      return `<article class="card page tool">${head}
+        <div class="block first">
+          <h4>Before you read: what do you think ${esc(t.name)} is for?</h4>
+          <p class="muted">A guess in a few words. Being wrong is fine; guessing first is what makes the real answer stick.</p>
+          <form data-submit="toolGuess" data-key="${esc(t.key)}">
+            <input type="text" data-draft="${esc(d)}" value="${esc(drafts[d] || "")}" placeholder="I think it…" aria-label="Your guess" maxlength="300">
+            <div class="actions"><button type="submit" class="primary">Lock in my guess</button>
+            <button type="button" class="link" data-action="toolGuessSkip" data-key="${esc(t.key)}">Skip, just show me</button></div>
+          </form>
+        </div></article>`;
+    }
+
+    const primerSlot = `${t.key}|primer`;
+    const guess = t.guess
+      ? `<div class="block"><p><span class="muted">You guessed:</span> ${esc(t.guess)}</p>${primer && primer.guessFeedback ? prose(primer.guessFeedback) : ""}</div>`
+      : "";
+    const flow = (primer && primer.flow.length ? primer.flow : spec.flow) || [];
+    const risks = primer && primer.risks.length ? primer.risks.map((/** @type {any} */ r) => `<li><strong>${esc(r.title)}</strong> ${inline(r.why)}</li>`) : (spec.risks || []).map((/** @type {string} */ r) => `<li>${inline(r)}</li>`);
+    const project = primer
+      ? `<div class="block mine"><h4>In your project</h4>${prose(primer.summary)}
+          ${primer.wired.length ? `<ul class="wired">${primer.wired.map((/** @type {any} */ w) => `<li>${fileLink(t.root, w.file, w.line)} ${inline(w.what)}</li>`).join("")}</ul>` : ""}
+          <p class="by">Written by ${esc(primer.by)} from the files that mention ${esc(t.name)}.</p></div>`
+      : busy(primerSlot)
+      ? waiting(primerSlot)
+      : state.ai.label
+      ? `<div class="actions"><button class="primary" data-action="toolPrimer" data-key="${esc(t.key)}">Show me ${esc(t.name)} in my project</button></div>${problem(primerSlot)}`
+      : "";
+
+    const terms = t.terms
+      .map((/** @type {any} */ x) => {
+        const slot = `${t.key}|${x.id}`;
+        const q = quizzes[slot];
+        const belt = x.seen ? `<span class="tag belt belt-${esc(beltName(x.box))}">${esc(beltName(x.box))}</span>` : "";
+        return `<li class="term">
+          <div class="term-head"><strong>${esc(x.term)}</strong>${belt}
+            ${!q && !busy(slot) ? `<button class="link" data-action="termQuiz" data-slot="${esc(slot)}" data-id="${esc(x.id)}">Check me</button>` : ""}</div>
+          ${
+            // Once on review, the meaning hides: checking yourself with the answer in view is reading, not recall.
+            t.adopted && !q
+              ? `<details class="meaning"><summary class="muted">Show what it means</summary><p>${inline(x.meaning)}</p></details>`
+              : t.adopted
+              ? ""
+              : `<p>${inline(x.meaning)}</p>`
+          }
+          ${q ? quizBlock(q, "card", slot) : ""}
+        </li>`;
+      })
+      .join("");
+    const pct = t.terms.length ? Math.round((t.held / t.terms.length) * 100) : 0;
+    const vocab = t.terms.length
+      ? `<div class="block vocab">
+          <h4>The words you need (${t.terms.length})</h4>
+          ${
+            t.adopted
+              ? `<p class="muted">On your review schedule. Say what each one means before you peek. Conversant means every term at green belt: ${t.held} of ${t.terms.length} so far.</p>
+                 <progress max="100" value="${pct}" aria-label="${t.held} of ${t.terms.length} terms held"></progress>`
+              : `<p class="muted">Read them once, then put them on review. They come back in 10 minutes, then 1, 3, 7 and 16 days, until you can recall each cold.</p>`
+          }
+          <ul class="terms">${terms}</ul>
+          ${t.adopted ? "" : `<div class="actions"><button class="primary" data-action="toolAdopt" data-key="${esc(t.key)}">Add these ${t.terms.length} terms to my reviews</button></div>`}
+        </div>`
+      : "";
+
+    const dSlot = `${t.key}|decision`;
+    const d = t.decision;
+    const decision = d
+      ? `<div class="block decision"><h4>Why ${esc(t.name)}?</h4>
+          <p><strong>${esc(d.chose)}</strong>${d.over.length ? ` <span class="muted">over</span> ${esc(d.over.join(", "))}` : ""}</p>
+          <p>${inline(d.because)}</p>
+          ${d.tradeoff ? `<p><span class="muted">Given up:</span> ${inline(d.tradeoff)}</p>` : ""}
+          ${d.revisit ? `<p><span class="muted">Revisit when:</span> ${inline(d.revisit)}</p>` : ""}
+          ${d.saved ? `<p class="muted">Saved to your decision log, with a question that comes back to check you still know why.</p>` : `<div class="actions"><button class="primary" data-action="saveDecision" data-key="${esc(t.key)}">Save to my decision log</button></div>`}
+          <p class="by">Suggested by ${esc(d.by)}. Edit it in your head if your reason was different; the reason is what matters.</p></div>`
+      : busy(dSlot)
+      ? waiting(dSlot)
+      : state.ai.label
+      ? `<p><button class="link" data-action="toolDecision" data-key="${esc(t.key)}">Why ${esc(t.name)} and not something else? Log the decision</button></p>${problem(dSlot)}`
+      : "";
+
+    return `<article class="card page tool">${head}
+      ${guess}
+      ${project}
+      <dl>
+        <dt>What it does</dt><dd>${inline(spec.oneLiner || t.job)}${spec.analogy ? `<br><span class="muted">${inline(spec.analogy)}</span>` : ""}</dd>
+        ${flow.length ? `<dt>How it fits</dt><dd><ol class="flow">${flow.map((/** @type {string} */ f) => `<li>${inline(f)}</li>`).join("")}</ol></dd>` : ""}
+        ${risks.length ? `<dt>How it bites</dt><dd><ul class="bites">${risks.join("")}</ul></dd>` : ""}
+        ${(primer && primer.verify) || spec.verify ? `<dt>Prove it works</dt><dd>${inline((primer && primer.verify) || spec.verify)}</dd>` : ""}
+      </dl>
+      ${vocab}
+      ${decision}
+      <div class="more"><div class="more-list">
+        ${spec.docs ? `<button class="link" data-action="link" data-url="${esc(spec.docs)}">${esc(t.name)} docs</button>` : ""}
+        <button class="link" data-action="copy" data-text="${esc(`Walk me through how ${t.name} is set up in this project: where it is configured, what it sends and when, and how I can see it working.`)}">Copy a question for your AI</button>
+        ${t.inFeed ? `<button class="link" data-action="dismissItem" data-key="${esc(t.key)}">Remove from the feed</button>` : ""}
+      </div></div>
+    </article>`;
+  }
+
+  function beltName(/** @type {number} */ box) {
+    return (dojo && dojo.belts[box]) || ["White", "Yellow", "Orange", "Green", "Brown", "Black"][box] || "White";
+  }
+
+  /* ---- something broke ---- */
+
+  function debugPage(/** @type {any} */ i) {
+    const r = i.result;
+    const clue = r ? r.clue : i.revealed || null;
+    const done = Boolean(r || i.revealed);
+    const who = i.by === "you" ? "in your terminal" : `by ${i.by}`;
+    const lines = i.lines
+      .map((/** @type {string} */ line, /** @type {number} */ k) => {
+        const n = k + 1;
+        let cls = "codeline";
+        if (done && n === clue) cls += " right";
+        else if (done && n === i.picked) cls += " wrong";
+        else if (!done && n === i.picked) cls += " picked";
+        return `<button class="${cls}" data-action="debugPick" data-key="${esc(i.key)}" data-line="${n}"${done ? " disabled" : ""} aria-pressed="${n === i.picked}"><span class="ln">${n}</span><code>${esc(line) || " "}</code></button>`;
+      })
+      .join("");
+    const tag = r && r.verdict ? `<span class="tag verdict-${esc(r.verdict)}">${VERDICT[r.verdict]}</span>` : done ? `<span class="tag">Read</span>` : `<span class="tag risk">Read it</span>`;
+    const head = `${pageHead("🩺", "Something broke", tag)}
+      <p class="muted"><code>${esc(i.command)}</code> failed ${esc(who)} · ${esc(clock(i.at))}${i.repeats > 1 ? ` · ${i.repeats} times` : ""}</p>`;
+    const slot = `${i.key}|diagnose`;
+    const hintSlot = `${i.key}|hint`;
+    const recurring =
+      i.repeats >= 3
+        ? `<div class="note"><p>This has failed ${i.repeats} times. A failure that keeps coming back is worth a lesson of its own. <button class="link" data-action="debugLesson" data-key="${esc(i.key)}">Turn it into a lesson</button></p></div>`
+        : "";
+
+    if (!done) {
+      const hints = i.hints || {};
+      const shown = [
+        hints.nudge ? `<div class="hint"><span class="muted">Nudge</span>${prose(hints.nudge)}</div>` : "",
+        hints.pointer ? `<div class="hint"><span class="muted">Pointer</span>${prose(hints.pointer)}</div>` : "",
+      ].join("");
+      const nextHint = !state.ai.label || busy(hintSlot)
+        ? ""
+        : !hints.nudge
+        ? `<button class="link" data-action="debugHint" data-key="${esc(i.key)}" data-step="nudge">Stuck? A nudge</button>`
+        : !hints.pointer
+        ? `<button class="link" data-action="debugHint" data-key="${esc(i.key)}" data-step="pointer">Point me at the line</button>`
+        : "";
+      const d = `${i.key}|read`;
+      return `<article class="card page debug">${head}
+        <div class="block first">
+          <h4>Read it before your AI fixes it</h4>
+          <p class="muted">Tap the line that tells you the most. Then say what you think broke.</p>
+          <div class="code">${lines}</div>
+          ${shown}${waiting(hintSlot)}${problem(hintSlot)}
+          ${
+            busy(slot)
+              ? `<p class="asked">${esc(drafts[d + ".sent"] || "")}</p>${waiting(slot)}`
+              : `<form data-submit="debugSubmit" data-key="${esc(i.key)}">
+                   <textarea data-draft="${esc(d)}" rows="3" placeholder="It broke because… I would look at…" aria-label="Your read of the error" maxlength="800">${esc(drafts[d] || "")}</textarea>
+                   <div class="actions">
+                     <button type="submit" class="primary">Check my read</button>
+                     ${nextHint}
+                     <button type="button" class="link" data-action="debugSkip" data-key="${esc(i.key)}">Skip, show me</button>
+                   </div>
+                 </form>`
+          }
+          ${problem(slot)}
+        </div>
+        ${recurring}
+      </article>`;
+    }
+
+    if (r) {
+      const copy = `My read of this error: ${i.guess || "(none)"}. I think the cause is: ${r.cause} Fix it, and tell me which line of the error told you.`;
+      return `<article class="card page debug">${head}
+        <div class="code">${lines}</div>
+        ${clue ? `<p class="muted">The clue is line ${clue}${i.picked && i.picked !== clue ? `; you picked line ${i.picked}` : i.picked === clue ? ", the one you picked" : ""}.</p>` : ""}
+        ${i.guess ? `<p><span class="muted">Your read:</span> ${esc(i.guess)}</p>` : ""}
+        ${r.verdict ? `<div class="result ${r.verdict === "wrong" ? "miss" : "ok"}"><strong>${VERDICT[r.verdict]}</strong>${prose(r.feedback)}</div>` : ""}
+        <dl>
+          <dt>What broke</dt><dd>${inline(r.cause)}</dd>
+          ${r.where ? `<dt>Where to look</dt><dd>${fileLink(i.root, r.where.file, r.where.line)}</dd>` : ""}
+          ${r.fix ? `<dt>The fix</dt><dd>${inline(r.fix)}</dd>` : ""}
+        </dl>
+        ${r.habit ? `<div class="hint habit"><span class="muted">Next time</span><p>${inline(r.habit)}</p></div>` : ""}
+        <p class="by">Read by ${esc(r.by)}. Check it against the code before you trust it.</p>
+        <div class="actions"><button data-action="copy" data-text="${esc(copy)}">Copy for your AI</button></div>
+        ${recurring}
+      </article>`;
+    }
+
+    // No AI: where to look, a habit, and the learner's own check.
+    return `<article class="card page debug">${head}
+      <div class="code">${lines}</div>
+      <div class="block">
+        <h4>Where to look first: line ${esc(clue)}</h4>
+        <p>It is the first line that names one of your own files (not a library), or failing that, the first that says what went wrong.</p>
+        <ol class="flow">
+          <li>Read the message: what value or thing was missing or wrong?</li>
+          <li>Open the first frame in your code, at that line.</li>
+          <li>Ask what that line assumed that was not true.</li>
+        </ol>
+      </div>
+      ${
+        i.guess && !i.self
+          ? `<p><span class="muted">Your read:</span> ${esc(i.guess)}</p>
+             <p>Did your read point at the same place? <button class="link" data-action="debugSelf" data-key="${esc(i.key)}" data-right="1">I had it</button> <button class="link" data-action="debugSelf" data-key="${esc(i.key)}" data-right="0">I missed it</button></p>`
+          : i.self
+          ? `<p class="muted">${i.self === "right" ? "Counted as read right." : "Counted. The habit above is the one to try next time."}</p>`
+          : ""
+      }
+      ${recurring}
+    </article>`;
+  }
+
+  /* ---- a prediction ---- */
+
+  function predictionPage(/** @type {any} */ p) {
+    const pct = Math.round(p.score * 100);
+    const list = (/** @type {string[]} */ items, /** @type {string} */ mark, /** @type {string} */ cls) =>
+      items.map((f) => `<li class="${cls}"><span aria-hidden="true">${mark}</span> ${fileLink(p.root, f, null) || esc(f)}</li>`).join("");
+    const slot = `${p.key}|approach`;
+    const ar = p.approachResult;
+    return `<article class="card page prediction">
+      ${pageHead("🎯", "Your prediction", `<span class="tag">${pct}%</span>`)}
+      <p class="hook">${p.hits.length ? `You named ${p.hits.length} of the places it changed.` : "None of what you named changed."} ${p.surprises.length ? `It also touched ${p.surprises.length} you did not name.` : "Nothing it touched surprised you."}</p>
+      ${p.hits.length ? `<h4>Right</h4><ul class="pred">${list(p.hits, "✓", "hit")}</ul>` : ""}
+      ${p.misses.length ? `<h4>Named, not touched</h4><ul class="pred">${p.misses.map((/** @type {string} */ f) => `<li class="miss"><span aria-hidden="true">✗</span> ${esc(f)}</li>`).join("")}</ul>` : ""}
+      ${p.surprises.length ? `<h4>Surprises</h4><ul class="pred">${list(p.surprises, "＋", "surprise")}</ul>
+         <p class="muted">Surprises are the best part: each one is a connection in the project you did not know about yet.</p>
+         ${p.lessonId ? `<p><button class="link" data-action="predictWalk" data-key="${esc(p.key)}">Walk me through why it touched these</button></p>` : ""}` : ""}
+      ${
+        p.approach
+          ? `<div class="block"><p><span class="muted">How you said it would go:</span> ${esc(p.approach)}</p>
+              ${ar ? `<p><span class="tag verdict-${esc(ar.verdict)}">${VERDICT[ar.verdict]}</span></p>${prose(ar.feedback)}<p class="by">Compared by ${esc(ar.by)}</p>` : busy(slot) ? waiting(slot) : state.ai.label && p.lessonId ? `<button data-action="predictApproach" data-key="${esc(p.key)}">Compare my approach</button>` : ""}
+              ${problem(slot)}</div>`
+          : ""
+      }
+    </article>`;
+  }
+
+  /* ---- before you commit ---- */
+
+  function gatePage(/** @type {any} */ g) {
+    const q = quizzes[g.key];
+    const slot = `${g.key}|ask`;
+    const files = g.files.slice(0, 6).map((/** @type {string} */ f) => `<li>${fileLink(g.root, f, null)}</li>`).join("");
+    const after = q && q.answer
+      ? `<p class="muted">${q.answer.correct ? "Ready to commit." : "Worth one more read of the diff before you commit. Nothing is blocked; it is your call."}</p>`
+      : "";
+    return `<article class="card page gate">
+      ${pageHead("🚦", "Before you commit", `<span class="tag">${g.lines} lines</span>`)}
+      <p class="hook">One question to check you know what you are about to commit. About thirty seconds. Nothing is blocked.</p>
+      <ul class="files">${files}${g.files.length > 6 ? `<li class="muted">and ${g.files.length - 6} more</li>` : ""}</ul>
+      ${g.committed && !q ? `<p class="muted">Already committed. The question still works as practice.</p>` : ""}
+      ${g.noQuestion ? `<p class="muted">No question for this one: nothing in it matches an idea Miyagi knows, and no AI is set up to write one.</p>` : ""}
+      ${q ? quizBlock(q, "card", g.key) : busy(slot) ? waiting(slot) : g.noQuestion ? "" : `<div class="actions"><button class="primary" data-action="gateAsk" data-key="${esc(g.key)}">Ask me</button><button class="link" data-action="dismissItem" data-key="${esc(g.key)}">Not this time</button></div>`}
+      ${problem(slot)}
+      ${after}
+    </article>`;
+  }
+
+  /* ---- the strip, the box, the offer ---- */
+
+  function predictStrip() {
+    const p = state.coach && state.coach.predicting;
+    if (!p) return "";
+    if (p.locked) {
+      return `<div class="strip locked" role="status">
+        <p><span aria-hidden="true">🎯</span> <strong>Prediction locked in:</strong> ${esc(list(p.locked.files.map((/** @type {string} */ f) => f.split("/").pop() || f)))}. It is compared when the change lands.
+        <button class="link" data-action="predictDismiss">Cancel</button></p>
+      </div>`;
+    }
+    const picks = predictPicks;
+    const chip = (/** @type {string} */ f) =>
+      `<button type="button" class="chip file-chip${picks.includes(f) ? " on" : ""}" data-action="predictToggle" data-file="${esc(f)}" aria-pressed="${picks.includes(f)}" title="${esc(f)}">${esc(f.split("/").pop() || f)}</button>`;
+    const extra = picks.filter((f) => !p.suggestions.includes(f));
+    return `<div class="strip">
+      <p><span aria-hidden="true">🎯</span> <strong>${p.trigger === "task" ? "Your AI just got a new task." : "Predict the next change."}</strong> Before it writes anything: which files will it touch?</p>
+      <div class="file-chips">${p.suggestions.map(chip).join("")}${extra.map(chip).join("")}</div>
+      <form data-submit="predictAdd" data-key="predict" class="ask">
+        <input type="text" list="miyagi-files" data-draft="predict|file" value="${esc(drafts["predict|file"] || "")}" placeholder="Add a file or folder: src/api, checkout.tsx" aria-label="Add a file or folder" maxlength="200">
+        <button type="submit">Add</button>
+      </form>
+      <datalist id="miyagi-files">${(p.all || []).map((/** @type {string} */ f) => `<option value="${esc(f)}">`).join("")}</datalist>
+      <input type="text" data-draft="predict|approach" value="${esc(drafts["predict|approach"] || "")}" placeholder="How will it do it? (optional, one line)" aria-label="How you think it will be done" maxlength="400">
+      <div class="actions">
+        <button class="primary" data-action="predictLock"${picks.length ? "" : " disabled"}>Lock in${picks.length ? ` ${plural(picks.length, "guess")}` : ""}</button>
+        <button class="link" data-action="predictDismiss">Not this time</button>
+      </div>
+    </div>`;
+  }
+
+  function teachMeBox() {
+    const slot = "learn|about";
+    return `<form class="ask learn" data-submit="learnAbout" data-key="learn">
+        <input type="text" data-draft="learn|about" value="${esc(drafts["learn|about"] || "")}" placeholder="Learn a tool or idea: Sentry, Zod, webhooks…" aria-label="Learn a tool or idea" maxlength="80">
+        <button type="submit">Learn</button>
+      </form>${waiting(slot)}${problem(slot)}`;
+  }
+
+  function offerBanner() {
+    if (!state.coach || !state.coach.offerFindIdeas) return "";
+    return `<div class="banner offer">Most of what your AI writes is not in Miyagi's built-in list, including the tools it installs. Let ${esc(state.ai.label || "your AI")} point out what is worth learning in a change when nothing else matches? At most ${"6"} times an hour, on your account.
+      <button class="link" data-action="findIdeasOffer" data-accept="1">Turn it on</button>
+      <button class="link" data-action="findIdeasOffer" data-accept="0">Not now</button></div>`;
+  }
+
+  function lessonDecisionsBlock(/** @type {any} */ lesson) {
+    const slot = `${lesson.id}|decisions`;
+    const found = state.lessonDecisions[lesson.id];
+    if (!found) return waiting(slot) + problem(slot);
+    if (!found.items.length) return `<div class="block"><h4>Decisions</h4><p class="muted">${esc(found.by)} found no real choice between alternatives in this change.</p></div>`;
+    const items = found.items
+      .map(
+        (/** @type {any} */ d, /** @type {number} */ k) => `<li>
+          <strong>${esc(d.title)}</strong>
+          <p>${esc(d.chose)}${d.over.length ? ` <span class="muted">over</span> ${esc(d.over.join(", "))}` : ""}</p>
+          <p>${inline(d.because)}</p>
+          ${d.tradeoff ? `<p><span class="muted">Given up:</span> ${inline(d.tradeoff)}</p>` : ""}
+          ${d.saved ? `<p class="muted">Saved to your decision log.</p>` : `<button class="link" data-action="saveDecision" data-lesson="${esc(lesson.id)}" data-index="${k}">Save to my decision log</button>`}
+        </li>`,
+      )
+      .join("");
+    return `<div class="block risks"><h4>Decisions in this change</h4><ul>${items}</ul><p class="by">Found by ${esc(found.by)}. Seniors are mostly people who remember why.</p></div>`;
+  }
+
+  /* ---- the Grow tab ------------------------------------------------ */
+
+  function growTab() {
+    if (!grow) return `<div class="empty"><p class="muted">Loading…</p></div>`;
+    const g = grow;
+    const note = growNote ? `<div class="banner" role="status">${esc(growNote)} <button class="link" data-action="growNoteOk">OK</button></div>` : "";
+    return `<section class="grow">${note}
+      ${trendBlock(g)}
+      ${mapBlock(g)}
+      ${toolsBlock(g)}
+      ${decisionsBlock(g)}
+      ${incidentBlock(g)}
+      ${storyBlock(g)}
+      <p class="muted tail">${g.gates.asked ? `Commit checks: ${g.gates.right} of ${g.gates.asked} right. ` : ""}${g.predictions ? `${plural(g.predictions, "prediction")} compared. ` : ""}Everything here stays on this machine, in ~/.miyagi/growth.json.</p>
+    </section>`;
+  }
+
+  function trendBlock(/** @type {any} */ g) {
+    const t = g.trend;
+    const w = t.thisWeek;
+    const bars = t.weeks
+      .map((/** @type {any} */ wk) => {
+        const pct = wk.wentFirst === null ? 0 : Math.round(wk.wentFirst * 100);
+        const label = new Date(wk.week + "T00:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+        const short = new Date(wk.week + "T00:00:00").toLocaleDateString([], { day: "numeric" });
+        return `<div class="bar${wk.wentFirst === null ? " empty" : ""}" title="${esc(label)}: ${wk.wentFirst === null ? `${wk.moves} moves, too few to say` : `went first ${pct}% of ${wk.moves} moves`}">
+          <span class="fill h${wk.wentFirst === null ? 0 : Math.max(1, Math.round(pct / 10))}"></span><span class="wk">${esc(short)}</span></div>`;
+      })
+      .join("");
+    const moves = [
+      w.explainedTried ? `${plural(w.explainedTried, "explanation")} in your words` : "",
+      w.debugReads ? `${plural(w.debugReads, "error")} read` : "",
+      w.predictions ? plural(w.predictions, "prediction") : "",
+      w.unaided ? `${plural(w.unaided, "piece")} written unaided` : "",
+    ]
+      .filter(Boolean)
+      .map((label) => `<span class="chip static">${esc(label)}</span>`)
+      .join("");
+    return `<div class="block trend"><h4>Going first</h4>
+      <p>${t.sentence ? esc(t.sentence) : "How often you try before your AI explains: explaining a card yourself, reading an error, predicting a change, writing a piece unaided. Make a few of those moves and your trend shows here."}</p>
+      <div class="bars" aria-label="Share of moves where you went first, by week">${bars}</div>
+      ${moves ? `<p class="chips"><span class="muted">This week:</span> ${moves}</p>` : ""}
+    </div>`;
+  }
+
+  function mapBlock(/** @type {any} */ g) {
+    const levels = ["Junior", "Mid", "Senior"];
+    const dot = { held: "●", started: "◐", untouched: "○" };
+    const names = { held: "Held", started: "Started", untouched: "Not met yet" };
+    const rows = (/** @type {string} */ level) =>
+      g.map.skills
+        .filter((/** @type {any} */ k) => k.level === level)
+        .map((/** @type {any} */ k) => {
+          const open = ui.skill === k.id;
+          const ex = g.exercise[k.id];
+          const slot = `grow|skill|${k.id}`;
+          return `<li class="skill ${esc(k.status)}${open ? " open" : ""}">
+            <button class="skill-head" data-action="skill" data-id="${esc(k.id)}" aria-expanded="${open}">
+              <span class="status" aria-label="${names[k.status]}">${dot[k.status]}</span>
+              <span class="skill-title">${esc(k.title)}</span>
+              <span class="muted skill-progress">${esc(k.progress)}</span>
+            </button>
+            ${
+              open
+                ? `<div class="skill-body">
+                    <p>${esc(k.why)}</p>
+                    ${
+                      ex
+                        ? `<div class="block turn"><h4>Try it in your project</h4><p>${inline(ex.task)}</p>${ex.file ? `<p>${fileLink(ex.root || "", ex.file, null)}</p>` : ""}
+                            ${ex.done ? `<p class="muted">Done when: ${inline(ex.done)}</p>` : ""}
+                            ${ex.hint ? `<details><summary class="muted">A hint</summary><p>${inline(ex.hint)}</p></details>` : ""}
+                            ${ex.completed ? `<p class="muted">Marked done. It is in your story.</p>` : `<div class="actions"><button class="primary" data-action="skillDone" data-id="${esc(k.id)}">I did it</button></div>`}
+                            <p class="by">Suggested by ${esc(ex.by)}. Do this one without your assistant.</p></div>`
+                        : busy(slot)
+                        ? waiting(slot)
+                        : `<p><span class="muted">Try:</span> ${esc(k.tryIt)}</p>
+                           ${state.ai.label ? `<button data-action="skillExercise" data-id="${esc(k.id)}">Suggest one in my project</button>` : ""}`
+                    }
+                    ${problem(slot)}
+                  </div>`
+                : ""
+            }
+          </li>`;
+        })
+        .join("");
+    const held = g.map.skills.filter((/** @type {any} */ k) => k.status === "held").length;
+    return `<div class="block map"><h4>Your map</h4>
+      <p class="muted">${held} of ${g.map.skills.length} skills held. Belts show what you can recall; this shows what your projects have not asked of you yet.</p>
+      ${g.map.next ? `<p class="next">${esc(g.map.next.sentence)} <button class="link" data-action="skill" data-id="${esc(g.map.next.id)}">Start here</button></p>` : `<p class="next">Every skill on the map is held. Time to pick harder projects.</p>`}
+      ${levels
+        .map((l) => {
+          const skills = g.map.skills.filter((/** @type {any} */ k) => k.level === l);
+          const heldHere = skills.filter((/** @type {any} */ k) => k.status === "held").length;
+          // The level holding the next skill, or the one open in the UI, starts open; the rest wait one tap away.
+          const open = skills.some((/** @type {any} */ k) => (g.map.next && k.id === g.map.next.id) || k.id === ui.skill);
+          return `<details class="level"${open ? " open" : ""}><summary><h5>${l} <span class="muted">${heldHere} of ${skills.length}</span></h5></summary><ul class="skills">${rows(l)}</ul></details>`;
+        })
+        .join("")}
+    </div>`;
+  }
+
+  function toolsBlock(/** @type {any} */ g) {
+    const tools = g.tools
+      .map((/** @type {any} */ t) => {
+        const pct = t.terms.length ? Math.round((t.held / t.terms.length) * 100) : 0;
+        return `<li><button class="idea" data-action="openTool" data-key="${esc(t.key)}">
+          <span class="idea-name"><span aria-hidden="true">${esc(t.emoji)}</span> ${esc(t.name)} <span class="muted">${esc(t.job)}</span></span>
+          ${t.conversant ? `<span class="tag verdict-right">Conversant</span>` : t.adopted ? `<span class="tag">${t.held}/${t.terms.length}</span>` : `<span class="tag new">Not started</span>`}
+          ${t.adopted ? `<progress max="100" value="${pct}" aria-label="${t.held} of ${t.terms.length} terms held"></progress>` : ""}
+        </button></li>`;
+      })
+      .join("");
+    return `<div class="block tools"><h4>Tools</h4>
+      ${tools ? `<ul class="ideas">${tools}</ul>` : `<p class="muted">When your project adopts a library or service (Sentry, Stripe, Prisma…), it shows up here with a short track to become conversant in it.</p>`}
+      ${teachMeBox()}
+    </div>`;
+  }
+
+  function decisionsBlock(/** @type {any} */ g) {
+    const items = g.decisions
+      .slice(0, 12)
+      .map(
+        (/** @type {any} */ d) => `<li>
+          <strong>${esc(d.title)}</strong> <span class="muted">${esc(new Date(d.at).toLocaleDateString([], { month: "short", day: "numeric" }))}</span>
+          <p>${esc(d.chose)}${d.over.length ? ` <span class="muted">over</span> ${esc(d.over.join(", "))}` : ""}: ${inline(d.because)}</p>
+          ${d.revisit ? `<p class="muted">Revisit when: ${inline(d.revisit)}</p>` : ""}
+          <button class="link" data-action="copyDecision" data-id="${esc(d.id)}">Copy as a decision record</button>
+        </li>`,
+      )
+      .join("");
+    const f = (/** @type {string} */ k, /** @type {string} */ label, /** @type {string} */ hint) =>
+      `<label class="field"><span>${label}</span><input type="text" data-draft="decision|${k}" value="${esc(drafts["decision|" + k] || "")}" placeholder="${esc(hint)}" maxlength="300"></label>`;
+    const form = ui.decisionForm
+      ? `<form data-submit="decisionTyped" data-key="decision">
+          ${f("chose", "We chose", "Postgres")}
+          ${f("over", "Over (optional)", "MongoDB, SQLite")}
+          ${f("because", "Because", "our data is relational and we need transactions")}
+          ${f("title", "Title (optional)", "Database for orders")}
+          <div class="actions"><button type="submit" class="primary">Save</button><button type="button" class="link" data-action="decisionForm">Cancel</button></div>
+        </form>`
+      : `<p><button class="link" data-action="decisionForm">Log a decision yourself</button></p>`;
+    return `<details class="block decisions"${g.decisions.length ? " open" : ""}><summary><h4>Decisions (${g.decisions.length})</h4></summary>
+      <p class="muted">Why your project is the way it is. Each saved decision with a question comes back on review, so the reason stays yours.</p>
+      ${items ? `<ul class="log">${items}</ul>` : ""}
+      ${form}
+    </details>`;
+  }
+
+  function incidentBlock(/** @type {any} */ g) {
+    const slot = "grow|incident";
+    const items = g.incidents
+      .slice(0, 8)
+      .map((/** @type {any} */ x) => `<li><strong>${esc(x.title)}</strong><p>${inline(x.cause)}</p>${x.prevention ? `<p class="muted">Would have caught it: ${inline(x.prevention)}</p>` : ""}</li>`)
+      .join("");
+    return `<details class="block incidents" id="incident"${g.incidents.length || drafts["grow|incident"] ? " open" : ""}><summary><h4>Learn from something that broke</h4></summary>
+      <p class="muted">Paste an error, a bug report or your notes about something that went wrong for real. It becomes a lesson and a question, and the idea it was an instance of comes up for review today.</p>
+      ${
+        busy(slot)
+          ? waiting(slot)
+          : state.ai.label
+          ? `<form data-submit="incident" data-key="grow">
+              <textarea data-draft="grow|incident" rows="4" placeholder="Users saw a blank page after login. The console said…" aria-label="What broke" maxlength="4000">${esc(drafts["grow|incident"] || "")}</textarea>
+              <div class="actions"><button type="submit" class="primary">Turn it into a lesson</button></div>
+            </form>`
+          : `<p class="muted">This needs an AI to read the report. <button class="link" data-action="command" data-id="miyagi.chooseAi">Choose an AI</button></p>`
+      }
+      ${problem(slot)}
+      ${items ? `<ul class="log">${items}</ul>` : ""}
+    </details>`;
+  }
+
+  function storyBlock(/** @type {any} */ g) {
+    const p = g.practice || {};
+    const items = g.story
+      .slice(0, 8)
+      .map((/** @type {any} */ e) => `<li><strong>${inline(e.title)}</strong> <span class="muted">${esc(new Date(e.at).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><p>${inline(e.detail)}</p></li>`)
+      .join("");
+    const ask = "grow|story";
+    const ans = "grow|storyAnswer";
+    const practice = p.question
+      ? `<div class="block"><h4>${esc(p.question)}</h4>
+          <p class="muted">Answer as you would out loud: the situation, what you did (not the AI), the result, what you learned.</p>
+          ${
+            p.feedback
+              ? `<p><span class="tag verdict-${esc(p.feedback.verdict)}">${VERDICT[p.feedback.verdict]}</span></p>${prose(p.feedback.feedback)}<p class="by">Coached by ${esc(p.feedback.by)}</p>
+                 <button class="link" data-action="storyAsk">Another question</button>`
+              : busy(ans)
+              ? waiting(ans)
+              : `<form data-submit="storyAnswer" data-key="grow">
+                  <textarea data-draft="grow|storyAnswer" rows="5" placeholder="We had…" aria-label="Your answer" maxlength="1500">${esc(drafts["grow|storyAnswer"] || "")}</textarea>
+                  <div class="actions"><button type="submit" class="primary">Coach my answer</button></div>
+                </form>`
+          }
+          ${problem(ans)}</div>`
+      : busy(ask)
+      ? waiting(ask)
+      : "";
+    return `<div class="block story"><h4>Your story (${g.storyCount})</h4>
+      <p class="muted">Things you did or can recall without help: tools learned, decisions, errors read, belts earned. The raw material for a portfolio or an interview.</p>
+      ${items ? `<ul class="log">${items}</ul>` : `<p class="muted">Empty so far. It fills itself as you go.</p>`}
+      ${practice}${problem(ask)}
+      <div class="actions">
+        ${g.storyCount && state.ai.label && !p.question && !busy(ask) ? `<button data-action="storyAsk">Practise an interview question</button>` : ""}
+        ${g.storyCount ? `<button class="link" data-action="command" data-id="miyagi.story">Export as Markdown</button>` : ""}
+      </div>
+    </div>`;
   }
 
   /* ---- Review and Dojo ------------------------------------------- */
@@ -1102,7 +1801,7 @@
     const focused = active && active.dataset ? active.dataset.draft : undefined;
     const caret = focused && active ? [active.selectionStart, active.selectionEnd] : null;
 
-    const body = ui.tab === "review" ? reviewTab() : ui.tab === "dojo" ? dojoTab() : nowTab();
+    const body = ui.tab === "review" ? reviewTab() : ui.tab === "dojo" ? dojoTab() : ui.tab === "grow" ? growTab() : nowTab();
     app.innerHTML = `${header()}${tabs()}<main role="tabpanel">${body}</main>`;
 
     if (focused) {
@@ -1125,6 +1824,7 @@
       ui.idea = null;
       send({ type: "dojo" });
     }
+    if (tab === "grow") send({ type: "grow" });
     remember();
     render();
   }
@@ -1299,6 +1999,80 @@
         return send({ type: "setDepth", depth: d.depth });
       case "dismissDepth":
         return send({ type: "dismissDepth", depth: d.depth });
+      case "showChoices":
+        review.choicesInstead = true;
+        return render();
+      case "toolGuessSkip":
+        return send({ type: "toolGuess", key, text: "" });
+      case "toolPrimer":
+      case "toolAdopt":
+      case "toolDecision":
+      case "debugSkip":
+      case "gateAsk":
+      case "predictApproach":
+      case "predictWalk":
+      case "debugLesson":
+        return send({ type: d.action, key });
+      case "dismissItem":
+        if (ui.cardKey === key) ui.cardKey = null;
+        ui.expanded = null;
+        remember();
+        return send({ type: "dismissItem", key });
+      case "termQuiz":
+        return send({ type: "termQuiz", slot: d.slot, id: d.id });
+      case "saveDecision":
+        return send({ type: "saveDecision", key: key || undefined, lesson: d.lesson || undefined, index: d.index ? Number(d.index) : undefined });
+      case "lessonDecisions":
+        return send({ type: "lessonDecisions", lesson: d.lesson });
+      case "copyDecision":
+        return send({ type: "copyDecision", id: d.id });
+      case "debugPick":
+        return send({ type: "debugPick", key, line: Number(d.line) });
+      case "debugHint":
+        return send({ type: "debugHint", key, step: d.step });
+      case "debugSelf":
+        return send({ type: "debugSelf", key, right: d.right === "1" });
+      case "predictToggle": {
+        const f = d.file || "";
+        predictPicks = predictPicks.includes(f) ? predictPicks.filter((x) => x !== f) : predictPicks.concat(f);
+        return render();
+      }
+      case "predictLock":
+        send({ type: "predictLock", files: predictPicks, approach: drafts["predict|approach"] || "" });
+        predictPicks = [];
+        delete drafts["predict|approach"];
+        return;
+      case "predictDismiss":
+        predictPicks = [];
+        return send({ type: "predictDismiss" });
+      case "predictOpen":
+        return send({ type: "predictOpen" });
+      case "findIdeasOffer":
+        return send({ type: "findIdeasOffer", accept: d.accept === "1" });
+      case "learnName":
+        return send({ type: "learnAbout", text: d.name });
+      case "openTool":
+        ui.tab = "now";
+        ui.cardKey = key;
+        remember();
+        render();
+        return window.scrollTo(0, 0);
+      case "skill":
+        ui.skill = ui.skill === d.id ? null : d.id;
+        remember();
+        return render();
+      case "skillExercise":
+      case "skillDone":
+        return send({ type: d.action, id: d.id });
+      case "storyAsk":
+        return send({ type: "storyAsk" });
+      case "decisionForm":
+        ui.decisionForm = !ui.decisionForm;
+        remember();
+        return render();
+      case "growNoteOk":
+        growNote = "";
+        return render();
       case "command":
         return send({ type: "command", id: d.id });
       case "link":
@@ -1340,6 +2114,50 @@
         why: take("why"),
       });
     }
+    // The coach's forms each keep their text under their own draft id.
+    const take = (/** @type {string} */ id) => {
+      const text = (drafts[id] || "").trim();
+      delete drafts[id];
+      return text;
+    };
+    switch (kind) {
+      case "learnAbout": {
+        const text = take("learn|about");
+        return text ? send({ type: "learnAbout", text }) : undefined;
+      }
+      case "toolGuess":
+        return send({ type: "toolGuess", key, text: take(`${key}|guess`) });
+      case "debugSubmit": {
+        const text = take(`${key}|read`);
+        drafts[`${key}|read.sent`] = text;
+        return send({ type: "debugSubmit", key, text });
+      }
+      case "predictAdd": {
+        const text = take("predict|file");
+        if (text && !predictPicks.includes(text)) predictPicks = predictPicks.concat(text);
+        return render();
+      }
+      case "answerOwn": {
+        const text = take("review|own");
+        if (!text || !review.quiz) return;
+        drafts["review|own.sent"] = text;
+        return send({ type: "answerOwn", token: review.quiz.token, text, confidence: review.confidence || null });
+      }
+      case "incident": {
+        const text = (drafts["grow|incident"] || "").trim();
+        return text ? send({ type: "incident", text }) : undefined;
+      }
+      case "storyAnswer": {
+        const text = (drafts["grow|storyAnswer"] || "").trim();
+        return text ? send({ type: "storyAnswer", text }) : undefined;
+      }
+      case "decisionTyped": {
+        const typed = { title: take("decision|title"), chose: take("decision|chose"), over: take("decision|over"), because: take("decision|because") };
+        ui.decisionForm = false;
+        remember();
+        return send({ type: "saveDecision", typed });
+      }
+    }
     const draft = `${key}|${kind}`;
     const text = (drafts[draft] || "").trim();
     if (!text) return;
@@ -1370,6 +2188,11 @@
     switch (m.type) {
       case "state":
         state = m;
+        // The Grow tab reads computed data; refresh it when the state moves, at most every few seconds.
+        if (ui.tab === "grow" && Date.now() - growAsked > 3000) {
+          growAsked = Date.now();
+          send({ type: "grow" });
+        }
         break;
       case "tab":
         if (m.tab === "review") return startReview(true);
@@ -1385,6 +2208,7 @@
           if (entry === review) {
             review.cleared += 1;
             review.setAnswered += 1;
+            delete drafts["review|own"];
           }
           // The belt on an open dojo lesson just changed.
           if (ui.idea) send({ type: "idea", id: ui.idea });
@@ -1392,7 +2216,7 @@
         break;
       }
       case "review":
-        review = Object.assign({}, review, { asked: true, quiz: m.quiz, answer: null, picked: -1, setDone: false });
+        review = Object.assign({}, review, { asked: true, quiz: m.quiz, answer: null, picked: -1, setDone: false, choicesInstead: false, confidence: undefined });
         if (m.checked) checked = m.checked;
         break;
       case "dojo":
@@ -1412,6 +2236,47 @@
       case "idea":
         ideaCard = m.card;
         break;
+      case "grow":
+        grow = m.data;
+        // A finished story answer no longer needs its draft.
+        if (grow && grow.practice && grow.practice.feedback) delete drafts["grow|storyAnswer"];
+        break;
+      case "openItem":
+        ui.tab = "now";
+        ui.cardKey = m.key;
+        ui.expanded = m.key;
+        remember();
+        render();
+        return window.scrollTo(0, 0);
+      case "openIdea":
+        return openIdea(m.id, "dojo");
+      case "openLesson": {
+        // "Why did it touch these?": the lesson's first card, where the walkthrough lives.
+        const lesson = state && state.lessons.find((/** @type {any} */ l) => l.id === m.lesson);
+        if (lesson && lesson.cards[0]) {
+          ui.tab = "now";
+          ui.cardKey = lesson.cards[0].key;
+          remember();
+          render();
+          return window.scrollTo(0, 0);
+        }
+        break;
+      }
+      case "incidentPrefill":
+        drafts["grow|incident"] = m.text || "";
+        ui.tab = "grow";
+        ui.cardKey = null;
+        remember();
+        send({ type: "grow" });
+        break;
+      case "incidentDone":
+        delete drafts["grow|incident"];
+        growNote = `Saved: "${m.title}". ${m.related ? `"${m.related}" is up for review today.` : "Its question is on your review schedule."}`;
+        break;
+      case "decisionProblem":
+        growNote = m.problem;
+        ui.decisionForm = true;
+        break;
     }
     render();
   });
@@ -1421,5 +2286,6 @@
   render();
   send({ type: "ready" });
   if (ui.tab === "dojo") send({ type: "dojo" });
+  if (ui.tab === "grow") send({ type: "grow" });
   if (ui.tab === "dojo" && ui.idea) send({ type: "idea", id: ui.idea });
 })();

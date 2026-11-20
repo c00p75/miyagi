@@ -30,7 +30,14 @@ if (scene === "dojo") {
     mistakes: [{ at: "", concept: "password-hashing", about: "Storing passwords as hashes", question: "Why are password hashing algorithms deliberately slow?", believed: "To give the database time to write the row", truth: "To make guessing many candidates expensive", why: "", confident: true }] };
 }
 if (scene === "empty") { S.lessons = []; S.status.dueQuestions = 6; S.commands = []; }
-const start = { tab: scene === "dojo" ? "dojo" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null };
+if (scene === "strip") {
+  S.coach.predicting = { root: "shop-api", trigger: "task", locked: null, suggestions: ["src/api/pay.ts", "src/lib/stripe.ts", "app/checkout/page.tsx"], all: ["src/api/pay.ts", "src/lib/stripe.ts", "src/db/schema.ts"] };
+  S.coach.offerFindIdeas = true;
+}
+if (scene === "debugdone") S.coach.items.push(M.debugDone);
+if (scene === "ownwords") { S.status.dueQuestions = 3; }
+const pages = { tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", prediction: "pred:1", gate: "gate:1" };
+const start = { tab: scene === "dojo" ? "dojo" : scene === "grow" ? "grow" : scene === "ownwords" ? "review" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null, cardKey: pages[scene] || null, skill: scene === "grow" ? "testing" : null };
 const reply = (m) => setTimeout(() => window.postMessage(m, "*"), 20);
 window.acquireVsCodeApi = () => ({
   getState: () => start, setState: () => {},
@@ -38,6 +45,8 @@ window.acquireVsCodeApi = () => ({
     if (m.type === "ready") reply(S);
     if (m.type === "dojo") reply({ type: "dojo", rows: M.dojo, belts: M.belts, insight: M.insight });
     if (m.type === "quiz") reply({ type: "quiz", key: m.key, quiz: M.quiz });
+    if (m.type === "grow") reply({ type: "grow", data: M.grow });
+    if (m.type === "review") reply({ type: "review", quiz: Object.assign({}, M.quiz, { review: true, explainBack: scene === "ownwords" }) });
     if (m.type === "answer") reply({ type: "answered", token: m.token, answer: { token: m.token, correct: true, chosenIndex: m.index, answerIndex: m.index, explanation: "The database cannot tell your words from the user's, so a value pasted into the query text can change what the query does.", xpAwarded: 25, nextDueAt: new Date(Date.now() + 864e5).toISOString(), belt: "Yellow", leveledUp: false, title: "", newBadges: [], quizStreak: 1, confidentMiss: false, repaysMiss: false, needsTransfer: false, transferPassed: false } });
   },
 });
@@ -45,6 +54,7 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 window.addEventListener("load", async () => {
   await pause(250);
   if (scene === "recall" && !script) document.querySelector('[data-action="quiz"]').click();
+  if (scene === "ownwords") { const b = document.querySelector('[data-action="startReview"]'); if (b) b.click(); }
   for (const step of script.split(",").filter(Boolean)) {
     const click = (sel) => { const el = document.querySelector(sel); if (el) el.click(); };
     if (step === "quiz") click('[data-action="quiz"]');

@@ -20,7 +20,11 @@
  * 2. It keeps as little as it can. The log is plain text in a home directory.
  *    It stores the command line (scrubbed), the file path, the number of added
  *    lines, the ids of the concepts found and one scrubbed line of evidence
- *    per concept. It never stores file contents or command output.
+ *    per concept. It never stores file contents or command output, with one
+ *    narrow exception: when a command FAILS, up to six scrubbed lines that
+ *    look like the error itself, so the learner can be coached to read it.
+ *    When a prompt is sent to the assistant it records only that it happened,
+ *    never what was asked.
  *
  * 3. It must be cheap to load, so it imports nothing from the MCP SDK.
  */
@@ -42,6 +46,19 @@ interface ObservationBase {
 export interface CommandObservation extends ObservationBase {
   kind: "command";
   command: string;
+  /** The command failed. Absent on success and on hooks that cannot tell. */
+  failed?: boolean;
+  /** For a failure: up to six scrubbed lines that look like the error. Never the full output. */
+  error?: string;
+}
+
+/**
+ * The assistant was just handed a new task. Only the fact and the time: what
+ * was asked stays between the learner and their assistant. It is the moment
+ * to guess what the assistant is about to change, before it changes it.
+ */
+export interface PromptObservation extends ObservationBase {
+  kind: "prompt";
 }
 
 export interface EditObservation extends ObservationBase {
@@ -51,7 +68,7 @@ export interface EditObservation extends ObservationBase {
   concepts: ConceptHit[];
 }
 
-export type Observation = CommandObservation | EditObservation;
+export type Observation = CommandObservation | EditObservation | PromptObservation;
 
 /** Duplicated from profile.ts on purpose: importing it would pull in the mode table. */
 function homeDir(): string {
@@ -85,6 +102,46 @@ function relativeTo(cwd: string | undefined, file: string): string {
 function cleanCommand(command: string): string {
   const oneLine = scrub(command.replace(/\s*\n\s*/g, " ⏎ ").trim());
   return oneLine.length > MAX_COMMAND ? oneLine.slice(0, MAX_COMMAND - 1) + "…" : oneLine;
+}
+
+/** Lines in an error that carry information: the message, and frames that name a file. */
+const ERROR_LINE =
+  /(error|exception|failed|failure|fatal|cannot|can't|could not|not found|undefined|is not|unexpected|denied|refused|traceback|panic|\bat\s+\S+\s*\(|\S+\.\w{1,5}:\d+|exit code|✗|×)/i;
+const ANSI = /\u001b\[[0-9;?]*[ -\/]*[@-~]/g;
+const MAX_ERROR_LINES = 6;
+const MAX_ERROR_LINE = 220;
+
+/**
+ * The few lines of a failure that say what went wrong, scrubbed. Output is
+ * never stored whole: a build log can hold anything, and only the error is
+ * needed to learn to read one. Null when nothing looks like an error.
+ */
+export function errorExcerpt(output: string): string | null {
+  if (!output) return null;
+  const lines = output
+    .slice(-40_000)
+    .replace(ANSI, "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+$/, ""))
+    .filter((l) => l.trim());
+  const picked: string[] = [];
+  for (const line of lines) {
+    if (picked.length >= MAX_ERROR_LINES) break;
+    if (!ERROR_LINE.test(line)) continue;
+    const clean = scrub(line.trim());
+    const capped = clean.length > MAX_ERROR_LINE ? clean.slice(0, MAX_ERROR_LINE - 1) + "…" : clean;
+    if (!picked.includes(capped)) picked.push(capped);
+  }
+  return picked.length ? picked.join("\n") : null;
+}
+
+/** Exit codes, however a hook spells them. Null when the payload does not say. */
+function exitCodeOf(response: Record<string, unknown>): number | null {
+  for (const key of ["exit_code", "exitCode", "returnCode", "return_code", "code"]) {
+    const v = response[key];
+    if (typeof v === "number" && Number.isInteger(v)) return v;
+  }
+  return null;
 }
 
 function countLines(text: string): number {
@@ -125,15 +182,26 @@ export function parseHookPayload(raw: unknown, now: Date = new Date()): Observat
     ];
   };
 
-  const command = (source: ObservationSource, text: string): Observation[] => {
+  const command = (source: ObservationSource, text: string, failure?: { output: string }): Observation[] => {
     const trimmed = text.trim();
     // The tutor's own plumbing is not something to teach back to the learner.
     if (!trimmed || /\b(miyagi-mcp|miyagi-observe|observe-cli)\b/.test(trimmed)) return [];
-    return [{ at, source, session, cwd, kind: "command", command: cleanCommand(trimmed) }];
+    const o: CommandObservation = { at, source, session, cwd, kind: "command", command: cleanCommand(trimmed) };
+    if (failure) {
+      o.failed = true;
+      const error = errorExcerpt(failure.output);
+      if (error) o.error = error;
+    }
+    return [o];
   };
 
   // Cursor
-  if (event === "afterShellExecution") return command("cursor", str(p.command));
+  if (event === "beforeSubmitPrompt") return [{ at, source: "cursor", session, cwd, kind: "prompt" }];
+  if (event === "afterShellExecution") {
+    const code = exitCodeOf(p);
+    const output = str(p.output) || str(p.stderr);
+    return command("cursor", str(p.command), code !== null && code !== 0 ? { output } : undefined);
+  }
   if (event === "afterFileEdit") {
     const edits = Array.isArray(p.edits) ? p.edits : [];
     const added = edits.map((e) => str(obj(e).new_string)).join("\n");
@@ -141,14 +209,23 @@ export function parseHookPayload(raw: unknown, now: Date = new Date()): Observat
   }
 
   // Claude Code
+  if (event === "UserPromptSubmit") return [{ at, source: "claude-code", session, cwd, kind: "prompt" }];
   const tool = str(p.tool_name);
   const input = obj(p.tool_input);
   if (!tool) return [];
-  const source: ObservationSource = event === "PostToolUse" ? "claude-code" : "unknown";
+  const source: ObservationSource = event === "PostToolUse" || event === "PostToolUseFailure" ? "claude-code" : "unknown";
 
   switch (tool) {
-    case "Bash":
-      return command(source, str(input.command));
+    case "Bash": {
+      if (event === "PostToolUseFailure") return command(source, str(input.command), { output: str(p.error) });
+      const response = obj(p.tool_response);
+      const code = exitCodeOf(response);
+      const stderr = str(response.stderr);
+      // Claude Code reports a failed command through PostToolUseFailure; an
+      // explicit non-zero code in a success payload is taken at its word too.
+      const failed = code !== null && code !== 0;
+      return command(source, str(input.command), failed ? { output: `${stderr}\n${str(response.stdout)}` } : undefined);
+    }
     case "Write":
       return edit(source, str(input.file_path), str(input.content));
     case "Edit":
@@ -176,6 +253,7 @@ function isObservation(v: unknown): v is Observation {
   if (typeof o.at !== "string" || !Number.isFinite(Date.parse(o.at))) return false;
   if (o.kind === "command") return typeof o.command === "string";
   if (o.kind === "edit") return typeof o.file === "string" && Array.isArray(o.concepts);
+  if (o.kind === "prompt") return true;
   return false;
 }
 

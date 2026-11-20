@@ -71,6 +71,8 @@ export interface WatchEvents {
   onBaseline(root: string, files: number): void;
   /** A commit landed in a watched repository. */
   onCommit(root: string): void;
+  /** The repository's state changed in the editor's git view: something was staged, unstaged or checked out. */
+  onRepoState?(root: string): void;
 }
 
 export interface WatchSettings {
@@ -226,6 +228,11 @@ export class Watcher implements vscode.Disposable {
     return deepest(roots.filter((r) => inside(this.realRoots.get(r) ?? r, real)));
   }
 
+  /** The watched repository a path belongs to, if any. */
+  rootOf(file: string): string | undefined {
+    return this.owner(this.roots, file);
+  }
+
   /** Is this path inside something the learner has open? */
   inWorkspace(dir: string): boolean {
     const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
@@ -324,7 +331,10 @@ export class Watcher implements vscode.Disposable {
       const repo = repos.find((r) => r.rootUri.fsPath === root);
       const entry = { commit: repo?.state?.HEAD?.commit, subscription: undefined as vscode.Disposable | undefined };
       this.heads.set(root, entry);
-      entry.subscription = repo?.state?.onDidChange?.(() => this.headMoved(root, repo.state?.HEAD?.commit));
+      entry.subscription = repo?.state?.onDidChange?.(() => {
+        this.headMoved(root, repo.state?.HEAD?.commit);
+        this.events.onRepoState?.(root);
+      });
       if (!entry.commit) void headOf(root).then((commit) => (entry.commit ??= commit ?? undefined));
     }
   }

@@ -140,6 +140,12 @@ export interface QuizView {
   otherTopic?: boolean;
   /** The idea behind the question, so the panel can open its page. Absent for terminal questions. */
   conceptId?: string;
+  /**
+   * Answer in your own words, graded by the learner's AI, instead of picking
+   * from choices. Offered from green belt up, where recognising the right
+   * choice is no longer evidence of being able to produce it.
+   */
+  explainBack?: boolean;
 }
 
 export interface AnswerView {
@@ -570,10 +576,15 @@ let reviewsAsked = 0;
  * pattern of the last one; a question that arrives from somewhere else has to
  * be recalled cold.
  */
+/** Green belt: from here an answer in the learner's own words is worth more than a recognised choice. */
+const EXPLAIN_BACK_BOX = 3;
+let explainBackTurn = 0;
+
 export function nextReview(
   skip: readonly string[] = [],
   topic: Topic | null = null,
   mix = true,
+  options: { explainBack?: boolean } = {},
 ): Promise<QuizView | null> {
   return run(
     () => {
@@ -608,6 +619,12 @@ export function nextReview(
         : `\`${pick.bin}\``;
       S.noteQuizAsked(pick.question.id);
       const view = openQuiz(ask(pick.question, pick.bin, { review: true, salt: String(quizCounter + 1) }), about);
+      // Brown belt and up always; green belt every other time, so recognition
+      // still gets practised and the AI is not asked on every question.
+      const box = S.findReviewItem("quiz", pick.question.id)?.box ?? 0;
+      if (options.explainBack && isConceptBin(pick.bin) && box >= EXPLAIN_BACK_BOX) {
+        if (box > EXPLAIN_BACK_BOX || explainBackTurn++ % 2 === 0) view.explainBack = true;
+      }
       return otherTopic ? { ...view, otherTopic: true } : view;
     },
     { write: true },
@@ -644,9 +661,60 @@ export function answer(
       const entry = open.get(token);
       if (!entry) return null;
       open.delete(token);
+      const chosen = entry.quiz.choices[choiceIndex];
+      const correct = chosen !== undefined && chosen === entry.quiz.answer;
+      return grade(token, entry, { chosen: chosen ?? "", choiceIndex, correct, partly: false }, confidence, options);
+    },
+    { write: true },
+  );
+}
+
+/** What an open question asks and expects, so its free-text answer can be judged. */
+export function openQuestion(token: string): { question: string; answer: string; explanation: string; about: string } | null {
+  const entry = open.get(token);
+  return entry ? { question: entry.quiz.question, answer: entry.quiz.answer, explanation: entry.quiz.explanation, about: entry.about } : null;
+}
+
+/**
+ * Grades an answer written in the learner's own words, once their AI has
+ * judged it. Right counts as correct; partly counts as correct but holds the
+ * belt where it is, like a slow answer; wrong is a miss.
+ */
+export function answerInOwnWords(
+  token: string,
+  written: string,
+  verdict: "right" | "partly" | "wrong",
+  confidence: Confidence | null = null,
+  options: { blackBeltNeedsTransfer?: boolean } = {},
+): Promise<AnswerView | null> {
+  return run(
+    async () => {
+      const entry = open.get(token);
+      if (!entry) return null;
+      open.delete(token);
+      return grade(
+        token,
+        entry,
+        { chosen: written.slice(0, 300), choiceIndex: -1, correct: verdict !== "wrong", partly: verdict === "partly" },
+        confidence,
+        options,
+      );
+    },
+    { write: true },
+  );
+}
+
+async function grade(
+  token: string,
+  entry: OpenQuiz,
+  given: { chosen: string; choiceIndex: number; correct: boolean; partly: boolean },
+  confidence: Confidence | null,
+  options: { blackBeltNeedsTransfer?: boolean },
+): Promise<AnswerView> {
       const { quiz } = entry;
-      const chosen = quiz.choices[choiceIndex];
-      const correct = chosen !== undefined && chosen === quiz.answer;
+      const chosen: string | undefined = given.chosen;
+      const correct = given.correct;
+      const choiceIndex = given.choiceIndex;
 
       const conceptId = isConceptBin(quiz.bin) ? quiz.bin.slice("concept:".length) : null;
       const outcome = recordAnswer(journal, {
@@ -681,7 +749,9 @@ export function answer(
       const elapsedMs = Date.now() - Date.parse(quiz.askedAt);
       // Slow recall holds its box. So does a correct answer that repays a
       // confident miss: sure-and-wrong has to be right twice to move on.
-      const hesitant = (Number.isFinite(elapsedMs) && elapsedMs > 45_000) || outcome.repaysMiss || needsTransfer;
+      // An answer in their own words takes longer to write than a tap, so time is not held against it.
+      const slow = given.choiceIndex >= 0 && Number.isFinite(elapsedMs) && elapsedMs > 45_000;
+      const hesitant = slow || given.partly || outcome.repaysMiss || needsTransfer;
 
       S.recordMastery(quiz.bin, { quiz: true, correct });
       const scheduled = S.gradeReviewItem("quiz", quiz.id, correct, { hesitant });
@@ -716,9 +786,6 @@ export function answer(
         confidentMiss: outcome.confidentMiss,
         repaysMiss: outcome.repaysMiss,
       };
-    },
-    { write: true },
-  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -1008,4 +1075,88 @@ export function creditUnaided(what: string, xp: number): Promise<number> {
     },
     { write: true },
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * Growth: what the newer features need from the profile
+ * ------------------------------------------------------------------ */
+
+/** Every idea's seen-ness and belt box, for the skill map. */
+export function ideaStates(): Promise<Map<string, { seen: boolean; box: number }>> {
+  return run(() => new Map(dojoRows(familiarity).map((r) => [r.id, { seen: r.familiarity.seen, box: r.familiarity.box }])));
+}
+
+/** How many ideas have been met in the learner's code, in total. */
+export function ideasMet(): Promise<number> {
+  return run(() => dojoRows(familiarity).filter((r) => r.familiarity.seen).length);
+}
+
+/**
+ * Puts ideas on the review schedule without a card, as when a learner adopts
+ * a tool's vocabulary. Each question comes back in ten minutes, then on the
+ * usual spacing. Returns how many were newly queued.
+ */
+export function adoptIdeas(ids: readonly string[], detail: string): Promise<number> {
+  return run(
+    () => {
+      let queued = 0;
+      for (const id of ids) {
+        const concept = conceptById(id);
+        const questions = questionsForConcept(id);
+        if (!concept || !questions.length) continue;
+        const before = familiarity(id).seen;
+        // One question per idea: the second comes in later, when the first is held.
+        const q = questions.find((x) => x.level === "Junior") ?? questions[0];
+        S.ensureReviewItem("quiz", q.id, q.question);
+        if (!before) {
+          queued++;
+          S.record({ kind: "concept", label: concept.title, bin: conceptBin(id), detail: `discovered in ${detail} (panel)`, xpAwarded: 0 });
+        }
+      }
+      if (queued) S.touchDay();
+      return queued;
+    },
+    { write: true },
+  );
+}
+
+/**
+ * Makes an idea's question due now: something broke in a way it explains, so
+ * it is worth recalling today rather than whenever the schedule says.
+ */
+export function bringForward(conceptId: string): Promise<boolean> {
+  return run(
+    () => {
+      const items = questionsForConcept(conceptId)
+        .map((q) => S.findReviewItem("quiz", q.id))
+        .filter((i): i is NonNullable<typeof i> => Boolean(i));
+      if (!items.length) {
+        const q = questionsForConcept(conceptId)[0];
+        if (!q) return false;
+        S.ensureReviewItem("quiz", q.id, q.question);
+        return true;
+      }
+      for (const item of items) item.dueAt = new Date().toISOString();
+      return true;
+    },
+    { write: true },
+  );
+}
+
+/** XP for something done without the assistant, or before it: a read error, a prediction, a commit check. */
+export function credit(label: string, detail: string, xp: number): Promise<number> {
+  return run(
+    () => {
+      S.touchDay();
+      const awarded = xp > 0 ? S.awardXp(xp).awarded : 0;
+      S.record({ kind: "checkpoint", label, detail: `${detail.slice(0, 200)} (panel)`, xpAwarded: awarded, correct: true });
+      return awarded;
+    },
+    { write: true },
+  );
+}
+
+/** Whether a concept is known to the pack at all, for ids that arrive from a model or a file. */
+export function knownIdea(id: string): boolean {
+  return Boolean(conceptById(id));
 }

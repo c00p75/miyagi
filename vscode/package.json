@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
@@ -133,6 +133,31 @@
       {
         "command": "miyagi.tour",
         "title": "Tour the Ideas in This Codebase",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.learnAbout",
+        "title": "Teach Me About a Tool or Idea",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.predict",
+        "title": "Predict the Next Change",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.growth",
+        "title": "Show How I Am Growing",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.incident",
+        "title": "Learn from Something That Broke",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.story",
+        "title": "Export My Story (What I Have Learned)",
         "category": "Miyagi"
       },
       {
@@ -268,6 +293,11 @@
           "default": true,
           "description": "Before an idea reaches black belt, ask one question about it in a different language or framework. Needs an AI; without one this is skipped."
         },
+        "miyagi.explainBack": {
+          "type": "boolean",
+          "default": true,
+          "description": "From green belt up, some review questions ask you to answer in your own words, and your AI judges the answer. Producing an answer is stronger evidence than recognising it. Needs an AI; without one, questions stay multiple choice."
+        },
         "miyagi.weeklyGoalDays": {
           "type": "number",
           "default": 4,
@@ -394,6 +424,38 @@
           "maximum": 60,
           "description": "The most times per hour Miyagi may ask your AI to look for ideas in a change."
         },
+        "miyagi.coach.tools": {
+          "type": "boolean",
+          "default": true,
+          "description": "When your project adopts a library or service Miyagi knows (Sentry, Stripe, Prisma, Zod and about 45 more), offer a short track to become conversant in it: what it does, how it fits, and its key terms on spaced review."
+        },
+        "miyagi.coach.debugging": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a command fails, in your terminal or your assistant's, offer to read the error with you before the fix: pick the line that matters, say what you think broke, then compare. Only the error lines are kept, never the full output."
+        },
+        "miyagi.coach.predictions": {
+          "type": "string",
+          "default": "onNewTask",
+          "enum": [
+            "onNewTask",
+            "manual",
+            "off"
+          ],
+          "enumDescriptions": [
+            "When your assistant is given a new task (Claude Code capture), ask which files it will touch. Only the fact that a task started is recorded, never the prompt.",
+            "Only when you press \"Predict the next change\".",
+            "Never."
+          ],
+          "description": "Predict which files a change will touch before your assistant makes it, then see how close you were."
+        },
+        "miyagi.coach.commitCheckLines": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "When you stage at least this many added lines, offer one question about what you are about to commit. 0 turns it off. Never blocks the commit."
+        },
         "miyagi.voice.autoRead": {
           "type": "boolean",
           "default": false,
@@ -514,6 +576,31 @@
           "command": "miyagi.teamReport",
           "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
           "group": "4_team@2"
+        },
+        {
+          "command": "miyagi.growth",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@1"
+        },
+        {
+          "command": "miyagi.learnAbout",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@2"
+        },
+        {
+          "command": "miyagi.predict",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@3"
+        },
+        {
+          "command": "miyagi.incident",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@4"
+        },
+        {
+          "command": "miyagi.story",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@5"
         }
       ],
       "commandPalette": [

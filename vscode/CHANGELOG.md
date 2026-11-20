@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0
+
+Miyagi taught the ideas in the code. This release adds what grows a developer beyond that: the tools a project adopts, reading errors, judging where a change will land, and seeing your own progress. Every new feature asks you to go first, then shows you the answer.
+
+### Added
+
+- **New tool tracks.** When a project adopts one of 49 catalogued tools (Sentry, Stripe, Prisma, Supabase, Zod, Playwright, Docker, FastAPI…), Miyagi notices it from the package, a config file, an environment variable or the setup command. Each tool gets a page: guess what it is for first, then see the job it does, how it fits, how it bites and how to prove it works. Your AI can also show where it is wired into your project. Its 5 or 6 key terms go on spaced review, and you are *conversant* when every term is at green belt.
+- **Teach me about…** Type any tool or idea in the Now tab. Tools the catalogue does not know are described by your AI and get the same track.
+- **Debugging coach.** When a command fails, in your terminal or your assistant's, a card asks you to read the error first: tap the line that matters, say what broke, then compare your read with the real cause, the fix and a habit for next time. Errors that keep coming back can be turned into a lesson. Reading errors has its own belt.
+- **Predict the change.** When Claude Code is given a new task (or when you press the button), say which files it will touch. When the change lands you see what you got right, what you missed, and the surprises.
+- **Before you commit.** Stage a large change and you are offered one question about what you are committing. It never blocks the commit.
+- **Explain it in your own words.** From green belt up, some review questions ask for a typed answer, judged by your AI. A partly-right answer counts, but the belt holds.
+- **Decisions.** Find the design decisions in a change, or log one yourself. Saved decisions come back on review so you can still say why, and copy out as decision records.
+- **The Grow tab:**
+  - **Going first:** how often you try before your AI explains, week by week.
+  - **Your map:** 18 skills across Junior, Mid and Senior, showing what your projects have not asked of you yet, with an exercise in your own project.
+  - Tools, decisions, and **learn from something that broke**.
+  - **Your story:** what you have done, with interview practice and a Markdown export.
+- **New packages** that the catalogue does not know are listed on a change, one click from a lesson.
+- A one-time offer to let your AI find ideas and tools in a change when nothing built-in matches.
+
+### Privacy
+
+- The capture hook now also records **failed** commands, keeping up to six scrubbed lines that look like the error. Full output is never kept.
+- It also records **that** a new task was given to Claude Code, never what was asked.
+- Your own terminal's output is read in memory only while a command runs, and only when it fails.
+- New progress lives in `~/.miyagi/growth.json` on your machine.
+
 ## 0.4.0
 
 ### Added

@@ -247,7 +247,7 @@ export function summariseObservations(observations: readonly Observation[]): Obs
     if (o.kind === "command") {
       commandTotal++;
       commands.set(o.command, (commands.get(o.command) ?? 0) + 1);
-    } else {
+    } else if (o.kind === "edit") {
       files.add(o.file);
       linesAdded += o.added;
       changes.push({ file: o.file, concepts: o.concepts });

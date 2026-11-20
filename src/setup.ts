@@ -67,23 +67,32 @@ async function readJson(file: string): Promise<{ data: Json; existed: boolean } 
 
 const mentionsUs = (v: unknown): boolean => JSON.stringify(v ?? "").includes(MARKER);
 
-/** Claude Code: `hooks.PostToolUse[] = { matcher, hooks: [{ type, command }] }`. */
+/**
+ * Claude Code: `hooks.<Event>[] = { matcher?, hooks: [{ type, command }] }`.
+ *
+ * - PostToolUse: commands run and files edited.
+ * - PostToolUseFailure: a command that failed, so the learner can be coached
+ *   to read the error before the assistant fixes it.
+ * - UserPromptSubmit: that a new task was given (never its text), the moment
+ *   to predict what the assistant is about to change.
+ */
+const CLAUDE_EVENTS: ReadonlyArray<{ event: string; matcher?: string }> = [
+  { event: "PostToolUse", matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit" },
+  { event: "PostToolUseFailure", matcher: "Bash" },
+  { event: "UserPromptSubmit" },
+];
+
 export function mergeClaude(settings: Json, command: string | null): Json {
   const out: Json = { ...settings };
   const hooks: Json = isObj(out.hooks) ? { ...out.hooks } : {};
-  const existing = Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : [];
-  const others = existing.filter((entry) => !mentionsUs(entry));
-  const next = command
-    ? [
-        ...others,
-        {
-          matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit",
-          hooks: [{ type: "command", command, timeout: 5 }],
-        },
-      ]
-    : others;
-  if (next.length) hooks.PostToolUse = next;
-  else delete hooks.PostToolUse;
+  for (const { event, matcher } of CLAUDE_EVENTS) {
+    const existing = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
+    const others = existing.filter((entry) => !mentionsUs(entry));
+    const ours = { ...(matcher ? { matcher } : {}), hooks: [{ type: "command", command, timeout: 5 }] };
+    const next = command ? [...others, ours] : others;
+    if (next.length) hooks[event] = next;
+    else delete hooks[event];
+  }
   if (Object.keys(hooks).length) out.hooks = hooks;
   else delete out.hooks;
   return out;

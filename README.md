@@ -41,7 +41,8 @@ Since your last debrief, your assistant ran 7 commands and edited 3 files (+212 
 
 1. **It watches, quietly.** One command installs an editor hook. After each command or
    edit your assistant makes, one line goes into a local log: the command, the file name,
-   and which ideas the change used. Never file contents, never output, nothing off your
+   and which ideas the change used. Never file contents, never full output (a failed command
+   keeps only its scrubbed error lines), never your prompts, nothing off your
    machine. No hook? It reads `git diff` instead, so it works with zero setup.
 2. **It chooses.** A change can touch a dozen ideas. You get the few that matter most:
    new to you first, security before syntax, and nothing you have already proved you know.
