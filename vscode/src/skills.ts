@@ -19,7 +19,7 @@ export const SKILL_LEVELS: readonly SkillLevel[] = ["Junior", "Mid", "Senior"];
 
 type Signal =
   | { kind: "ideas"; ids: string[] }
-  | { kind: "count"; of: "debugRight" | "predictions" | "explainedRight" | "decisions" | "incidents" | "tools" | "unaided" | "gates"; target: number };
+  | { kind: "count"; of: "debugRight" | "explainedRight" | "decisions" | "incidents" | "tools" | "unaided" | "gates"; target: number };
 
 export interface Skill {
   id: string;
@@ -115,14 +115,6 @@ export const SKILLS: readonly Skill[] = [
     signal: { kind: "ideas", ids: ["tests"] },
   },
   {
-    id: "predict",
-    level: "Mid",
-    title: "Know where a change will land",
-    why: "Knowing which files a feature touches is knowing how the project fits together.",
-    tryIt: "Before your next task, predict the files your AI will change, then compare.",
-    signal: { kind: "count", of: "predictions", target: 5 },
-  },
-  {
     id: "explain",
     level: "Mid",
     title: "Explain it in your own words",
@@ -211,7 +203,6 @@ const HELD_BOX = 3;
 
 const COUNT_WORDS: Record<Extract<Signal, { kind: "count" }>["of"], [string, string]> = {
   debugRight: ["error read right", "errors read right"],
-  predictions: ["prediction made", "predictions made"],
   explainedRight: ["explanation judged right", "explanations judged right"],
   decisions: ["decision logged", "decisions logged"],
   incidents: ["incident turned into a lesson", "incidents turned into lessons"],
@@ -224,8 +215,6 @@ function countOf(g: Growth, of: Extract<Signal, { kind: "count" }>["of"]): numbe
   switch (of) {
     case "debugRight":
       return g.weeks.reduce((n, w) => n + w.debugRight, 0);
-    case "predictions":
-      return g.predictions.filter((p) => p.resolved).length;
     case "explainedRight":
       return g.weeks.reduce((n, w) => n + w.explainedRight, 0);
     case "decisions":

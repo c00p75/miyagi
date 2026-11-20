@@ -53,6 +53,8 @@ The research behind these choices: Dunlosky et al. (2013) on which study techniq
 - **Practice**, one button per card: a why question, trace it by hand, spot the difference, find the bug, a question on your own lines. At brown belt, a transfer question in another language.
 - **Your turn.** A five-line follow-up to write without the assistant. Miyagi checks the diff to confirm who wrote it and never writes the code.
 - **Walk me through this change** and **check it for risks**.
+- **Why not another way?** On an idea's page: say how else the code could have been written (or skip), then see two real alternatives with a sketch, what each does better, what it would cost in your project, and when to pick it. Save the choice to your decision log and it comes back on review.
+- **Your project's glossary.** The words that belong to your project (a settlement, a tenant, a payout) with what each means, how the code represents it and which files it lives in. Find them from a whole project in the Dojo, or from one change with **Project words in it**. Guess a word first, then read it; add any word to your review. Kept in `~/.miyagi/glossary.json`.
 - **How this project works.** A map of the repository.
 - **Find ideas with AI** (off by default). Lessons for ideas the built-in list does not know, marked as written by your AI.
 
@@ -71,7 +73,7 @@ You do, through an assistant you already use. Miyagi has no account, no API key 
 
 In `auto` (the default) Miyagi uses the assistant it saw doing the work, else the first one it finds. Run **Miyagi: Choose Which AI Writes Explanations** to pick, or to turn AI off. Cards, questions and belts all work without any AI.
 
-Nothing is sent to an AI unless you press a button, with two exceptions you have to turn on yourself: `miyagi.ai.explain: auto` (an explanation for every card) and `miyagi.ai.findIdeas` (ask your AI what is worth learning in a change, at most `miyagi.ai.findIdeasPerHour` times an hour). The footer of the panel shows how many AI calls Miyagi has made this week and roughly how many tokens.
+Miyagi uses the AI you already have. When a change matches none of its built-in ideas, it asks that AI what is worth learning in it, at most `miyagi.ai.findIdeasPerHour` times an hour (`miyagi.ai.findIdeas`; set it to `off` to stop this). Everything else waits for a button press, unless you set `miyagi.ai.explain: auto`. If no AI is available, the panel says so once and Miyagi teaches only its built-in ideas. The footer of the panel shows how many AI calls Miyagi has made this week and roughly how many tokens.
 
 Each request is a separate, short-lived process: no tools, no project context, no saved session. It cannot reach the conversation your assistant is working in.
 

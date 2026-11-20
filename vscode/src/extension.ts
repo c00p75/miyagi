@@ -49,6 +49,7 @@ import { buildSummary, fileNameFor, readSummaries, renderTour, teamReport, tourS
 import { quietNow, tomorrowMorning, type QuietReason } from "./schedule.js";
 import { supportsSecondarySidebar } from "./docking.js";
 import { registerSkillIdeas, restoreTools } from "./coach.js";
+import { restoreGlossary } from "./glossary.js";
 
 const WELCOMED_KEY = "miyagi.welcomed.v1";
 const PAUSED_KEY = "miyagi.pausedUntil.v1";
@@ -196,6 +197,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   // vocabulary of every tool met so far, so their questions are still there.
   registerSkillIdeas();
   await restoreTools().catch(() => 0);
+  // Glossary words on review are ideas too; without this their questions vanish after a restart.
+  await restoreGlossary().catch(() => 0);
 
   /* ---- status bar ----------------------------------------------- */
 
@@ -580,7 +583,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
 
   register("miyagi.clearFeed", () => panel.clear());
 
-  /* ---- growing: tools, predictions, incidents, the story -------- */
+  /* ---- growing: tools, incidents, the story -------- */
 
   register("miyagi.learnAbout", async () => {
     const text = await vscode.window.showInputBox({
@@ -591,11 +594,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     if (!text?.trim()) return;
     await open();
     await panel.coach.learnAbout(text);
-  });
-  register("miyagi.predict", async () => {
-    await open();
-    panel.showTab("now");
-    await panel.coach.predictOpen("manual");
   });
   register("miyagi.growth", async () => {
     await open();
@@ -854,10 +852,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       ...found.map((a) => `  found: ${a.id}: ${a.label}  [${a.detail}]`),
       `  editor language-model API: ${options.editor ? `present, ${editorList.length} model(s)${editorList.length ? ": " + editorList.join(", ") : ""}` : "not offered by this editor"}`,
       `  ${describeMeter(currentMeter(context.globalState.get(METER_KEY)))}`,
-      `  find ideas with AI: ${config().get("ai.findIdeas", "off")}`,
+      `  find ideas with AI: ${config().get("ai.findIdeas", "whenNothingFound")}`,
       "",
       "COACH",
-      `  tools: ${config().get("coach.tools", true)}, debugging: ${config().get("coach.debugging", true)}, predictions: ${config().get("coach.predictions", "onNewTask")}, commit check from: ${config().get("coach.commitCheckLines", 60)} lines`,
+      `  tools: ${config().get("coach.tools", true)}, debugging: ${config().get("coach.debugging", true)}, commit check from: ${config().get("coach.commitCheckLines", 60)} lines`,
       `  explain in your own words: ${config().get("explainBack", true)}`,
       `  terminal failures: ${(vscode.window as { onDidEndTerminalShellExecution?: unknown }).onDidEndTerminalShellExecution ? "read through shell integration" : "not available in this editor"}`,
       "",

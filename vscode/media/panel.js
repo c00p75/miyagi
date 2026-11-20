@@ -36,6 +36,11 @@
       // Which lesson sections are open on a card page, by `<key>|<section>`.
       sections: {},
       scroll: {},
+      // "Why not another way?" opened on a card, by key.
+      altOpen: {},
+      // The glossary word whose page is showing, and words revealed without a guess.
+      term: null,
+      termRevealed: {},
       // Grow tab: which skill row is open, and whether the decision form is.
       skill: null,
       decisionForm: false,
@@ -63,9 +68,6 @@
   /** The Grow tab's data, fetched when the tab opens. */
   /** @type {any} */
   let grow = null;
-  /** Files ticked in the "predict it" strip. */
-  /** @type {string[]} */
-  let predictPicks = [];
   /** A message to show once in the Grow tab (incident saved, decision problem). */
   let growNote = "";
   let growAsked = 0;
@@ -416,6 +418,63 @@
     return `<div class="block"><h4>Find the bug</h4><div class="code">${lines}</div>${below}<p class="by">Exercise by ${esc(drill.by)}. Your real file was not changed.</p></div>`;
   }
 
+  /**
+   * Why not another way? The learner names one first (or skips), then sees
+   * two real alternatives with what each would win and cost here.
+   */
+  function alternativesBlock(/** @type {any} */ c) {
+    const slot = `${c.key}|alternatives`;
+    const alt = (state.extras[c.key] || {}).alternatives;
+    if (alt) {
+      const options = alt.alternatives
+        .map(
+          (/** @type {any} */ a) => `<li class="alt">
+            <strong>${esc(a.name)}</strong>
+            ${a.sketch ? `<pre><code>${esc(a.sketch)}</code></pre>` : ""}
+            <dl class="alt-facts">
+              ${a.wins ? `<dt>Better at</dt><dd>${inline(a.wins)}</dd>` : ""}
+              <dt>Costs here</dt><dd>${inline(a.costs)}</dd>
+              ${a.when ? `<dt>Pick it when</dt><dd>${inline(a.when)}</dd>` : ""}
+            </dl>
+          </li>`,
+        )
+        .join("");
+      const mine = alt.guess
+        ? `<div class="hint"><span class="muted">Your idea</span><p class="asked">${esc(alt.guess)}</p>${alt.onGuess ? `<p>${inline(alt.onGuess)}</p>` : ""}</div>`
+        : "";
+      return `<div class="block alternatives">
+        <h4>Why not another way?</h4>
+        ${mine}
+        <p><span class="muted">What this code does:</span> <strong>${esc(alt.chosen)}</strong></p>
+        <p>${inline(alt.why)}</p>
+        <ul class="alts">${options}</ul>
+        ${alt.verdict ? `<p class="verdict-line">${inline(alt.verdict)}</p>` : ""}
+        ${
+          alt.saved
+            ? `<p class="muted">Saved to your decision log. It comes back on review, so you can still say why later.</p>`
+            : `<div class="actions"><button data-action="saveAlternative" data-key="${esc(c.key)}">Save to my decision log</button></div>`
+        }
+        ${problem(slot)}
+        <p class="by">Options by ${esc(alt.by)}. They are suggestions from your AI: check them against your project.</p>
+      </div>`;
+    }
+    if (busy(slot)) return waiting(slot);
+    if (!ui.altOpen[c.key]) return problem(slot);
+    const draft = `${c.key}|alternatives`;
+    return `<div class="block">
+      <h4>Why not another way?</h4>
+      <p>Before you look: how else could this have been written? One line is enough.</p>
+      <form data-submit="alternatives" data-key="${esc(c.key)}">
+        <textarea data-draft="${esc(draft)}" rows="2" placeholder="It could also have…" aria-label="Another way it could have been written" maxlength="600">${esc(drafts[draft] || "")}</textarea>
+        <div class="actions">
+          <button type="submit" class="primary">Compare with the real options</button>
+          <button type="button" class="link" data-action="alternatives" data-key="${esc(c.key)}">Skip, just show me</button>
+        </div>
+      </form>
+      ${problem(slot)}
+    </div>`;
+  }
+
   function contrastBlock(/** @type {any} */ c) {
     const slot = `${c.key}|contrast`;
     const x = (state.extras[c.key] || {}).contrast;
@@ -545,6 +604,10 @@
         ? `<button class="${faded ? "" : "primary"}" data-action="${startExplain}" data-key="${esc(c.key)}">Explain in my code</button>`
         : "",
       c.file ? `<button data-action="practice" data-key="${esc(c.key)}" aria-expanded="${Boolean(ui.practice[c.key])}">Practice</button>` : "",
+      // Only on an idea's own page, where there is room to compare.
+      pinned && c.file && state.ai.label && !(state.extras[c.key] || {}).alternatives && !ui.altOpen[c.key] && !busy(`${c.key}|alternatives`)
+        ? `<button data-action="altOpen" data-key="${esc(c.key)}">Why not another way?</button>`
+        : "",
     ].join("");
 
     // Every other way to practise lives behind that one button.
@@ -599,6 +662,7 @@
         ${whyBlock(c)}
         ${asked}
         ${contrastBlock(c)}
+        ${pinned && c.file ? alternativesBlock(c) : ""}
         ${bugBlock(c)}
         ${ownCardBlock(c)}
         ${primary ? `<div class="actions">${primary}</div>` : ""}
@@ -697,7 +761,7 @@
     const h = state.heartbeat;
     if (!h) {
       return state.repos.length + state.folders.length
-        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.${predictLink()}</p>`
+        ? `<p class="pulse"><span class="dot" aria-hidden="true"></span>Watching. No change seen since this window opened.</p>`
         : "";
     }
     const outcome = h.taught
@@ -709,13 +773,7 @@
       : busy(`${h.root}|findIdeas`)
       ? "nothing in the built-in list; asking your AI"
       : "nothing new to teach";
-    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.${predictLink()}</p>`;
-  }
-
-  /** "Predict the next change", unless one is already open or predictions are off. */
-  function predictLink() {
-    if (state.predictions === "off" || (state.coach && state.coach.predicting) || !state.repos.length) return "";
-    return ` <button class="link" data-action="predictOpen">Predict the next change</button>`;
+    return `<p class="pulse"><span class="dot" aria-hidden="true"></span>Last change seen ${esc(clock(h.at))} in ${esc(h.root)}: ${plural(h.files, "file")}, ${outcome}.</p>`;
   }
 
   function commands() {
@@ -849,7 +907,7 @@
     const cards = visibleCards();
     const entries = feedEntries();
     const total = state.lessons.reduce((/** @type {number} */ n, /** @type {any} */ l) => n + l.cards.length, 0);
-    let body = filters() + offerBanner() + predictStrip() + pulse() + teachMeBox();
+    let body = filters() + offerBanner() + pulse() + teachMeBox();
     if (!entries.length) {
       body += emptyNow();
     } else {
@@ -892,6 +950,9 @@
       !state.lessonDecisions[lesson.id] && !busy(`${lesson.id}|decisions`) && state.ai.label
         ? `<button data-action="lessonDecisions" data-lesson="${esc(lesson.id)}">Decisions in it</button>`
         : "",
+      !state.lessonTerms[lesson.id] && !busy(`${lesson.id}|terms`) && state.ai.label
+        ? `<button data-action="findTerms" data-lesson="${esc(lesson.id)}">Project words in it</button>`
+        : "",
     ]
       .filter(Boolean)
       .join("");
@@ -905,6 +966,7 @@
         ${risksBlock(lesson)}
         ${turnBlock(lesson)}
         ${lessonDecisionsBlock(lesson)}
+        ${lessonTermsBlock(lesson)}
         ${
           packages.length
             ? `<p class="chips"><span class="muted">New packages:</span> ${packages
@@ -915,6 +977,20 @@
         ${chips("Also in there:", lesson.later)}
         ${chips("Already yours:", lesson.solid)}
       </section>`;
+  }
+
+  /** The project words found in one change, each a link to its glossary page. */
+  function lessonTermsBlock(/** @type {any} */ lesson) {
+    const slot = `${lesson.id}|terms`;
+    const found = state.lessonTerms[lesson.id];
+    if (!found) return waiting(slot) + problem(slot);
+    const terms = found.ids.map((/** @type {string} */ id) => termById(id)).filter(Boolean);
+    if (!terms.length) return problem(slot);
+    return `<div class="block"><h4>Project words in this change</h4>
+      <p class="chips">${terms
+        .map((/** @type {any} */ t) => `<button class="chip" data-action="term" data-id="${esc(t.id)}">📖 ${esc(t.term)}</button>`)
+        .join("")}</p>
+      <p class="by">Added to your glossary by ${esc(found.by)}. Find them all in the Dojo.</p></div>`;
   }
 
   function cardPage(/** @type {string} */ key) {
@@ -987,10 +1063,6 @@
       const who = i.by === "you" ? "your terminal" : i.by;
       return { emoji: "🩺", title: `Something broke: ${i.command}`, sub: [who, i.repeats > 1 ? `${i.repeats} times` : "", time].filter(Boolean).join(" · "), tag, hook: "Read the error before your AI fixes it. One minute, and the next one costs less.", open: "Read it ›" };
     }
-    if (i.kind === "prediction") {
-      const pct = Math.round(i.score * 100);
-      return { emoji: "🎯", title: `Your prediction: ${i.hits.length} of ${i.files.length} files`, sub: [`${i.surprises.length} surprise${i.surprises.length === 1 ? "" : "s"}`, time].join(" · "), tag: `<span class="tag ${pct >= 60 ? "verdict-right" : pct >= 30 ? "verdict-partly" : "verdict-wrong"}">${pct}%</span>`, hook: "What you named, what it touched, and what you did not see coming.", open: "Compare ›" };
-    }
     const tag = i.committed && !i.answered ? `<span class="tag">Committed</span>` : i.answered ? `<span class="tag verdict-${i.correct ? "right" : "wrong"}">${i.correct ? "Ready" : "Re-read"}</span>` : `<span class="tag new">1 question</span>`;
     return { emoji: "🚦", title: `Before you commit: ${i.lines} lines`, sub: [`${i.files.length} file${i.files.length === 1 ? "" : "s"} staged`, time].join(" · "), tag, hook: "One question about what you are about to commit. About thirty seconds.", open: "Ask me ›" };
   }
@@ -1024,7 +1096,6 @@
   function itemPage(/** @type {any} */ i) {
     if (i.kind === "tool") return toolPage(i);
     if (i.kind === "debug") return debugPage(i);
-    if (i.kind === "prediction") return predictionPage(i);
     return gatePage(i);
   }
 
@@ -1256,32 +1327,6 @@
     </article>`;
   }
 
-  /* ---- a prediction ---- */
-
-  function predictionPage(/** @type {any} */ p) {
-    const pct = Math.round(p.score * 100);
-    const list = (/** @type {string[]} */ items, /** @type {string} */ mark, /** @type {string} */ cls) =>
-      items.map((f) => `<li class="${cls}"><span aria-hidden="true">${mark}</span> ${fileLink(p.root, f, null) || esc(f)}</li>`).join("");
-    const slot = `${p.key}|approach`;
-    const ar = p.approachResult;
-    return `<article class="card page prediction">
-      ${pageHead("🎯", "Your prediction", `<span class="tag">${pct}%</span>`)}
-      <p class="hook">${p.hits.length ? `You named ${p.hits.length} of the places it changed.` : "None of what you named changed."} ${p.surprises.length ? `It also touched ${p.surprises.length} you did not name.` : "Nothing it touched surprised you."}</p>
-      ${p.hits.length ? `<h4>Right</h4><ul class="pred">${list(p.hits, "✓", "hit")}</ul>` : ""}
-      ${p.misses.length ? `<h4>Named, not touched</h4><ul class="pred">${p.misses.map((/** @type {string} */ f) => `<li class="miss"><span aria-hidden="true">✗</span> ${esc(f)}</li>`).join("")}</ul>` : ""}
-      ${p.surprises.length ? `<h4>Surprises</h4><ul class="pred">${list(p.surprises, "＋", "surprise")}</ul>
-         <p class="muted">Surprises are the best part: each one is a connection in the project you did not know about yet.</p>
-         ${p.lessonId ? `<p><button class="link" data-action="predictWalk" data-key="${esc(p.key)}">Walk me through why it touched these</button></p>` : ""}` : ""}
-      ${
-        p.approach
-          ? `<div class="block"><p><span class="muted">How you said it would go:</span> ${esc(p.approach)}</p>
-              ${ar ? `<p><span class="tag verdict-${esc(ar.verdict)}">${VERDICT[ar.verdict]}</span></p>${prose(ar.feedback)}<p class="by">Compared by ${esc(ar.by)}</p>` : busy(slot) ? waiting(slot) : state.ai.label && p.lessonId ? `<button data-action="predictApproach" data-key="${esc(p.key)}">Compare my approach</button>` : ""}
-              ${problem(slot)}</div>`
-          : ""
-      }
-    </article>`;
-  }
-
   /* ---- before you commit ---- */
 
   function gatePage(/** @type {any} */ g) {
@@ -1305,35 +1350,6 @@
 
   /* ---- the strip, the box, the offer ---- */
 
-  function predictStrip() {
-    const p = state.coach && state.coach.predicting;
-    if (!p) return "";
-    if (p.locked) {
-      return `<div class="strip locked" role="status">
-        <p><span aria-hidden="true">🎯</span> <strong>Prediction locked in:</strong> ${esc(list(p.locked.files.map((/** @type {string} */ f) => f.split("/").pop() || f)))}. It is compared when the change lands.
-        <button class="link" data-action="predictDismiss">Cancel</button></p>
-      </div>`;
-    }
-    const picks = predictPicks;
-    const chip = (/** @type {string} */ f) =>
-      `<button type="button" class="chip file-chip${picks.includes(f) ? " on" : ""}" data-action="predictToggle" data-file="${esc(f)}" aria-pressed="${picks.includes(f)}" title="${esc(f)}">${esc(f.split("/").pop() || f)}</button>`;
-    const extra = picks.filter((f) => !p.suggestions.includes(f));
-    return `<div class="strip">
-      <p><span aria-hidden="true">🎯</span> <strong>${p.trigger === "task" ? "Your AI just got a new task." : "Predict the next change."}</strong> Before it writes anything: which files will it touch?</p>
-      <div class="file-chips">${p.suggestions.map(chip).join("")}${extra.map(chip).join("")}</div>
-      <form data-submit="predictAdd" data-key="predict" class="ask">
-        <input type="text" list="miyagi-files" data-draft="predict|file" value="${esc(drafts["predict|file"] || "")}" placeholder="Add a file or folder: src/api, checkout.tsx" aria-label="Add a file or folder" maxlength="200">
-        <button type="submit">Add</button>
-      </form>
-      <datalist id="miyagi-files">${(p.all || []).map((/** @type {string} */ f) => `<option value="${esc(f)}">`).join("")}</datalist>
-      <input type="text" data-draft="predict|approach" value="${esc(drafts["predict|approach"] || "")}" placeholder="How will it do it? (optional, one line)" aria-label="How you think it will be done" maxlength="400">
-      <div class="actions">
-        <button class="primary" data-action="predictLock"${picks.length ? "" : " disabled"}>Lock in${picks.length ? ` ${plural(picks.length, "guess")}` : ""}</button>
-        <button class="link" data-action="predictDismiss">Not this time</button>
-      </div>
-    </div>`;
-  }
-
   function teachMeBox() {
     const slot = "learn|about";
     return `<form class="ask learn" data-submit="learnAbout" data-key="learn">
@@ -1343,10 +1359,10 @@
   }
 
   function offerBanner() {
-    if (!state.coach || !state.coach.offerFindIdeas) return "";
-    return `<div class="banner offer">Most of what your AI writes is not in Miyagi's built-in list, including the tools it installs. Let ${esc(state.ai.label || "your AI")} point out what is worth learning in a change when nothing else matches? At most ${"6"} times an hour, on your account.
-      <button class="link" data-action="findIdeasOffer" data-accept="1">Turn it on</button>
-      <button class="link" data-action="findIdeasOffer" data-accept="0">Not now</button></div>`;
+    if (!state.coach || !state.coach.offerAi || state.ai.label) return "";
+    return `<div class="banner offer">Miyagi found no AI it can use, so it can only teach its built-in ideas, not what your assistant is building. Connect one to learn from your own code.
+      <button class="link" data-action="aiOffer" data-accept="1">Choose an AI</button>
+      <button class="link" data-action="aiOffer" data-accept="0">Use built-in ideas</button></div>`;
   }
 
   function lessonDecisionsBlock(/** @type {any} */ lesson) {
@@ -1381,7 +1397,7 @@
       ${decisionsBlock(g)}
       ${incidentBlock(g)}
       ${storyBlock(g)}
-      <p class="muted tail">${g.gates.asked ? `Commit checks: ${g.gates.right} of ${g.gates.asked} right. ` : ""}${g.predictions ? `${plural(g.predictions, "prediction")} compared. ` : ""}Everything here stays on this machine, in ~/.miyagi/growth.json.</p>
+      <p class="muted tail">${g.gates.asked ? `Commit checks: ${g.gates.right} of ${g.gates.asked} right. ` : ""}Everything here stays on this machine, in ~/.miyagi/growth.json.</p>
     </section>`;
   }
 
@@ -1400,14 +1416,13 @@
     const moves = [
       w.explainedTried ? `${plural(w.explainedTried, "explanation")} in your words` : "",
       w.debugReads ? `${plural(w.debugReads, "error")} read` : "",
-      w.predictions ? plural(w.predictions, "prediction") : "",
       w.unaided ? `${plural(w.unaided, "piece")} written unaided` : "",
     ]
       .filter(Boolean)
       .map((label) => `<span class="chip static">${esc(label)}</span>`)
       .join("");
     return `<div class="block trend"><h4>Going first</h4>
-      <p>${t.sentence ? esc(t.sentence) : "How often you try before your AI explains: explaining a card yourself, reading an error, predicting a change, writing a piece unaided. Make a few of those moves and your trend shows here."}</p>
+      <p>${t.sentence ? esc(t.sentence) : "How often you try before your AI explains: explaining a card yourself, reading an error, writing a piece unaided. Make a few of those moves and your trend shows here."}</p>
       <div class="bars" aria-label="Share of moves where you went first, by week">${bars}</div>
       ${moves ? `<p class="chips"><span class="muted">This week:</span> ${moves}</p>` : ""}
     </div>`;
@@ -1654,7 +1669,109 @@
       </div>`;
   }
 
+  const termById = (/** @type {string} */ id) => state.glossary.terms.find((/** @type {any} */ t) => t.id === id);
+
+  /** The Dojo's glossary: every open project's own words, searchable. */
+  function glossaryBlock() {
+    const g = state.glossary;
+    if (!g.projects.length) return "";
+    const query = (drafts["glossary|search"] || "").trim().toLowerCase();
+    const matches = g.terms.filter(
+      (/** @type {any} */ t) => !query || t.term.toLowerCase().includes(query) || t.meaning.toLowerCase().includes(query),
+    );
+    const many = g.projects.length > 1;
+    const rows = matches
+      .map(
+        (/** @type {any} */ t) => `<li class="row">
+          <button class="row-head" data-action="term" data-id="${esc(t.id)}">
+            <span class="emoji" aria-hidden="true">📖</span>
+            <span class="row-main">
+              <span class="row-title">${esc(t.term)}</span>
+              <span class="row-sub">${esc(t.meaning)}</span>
+            </span>
+            ${t.onReview ? `<span class="tags"><span class="tag">On review</span></span>` : ""}
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </li>`,
+      )
+      .join("");
+    const find = g.projects
+      .map((/** @type {any} */ p) => {
+        const slot = `glossary|${p.name}`;
+        if (busy(slot)) return waiting(slot);
+        return `<button data-action="findTerms" data-root="${esc(p.root)}"${state.ai.label ? "" : " disabled title=\"Choose an AI first\""}>Find words in ${many ? esc(p.name) : "this project"}</button>${problem(slot)}`;
+      })
+      .join("");
+    return `<section class="glossary">
+      <h3>Glossary <span class="muted">${g.terms.length ? `${g.terms.length} word${g.terms.length === 1 ? "" : "s"}` : ""}</span></h3>
+      <p class="muted">The words that belong to your project: what a tenant, an invoice or a settlement means here, and where it lives in the code.</p>
+      ${
+        g.terms.length > 6
+          ? `<input type="search" class="search" data-draft="glossary|search" value="${esc(drafts["glossary|search"] || "")}" placeholder="Search the glossary" aria-label="Search the glossary">`
+          : ""
+      }
+      ${rows ? `<ul class="rows">${rows}</ul>` : g.terms.length ? `<p class="muted">No word matches "${esc(query)}".</p>` : ""}
+      <div class="actions">${find}</div>
+    </section>`;
+  }
+
+  /** One word's page: guess first, then what it means and where it lives. */
+  function termPage(/** @type {any} */ t) {
+    const back = pageBar("closeTerm", "Back");
+    if (!t) return `${back}<div class="empty"><p class="muted">This word is no longer in the glossary.</p></div>`;
+    const revealed = t.guess || ui.termRevealed[t.id];
+    const head = `<h2 class="term-title">📖 ${esc(t.term)}</h2>
+      <p class="muted">A word from ${esc(t.project)}${t.onReview ? " · on your review" : ""}</p>`;
+    if (!revealed) {
+      const draft = `term|${t.id}`;
+      return `${back}<article class="card page">${head}
+        <div class="block">
+          <h4>What do you think it means here?</h4>
+          <p class="muted">A guess in your own words first. It does not have to be right.</p>
+          <form data-submit="termGuess" data-key="${esc(t.id)}">
+            <textarea data-draft="${esc(draft)}" rows="2" placeholder="A ${esc(t.term)} is…" aria-label="What you think it means" maxlength="600">${esc(drafts[draft] || "")}</textarea>
+            <div class="actions">
+              <button type="submit" class="primary">Compare</button>
+              <button type="button" class="link" data-action="termReveal" data-id="${esc(t.id)}">Skip, just show me</button>
+            </div>
+          </form>
+        </div>
+      </article>`;
+    }
+    const related = t.related
+      .map((/** @type {string} */ name) => {
+        const other = state.glossary.terms.find((/** @type {any} */ x) => x.project === t.project && x.term.toLowerCase() === name.toLowerCase());
+        return other ? `<button class="chip" data-action="term" data-id="${esc(other.id)}">${esc(other.term)}</button>` : `<span class="chip">${esc(name)}</span>`;
+      })
+      .join("");
+    const where = t.where.map((/** @type {string} */ f) => `<li>${fileLink(t.root, f, null)}</li>`).join("");
+    const slot = `term|${t.id}`;
+    return `${back}<article class="card page">${head}
+      ${t.guess ? `<div class="hint"><span class="muted">You thought</span><p class="asked">${esc(t.guess)}</p></div>` : ""}
+      <div class="block">
+        <h4>What it means</h4>
+        <p>${inline(t.meaning)}</p>
+        ${t.inProject ? `<h4>In this code</h4><p>${inline(t.inProject)}</p>` : ""}
+        ${where ? `<h4>Where it lives</h4><ul class="files">${where}</ul>` : ""}
+        ${related ? `<h4>Goes with</h4><p class="chips">${related}</p>` : ""}
+      </div>
+      <div class="actions">
+        ${
+          t.onReview
+            ? `<span class="muted">On your review. It comes back like any other question.</span>`
+            : t.canReview
+            ? `<button class="primary" data-action="termReview" data-id="${esc(t.id)}">Add to my review</button>`
+            : ""
+        }
+        <button class="link" data-action="termRemove" data-id="${esc(t.id)}">Remove from glossary</button>
+      </div>
+      ${problem(slot)}
+      <p class="by">Written by ${esc(t.by)} from your code. Check anything that matters.</p>
+    </article>`;
+  }
+
   function dojoTab() {
+    if (ui.term) return termPage(termById(ui.term));
     if (ui.idea) {
       const back = pageBar("closeIdea", ui.ideaFrom === "review" ? "Back to review" : "All ideas");
       if (!ideaCard || ideaCard.conceptId !== ui.idea) return `${back}<div class="empty"><p class="muted">Loading…</p></div>`;
@@ -1689,6 +1806,7 @@
           ${week}
         </div>
         <ul class="ideas">${seen.map(row).join("")}</ul>
+        ${glossaryBlock()}
         ${independence()}
         ${calibrationBlock()}
         ${mistakesBlock()}
@@ -1819,8 +1937,9 @@
     if (tab === "now") ui.cardKey = null;
     ui.tab = tab;
     if (tab === "dojo") {
-      // Clicking the tab again returns from a lesson to the list.
+      // Clicking the tab again returns from a lesson or a word to the list.
       ui.idea = null;
+      ui.term = null;
       send({ type: "dojo" });
     }
     if (tab === "grow") send({ type: "grow" });
@@ -1931,6 +2050,43 @@
       case "writeOwn":
         writing[key] = !writing[key];
         return render();
+      case "altOpen":
+        ui.altOpen[key] = true;
+        remember();
+        return render();
+      case "alternatives":
+        // "Skip, just show me": no guess.
+        delete drafts[`${key}|alternatives`];
+        return send({ type: "alternatives", key, guess: "" });
+      case "saveAlternative":
+        return send({ type: "saveAlternative", key });
+      case "findTerms":
+        return send({ type: "findTerms", lesson: d.lesson || undefined, root: d.root || undefined });
+      case "term":
+        if (!ui.term) ui.scroll.dojoList = window.scrollY;
+        ui.tab = "dojo";
+        ui.idea = null;
+        ui.term = d.id || null;
+        remember();
+        render();
+        return window.scrollTo(0, 0);
+      case "closeTerm":
+        ui.term = null;
+        remember();
+        send({ type: "dojo" });
+        render();
+        return restoreScroll("dojoList");
+      case "termReveal":
+        ui.termRevealed[d.id || ""] = true;
+        remember();
+        return render();
+      case "termReview":
+        return send({ type: "termReview", id: d.id });
+      case "termRemove":
+        ui.term = null;
+        remember();
+        send({ type: "termRemove", id: d.id });
+        return render();
       case "contrastPick":
         return send({ type: "contrastPick", key, pick: d.pick });
       case "confidence": {
@@ -2007,8 +2163,6 @@
       case "toolDecision":
       case "debugSkip":
       case "gateAsk":
-      case "predictApproach":
-      case "predictWalk":
       case "debugLesson":
         return send({ type: d.action, key });
       case "dismissItem":
@@ -2030,23 +2184,8 @@
         return send({ type: "debugHint", key, step: d.step });
       case "debugSelf":
         return send({ type: "debugSelf", key, right: d.right === "1" });
-      case "predictToggle": {
-        const f = d.file || "";
-        predictPicks = predictPicks.includes(f) ? predictPicks.filter((x) => x !== f) : predictPicks.concat(f);
-        return render();
-      }
-      case "predictLock":
-        send({ type: "predictLock", files: predictPicks, approach: drafts["predict|approach"] || "" });
-        predictPicks = [];
-        delete drafts["predict|approach"];
-        return;
-      case "predictDismiss":
-        predictPicks = [];
-        return send({ type: "predictDismiss" });
-      case "predictOpen":
-        return send({ type: "predictOpen" });
-      case "findIdeasOffer":
-        return send({ type: "findIdeasOffer", accept: d.accept === "1" });
+      case "aiOffer":
+        return send({ type: "aiOffer", accept: d.accept === "1" });
       case "learnName":
         return send({ type: "learnAbout", text: d.name });
       case "openTool":
@@ -2094,6 +2233,8 @@
   app.addEventListener("input", (event) => {
     const el = /** @type {HTMLInputElement} */ (event.target);
     if (el.dataset && el.dataset.draft) drafts[el.dataset.draft] = el.value;
+    // The glossary filters as you type; the redraw keeps the caret where it was.
+    if (el.dataset && el.dataset.draft === "glossary|search") render();
   });
 
   app.addEventListener("submit", (event) => {
@@ -2130,11 +2271,6 @@
         drafts[`${key}|read.sent`] = text;
         return send({ type: "debugSubmit", key, text });
       }
-      case "predictAdd": {
-        const text = take("predict|file");
-        if (text && !predictPicks.includes(text)) predictPicks = predictPicks.concat(text);
-        return render();
-      }
       case "answerOwn": {
         const text = take("review|own");
         if (!text || !review.quiz) return;
@@ -2148,6 +2284,23 @@
       case "storyAnswer": {
         const text = (drafts["grow|storyAnswer"] || "").trim();
         return text ? send({ type: "storyAnswer", text }) : undefined;
+      }
+      case "alternatives": {
+        const draft = `${key}|alternatives`;
+        const guess = (drafts[draft] || "").trim();
+        delete drafts[draft];
+        return send({ type: "alternatives", key, guess });
+      }
+      case "termGuess": {
+        const draft = `term|${key}`;
+        const text = (drafts[draft] || "").trim();
+        if (!text) {
+          ui.termRevealed[key] = true;
+          remember();
+          return render();
+        }
+        delete drafts[draft];
+        return send({ type: "termGuess", id: key, text });
       }
       case "decisionTyped": {
         const typed = { title: take("decision|title"), chose: take("decision|chose"), over: take("decision|over"), because: take("decision|because") };
@@ -2280,6 +2433,8 @@
   });
 
   if (!ui.sections) ui.sections = {};
+  if (!ui.altOpen) ui.altOpen = {};
+  if (!ui.termRevealed) ui.termRevealed = {};
   if (!ui.scroll) ui.scroll = {};
   render();
   send({ type: "ready" });

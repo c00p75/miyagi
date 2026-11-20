@@ -6,14 +6,12 @@
  *   (primer, vocabulary with belts, the decision behind it).
  * - Debugging: when something fails, the learner reads the error first and
  *   their read is compared with the real cause.
- * - Predictions: before the assistant changes anything, the learner names
- *   the files it will touch; the diff says how close they were.
  * - Before you commit: one question about a large staged change.
  * - Decisions, incidents, the skill map, the trend, and their story.
  *
  * The rule throughout is the one the rest of Miyagi follows: the learner goes
  * first, then sees the answer. Guessing before reading, reading the error
- * before the fix, predicting before the diff. Getting it wrong first is not a
+ * before the fix. Getting it wrong first is not a
  * failure of the exercise; it is the exercise.
  *
  * The panel owns the webview and the model calls. The coach decides what to
@@ -35,7 +33,6 @@ import {
   count,
   errorSignature,
   loadGrowth,
-  scorePrediction,
   trend,
   updateGrowth,
   worthCoaching,
@@ -45,7 +42,6 @@ import {
   type Verdict,
 } from "./growth.js";
 import {
-  approachPrompt,
   commitQuestionPrompt,
   debugHintPrompt,
   decisionsPrompt,
@@ -89,7 +85,7 @@ import { trackedFiles, chooseFiles } from "./reports.js";
 
 const COACH_KEY = "miyagi.coach.v1";
 const TOOLS_KEY = "miyagi.coachTools.v1";
-const FIND_IDEAS_OFFER_KEY = "miyagi.findIdeasOffered.v1";
+const NO_AI_OFFER_KEY = "miyagi.noAiOffered.v1";
 
 /** XP for going first. Smaller than an answer recalled cold, larger than nothing. */
 const XP_DEBUG: Record<Verdict, number> = { right: 20, partly: 10, wrong: 5 };
@@ -153,22 +149,6 @@ export interface DebugItem {
   revealed?: number;
 }
 
-export interface PredictionItem {
-  kind: "prediction";
-  key: string;
-  at: string;
-  root: string;
-  predictionId: string;
-  files: string[];
-  approach?: string;
-  hits: string[];
-  misses: string[];
-  surprises: string[];
-  score: number;
-  lessonId?: string;
-  approachResult?: { verdict: Verdict; feedback: string; by: string };
-}
-
 export interface GateItem {
   kind: "gate";
   key: string;
@@ -184,18 +164,7 @@ export interface GateItem {
   noQuestion?: boolean;
 }
 
-export type CoachItem = ToolItem | DebugItem | PredictionItem | GateItem;
-
-interface Predicting {
-  root: string;
-  at: string;
-  /** Why it opened: the assistant got a task, or the learner asked. */
-  trigger: "task" | "manual";
-  /** Locked in, waiting for the change. */
-  locked?: { id: string; files: string[]; approach?: string; at: string };
-  suggestions: string[];
-  all: string[];
-}
+export type CoachItem = ToolItem | DebugItem | GateItem;
 
 interface Saved {
   items: CoachItem[];
@@ -217,8 +186,6 @@ export interface CoachHost {
   lessonFiles(lessonId: string): Promise<ChangedFile[]>;
   /** A lesson's root and files, when it still exists. */
   lessonInfo(lessonId: string): { root: string; files: string[] } | null;
-  /** Ask the panel to walk a lesson, for "why did it touch that?". */
-  walk(lessonId: string): void;
   roots(): string[];
   rootOf(dir: string): string | undefined;
   /** Assistant name for an observation source. */
@@ -329,7 +296,6 @@ export class Coach {
   private items: CoachItem[] = [];
   private tools = new Map<string, ToolItem>();
   private packages: Record<string, string[]> = {};
-  private predicting: Predicting | null = null;
   private recentCommands: Array<{ command: string; at: number; cwd?: string }> = [];
   private debugTimes: number[] = [];
   /** Tokens of open questions the coach asked, and what they belong to. */
@@ -345,7 +311,8 @@ export class Coach {
 
   constructor(private readonly host: CoachHost) {
     const saved = host.context.workspaceState.get<Saved>(COACH_KEY);
-    if (saved?.items) this.items = saved.items.filter((i) => i && i.kind !== "tool").slice(0, MAX_ITEMS);
+    // "prediction" items were saved by versions before 0.6.2.
+    if (saved?.items) this.items = saved.items.filter((i) => i && i.kind !== "tool" && (i.kind as string) !== "prediction").slice(0, MAX_ITEMS);
     this.packages = saved?.packages ?? {};
     const tools = host.context.globalState.get<ToolItem[]>(TOOLS_KEY) ?? [];
     for (const t of tools) if (t && t.toolId) this.tools.set(t.toolId, { ...t, inFeed: t.inFeed && this.isLocalRoot(t.root) });
@@ -393,16 +360,8 @@ export class Coach {
     return {
       items: [...this.items.map((i) => (i.kind === "debug" ? this.debugView(i) : i)), ...feedTools].sort((a, b) => b.at.localeCompare(a.at)),
       tools: [...this.tools.values()].map(toolView),
-      predicting: this.predicting && {
-        root: path.basename(this.predicting.root),
-        trigger: this.predicting.trigger,
-        locked: this.predicting.locked ?? null,
-        suggestions: this.predicting.suggestions,
-        all: this.predicting.all,
-      },
       packages: this.packages,
-      offerFindIdeas:
-        ai && setting<string>("ai.findIdeas", "off") === "off" && !this.host.context.globalState.get<boolean>(FIND_IDEAS_OFFER_KEY),
+      offerAi: !ai && !this.host.context.globalState.get<boolean>(NO_AI_OFFER_KEY),
       ownWords: Object.fromEntries(this.ownWords),
     };
   }
@@ -427,7 +386,6 @@ export class Coach {
       story: [...g.story].reverse().slice(0, 40),
       storyCount: g.story.length,
       gates: g.gates,
-      predictions: g.predictions.filter((p) => p.resolved).length,
       exercise: this.exercise,
       practice: this.story,
       incidentDraft: this.incidentDraft,
@@ -854,106 +812,13 @@ export class Coach {
     );
   }
 
-  /* ---- predictions ---------------------------------------------- */
-
+  /** The project's tracked files, cached for five minutes. */
   private async tracked(root: string): Promise<string[]> {
     const c = this.trackedCache.get(root);
     if (c && Date.now() - c.at < 5 * 60_000) return c.files;
     const files = await trackedFiles(root).catch(() => [] as string[]);
     this.trackedCache.set(root, { at: Date.now(), files });
     return files;
-  }
-
-  /** Opens the "predict it" strip. From a new task the assistant was given, or the learner's button. */
-  async predictOpen(trigger: Predicting["trigger"], dir?: string): Promise<void> {
-    if (trigger === "task") {
-      if (setting<string>("coach.predictions", "onNewTask") !== "onNewTask" || this.host.quiet()) return;
-      // A prediction already locked in is waiting for its change; do not replace it.
-      if (this.predicting?.locked) return;
-    }
-    const root = (dir && this.host.rootOf(dir)) || this.host.roots()[0];
-    if (!root) return;
-    const all = await this.tracked(root);
-    // The files most recently changed are the likeliest to change again.
-    const recent = (await gitChanges(root).catch(() => null))?.changes.map((c) => c.file) ?? [];
-    const fromLessons = this.items.filter((i): i is PredictionItem => i.kind === "prediction").flatMap((i) => [...i.hits, ...i.surprises]);
-    const suggestions = [...new Set([...recent, ...fromLessons])].filter((f) => all.length === 0 || all.includes(f)).slice(0, 6);
-    const chosen = chooseFiles(all, { tree: 300, heads: 0 }).tree;
-    this.predicting = { root, at: new Date().toISOString(), trigger, suggestions, all: chosen };
-    if (trigger === "task") this.host.announce(0, "");
-    this.host.push();
-  }
-
-  async predictLock(files: string[], approach: string): Promise<void> {
-    if (!this.predicting) return;
-    const named = files.map((f) => f.trim().slice(0, 200)).filter(Boolean).slice(0, 12);
-    if (!named.length) return;
-    this.predicting.locked = { id: `p${Date.now().toString(36)}`, files: named, approach: approach.trim().slice(0, 400) || undefined, at: new Date().toISOString() };
-    this.host.push();
-  }
-
-  predictDismiss(): void {
-    this.predicting = null;
-    this.host.push();
-  }
-
-  private async resolvePrediction(root: string, files: readonly string[], lessonId: string | null): Promise<void> {
-    const p = this.predicting;
-    if (!p) return;
-    if (p.root !== root) return;
-    // Changes that land before anything is locked in close the strip quietly: no nag, no score.
-    if (!p.locked) {
-      this.predicting = null;
-      return;
-    }
-    const scored = scorePrediction(p.locked.files, files);
-    const item: PredictionItem = {
-      kind: "prediction",
-      key: `pred:${p.locked.id}`,
-      at: new Date().toISOString(),
-      root,
-      predictionId: p.locked.id,
-      files: p.locked.files,
-      approach: p.locked.approach,
-      hits: scored.hits,
-      misses: scored.misses,
-      surprises: scored.surprises.slice(0, 20),
-      score: scored.score,
-      ...(lessonId ? { lessonId } : {}),
-    };
-    const locked = p.locked;
-    this.predicting = null;
-    this.add(item);
-    await updateGrowth((g) => {
-      g.predictions.push({ id: locked.id, at: locked.at, root, files: locked.files, ...(locked.approach ? { approach: locked.approach } : {}), resolved: scored });
-      count(g, { kind: "prediction", score: scored.score });
-      if (scored.score >= 0.75 && scored.hits.length >= 2) addStory(g, { kind: "prediction", title: "Called where a change would land, before it was made", detail: `Named ${scored.hits.join(", ")} before the assistant wrote a line.` });
-    });
-    await engine.credit("Predicted a change", `${scored.hits.length} of ${locked.files.length} named`, 5 + Math.round(10 * scored.score));
-    this.host.announce(1, `Your prediction: ${scored.hits.length} of ${locked.files.length} right`);
-  }
-
-  async predictApproach(key: string): Promise<void> {
-    const item = this.item(key);
-    if (item?.kind !== "prediction" || !item.approach) return;
-    await this.host.ask(
-      `${key}|approach`,
-      async () => {
-        const files = item.lessonId ? await this.host.lessonFiles(item.lessonId) : [];
-        if (!files.length) return "The change's code could not be found any more.";
-        return approachPrompt({ approach: item.approach ?? "", files, depth: await this.host.depth() });
-      },
-      async (reply, by) => {
-        const r = parseAttemptFeedback(reply);
-        if (!r) return "The AI's reply could not be read. Try again.";
-        item.approachResult = { ...r, by };
-        await updateGrowth((g) => {
-          const p = g.predictions.find((x) => x.id === item.predictionId);
-          if (p?.resolved) p.resolved.approachVerdict = r.verdict;
-        });
-        this.save();
-      },
-    );
   }
 
   /* ---- commit check --------------------------------------------- */
@@ -1123,7 +988,6 @@ export class Coach {
 
   /** Every change the watcher reads, before or without a lesson. */
   async changes(root: string, changes: readonly FileChange[], lessonId: string | null): Promise<void> {
-    await this.resolvePrediction(root, changes.map((c) => c.file), lessonId);
     if (this.host.quiet()) return;
     if (setting("coach.tools", true)) {
       const commands = this.recentCommands.filter((c) => Date.now() - c.at < 15 * 60_000).map((c) => c.command);
@@ -1150,10 +1014,6 @@ export class Coach {
 
   async observed(observations: readonly Observation[]): Promise<void> {
     for (const o of observations) {
-      if (o.kind === "prompt") {
-        await this.predictOpen("task", o.cwd);
-        continue;
-      }
       if (o.kind !== "command") continue;
       this.recentCommands.push({ command: o.command, at: Date.parse(o.at) || Date.now(), cwd: o.cwd });
       if (o.failed && o.error) await this.failed({ command: o.command, error: o.error, cwd: o.cwd, by: this.host.sourceName(o.source) || "your assistant" });
@@ -1321,7 +1181,7 @@ export class Coach {
       ...section("Decisions I can explain", ["decision"]),
       ...section("Things that broke, and what I learned", ["incident", "debug"]),
       ...section("Ideas I hold", ["belt"]),
-      ...section("Built without the AI", ["turn", "prediction", "check"]),
+      ...section("Built without the AI", ["turn", "check"]),
       g.decisions.length ? ["## Decision log", "", ...g.decisions.map((d) => `### ${d.title}\n\n- Chose: ${d.chose}${d.over.length ? `\n- Over: ${d.over.join(", ")}` : ""}\n- Because: ${d.because}${d.tradeoff ? `\n- Given up: ${d.tradeoff}` : ""}${d.revisit ? `\n- Revisit when: ${d.revisit}` : ""}\n`)].join("\n") : "",
     ]
       .flat()
@@ -1345,15 +1205,14 @@ export class Coach {
 
   /* ---- odds and ends --------------------------------------------- */
 
-  async offerFindIdeas(accept: boolean): Promise<void> {
-    await this.host.context.globalState.update(FIND_IDEAS_OFFER_KEY, true);
-    if (accept) await vscode.workspace.getConfiguration("miyagi").update("ai.findIdeas", "whenNothingFound", vscode.ConfigurationTarget.Global);
+  /**
+   * The banner shown when no AI is available. Choosing one hides it, because
+   * the banner only shows without an AI; "use built-in ideas" hides it for good.
+   */
+  async aiOffer(accept: boolean): Promise<void> {
+    if (accept) return void (await vscode.commands.executeCommand("miyagi.chooseAi"));
+    await this.host.context.globalState.update(NO_AI_OFFER_KEY, true);
     this.host.push();
-  }
-
-  walk(key: string): void {
-    const item = this.item(key);
-    if (item?.kind === "prediction" && item.lessonId) this.host.walk(item.lessonId);
   }
 
   dismiss(key: string): void {
@@ -1372,7 +1231,6 @@ export class Coach {
     this.items = [];
     this.packages = {};
     for (const t of this.tools.values()) t.inFeed = false;
-    this.predicting = null;
     this.save();
   }
 

@@ -1,5 +1,5 @@
 /**
- * The coach's pure parts: tool detection and vocabulary, predictions, error
+ * The coach's pure parts: tool detection and vocabulary, error
  * reading, the growth store and its trend, the skill map, the new prompts'
  * parsers, and the engine's answers in the learner's own words.
  */
@@ -31,9 +31,7 @@ import {
   errorSignature,
   forgetGrowth,
   loadGrowth,
-  namesFile,
   normaliseGrowth,
-  scorePrediction,
   trend,
   updateGrowth,
   worthCoaching,
@@ -152,27 +150,6 @@ test("a tool a model describes is validated before it becomes a lesson", () => {
   assert.equal(ok.id, "inngest");
   assert.equal(ok.builtIn, false);
   assert.equal(registerTool(ok).length, 3);
-});
-
-/* ---- predictions ------------------------------------------------- */
-
-test("a prediction names files by path, by end of path, by folder or by bare name", () => {
-  assert.ok(namesFile("src/api/pay.ts", "src/api/pay.ts"));
-  assert.ok(namesFile("api/pay.ts", "src/api/pay.ts"));
-  assert.ok(namesFile("src/api", "src/api/pay.ts"));
-  assert.ok(namesFile("checkout", "app/checkout.tsx"));
-  assert.ok(!namesFile("pay", "src/api/payment.ts"));
-  assert.ok(!namesFile("src/ap", "src/api/pay.ts"));
-});
-
-test("scoring counts hits, misses and surprises, and surprises lower the score", () => {
-  const r = scorePrediction(["src/api", "README.md"], ["src/api/pay.ts", "src/api/refund.ts", "src/db/schema.ts"]);
-  assert.deepEqual(r.hits, ["src/api"]);
-  assert.deepEqual(r.misses, ["README.md"]);
-  assert.deepEqual(r.surprises, ["src/db/schema.ts"]);
-  assert.equal(r.score, 1 / 3);
-  assert.equal(scorePrediction(["a.ts"], ["a.ts"]).score, 1);
-  assert.equal(scorePrediction([], ["a.ts"]).score, 0);
 });
 
 /* ---- reading errors ------------------------------------------------ */

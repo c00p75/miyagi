@@ -53,7 +53,7 @@ import { skillMap } from "../../src/skills.js";
     skipped: 0,
     quiet: null,
     meter: "7 AI calls this week, about 9,400 tokens.",
-    findIdeas: "off",
+    findIdeas: "whenNothingFound",
     recallFirst: true,
     explainFirst: true,
     fadeSupport: true,
@@ -95,13 +95,11 @@ import { skillMap } from "../../src/skills.js";
     signature: "x", repeats: 1, picked: 3,
   };
   const debugDone = { ...debug, key: "debug:2", picked: 3, guess: "getUser gets no user back from the db so .id blows up", result: { verdict: "right", feedback: "You found the line and the reason: the lookup returns undefined for an unknown id. The test passes an id that was never inserted.", cause: "getUser reads `.id` from the result of `db.users.find`, which is undefined when no user matches.", where: { file: "src/api/users.ts", line: 14 }, fix: "Return a 404 when the lookup finds nothing, before reading its id.", clue: 3, habit: "Find the first frame in your own files, then ask what value that line assumed was there.", by: "Claude Code (haiku)" } };
-  const prediction = { kind: "prediction", key: "pred:1", at: new Date(now - 120_000).toISOString(), root, predictionId: "p1", files: ["src/api/pay.ts", "src/lib/stripe.ts", "README.md"], approach: "A new route that creates a Checkout Session", hits: ["src/api/pay.ts", "src/lib/stripe.ts"], misses: ["README.md"], surprises: ["src/db/schema.ts"], score: 0.5, lessonId: lesson.id };
   const gate = { kind: "gate", key: "gate:1", at: new Date(now - 10_000).toISOString(), root, files: ["src/api/pay.ts", "src/lib/stripe.ts", "src/db/schema.ts"], lines: 142, signature: "s" };
   Object.assign(state, {
-    coach: { items: [gate, debug, prediction], tools: [tool], predicting: null, packages: { [lesson.id]: ["left-pad"] }, offerFindIdeas: false, ownWords: {} },
+    coach: { items: [gate, debug], tools: [tool], packages: { [lesson.id]: ["left-pad"] }, offerAi: false, ownWords: {} },
     lessonDecisions: {},
     explainBack: true,
-    predictions: "onNewTask",
   });
 
   const g = emptyGrowth();
@@ -127,7 +125,6 @@ import { skillMap } from "../../src/skills.js";
     story: [...g.story].reverse(),
     storyCount: g.story.length,
     gates: { asked: 3, right: 2 },
-    predictions: 4,
     exercise: {},
     practice: {},
     incidentDraft: {},

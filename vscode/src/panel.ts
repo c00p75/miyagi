@@ -63,6 +63,23 @@ import { parseTopic } from "./topics.js";
 import type { Scan } from "./watch.js";
 import { Coach } from "./coach.js";
 import { addStory, count, updateGrowth } from "./growth.js";
+import {
+  alternativesPrompt,
+  glossaryPrompt,
+  parseAlternatives,
+  parseGlossary,
+  type Alternatives,
+} from "./prompts.js";
+import {
+  addTerms,
+  domainFiles,
+  loadGlossary,
+  registerTerm,
+  termsFor,
+  updateGlossary,
+  type Glossary,
+} from "./glossary.js";
+import { chooseFiles, trackedFiles } from "./reports.js";
 
 const FEED_KEY = "miyagi.feed.v1";
 const TOPIC_KEY = "miyagi.topic.v1";
@@ -110,6 +127,8 @@ interface CardExtra {
   ownCard?: { saved?: string; problem?: string };
   /** The assistant's own words when it wrote the file, or a note that none were found. */
   why?: { text: string; at: string | null } | { missing: true };
+  /** "Why not another way?": the learner's own idea first, then the real options. */
+  alternatives?: Alternatives & { by: string; guess: string; saved?: boolean };
 }
 
 interface LessonExtra {
@@ -158,6 +177,12 @@ type Inbound =
   | { type: "bugGuess"; key: string; line: number }
   | { type: "bugReveal"; key: string }
   | { type: "contrastPick"; key: string; pick: "a" | "b" }
+  | { type: "alternatives"; key: string; guess?: string }
+  | { type: "saveAlternative"; key: string }
+  | { type: "findTerms"; lesson?: string; root?: string }
+  | { type: "termGuess"; id: string; text: string }
+  | { type: "termReview"; id: string }
+  | { type: "termRemove"; id: string }
   | { type: "ownCard"; key: string; question: string; answer: string; wrong: string[]; why: string }
   | { type: "turn"; lesson: string }
   | { type: "turnDone"; lesson: string }
@@ -173,7 +198,7 @@ type Inbound =
   | { type: "command"; id: string }
   | { type: "openLink"; url: string }
   | { type: "copy"; text: string }
-  // The coach: tools, debugging, predictions, commit checks, decisions, growth.
+  // The coach: tools, debugging, commit checks, decisions, growth.
   | { type: "learnAbout"; text: string }
   | { type: "toolGuess"; key: string; text: string }
   | { type: "toolPrimer"; key: string }
@@ -189,15 +214,10 @@ type Inbound =
   | { type: "debugHint"; key: string; step: Hint }
   | { type: "debugSelf"; key: string; right: boolean }
   | { type: "debugLesson"; key: string }
-  | { type: "predictOpen" }
-  | { type: "predictLock"; files: string[]; approach: string }
-  | { type: "predictDismiss" }
-  | { type: "predictApproach"; key: string }
-  | { type: "predictWalk"; key: string }
   | { type: "gateAsk"; key: string }
   | { type: "dismissItem"; key: string }
   | { type: "answerOwn"; token: string; text: string; confidence?: string }
-  | { type: "findIdeasOffer"; accept: boolean }
+  | { type: "aiOffer"; accept: boolean }
   | { type: "grow" }
   | { type: "incident"; text: string }
   | { type: "skillExercise"; id: string }
@@ -277,6 +297,11 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.findMatchForeground"),
   });
 
+  /** The glossary as last read from disk; reloaded after every change to it. */
+  private glossary: Glossary = { version: 1, terms: [] };
+  /** Terms found in one change, by lesson id, so its page can list them. */
+  private readonly lessonTerms: Record<string, { ids: string[]; by: string }> = {};
+
   constructor(private readonly deps: PanelDeps) {
     const saved = deps.context.workspaceState.get<SavedFeed>(FEED_KEY);
     if (saved?.lessons) {
@@ -286,6 +311,10 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       this.lastSeen = saved.lastSeen ?? {};
     }
     this.topic = parseTopic(deps.context.globalState.get<string>(TOPIC_KEY));
+    void loadGlossary().then((g) => {
+      this.glossary = g;
+      void this.pushState();
+    });
     this.coach = new Coach({
       context: deps.context,
       ask: (slot, build, use) => this.ask(slot, build, use),
@@ -302,10 +331,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       lessonInfo: (id) => {
         const lesson = this.lesson(id);
         return lesson ? { root: lesson.root, files: lesson.files } : null;
-      },
-      walk: (id) => {
-        this.post({ type: "openLesson", lesson: id });
-        void this.walk(id);
       },
       roots: () => this.deps.roots(),
       rootOf: (dir) => this.deps.rootOf(dir),
@@ -472,7 +497,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       skipped,
       quiet: quiet.quiet ? { why: quiet.why, until: quiet.why === "paused" ? quiet.until.toISOString() : null } : null,
       meter: describeMeter(this.meter()),
-      findIdeas: setting<string>("ai.findIdeas", "off"),
+      findIdeas: setting<string>("ai.findIdeas", "whenNothingFound"),
       recallFirst: setting("recallFirst", true),
       explainFirst: setting("explainFirst", true),
       fadeSupport: setting("fadeSupport", true),
@@ -483,8 +508,9 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       turnsLeft: this.turnsProposed === 0,
       coach: await this.coach.view(),
       lessonDecisions: this.coach.lessonDecisionView(),
+      glossary: this.glossaryView(),
+      lessonTerms: this.lessonTerms,
       explainBack: setting("explainBack", true) && Boolean(resolved.provider),
-      predictions: setting<string>("coach.predictions", "onNewTask"),
     });
   }
 
@@ -819,6 +845,168 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         this.extra(key).contrast = { question: pair.question, a: pair.a, b: pair.b, by };
       },
     );
+  }
+
+  /* ---- why not another way? ------------------------------------ */
+
+  /** The other ways this idea could have been written here. The learner's guess goes first, if they gave one. */
+  private async alternatives(key: string, guess: string): Promise<void> {
+    const card = this.card(key);
+    if (!card) return;
+    const own = guess.trim().slice(0, 600);
+    await this.ask(
+      `${key}|alternatives`,
+      async () => {
+        const excerpt = await this.excerpt(card);
+        if (!excerpt) return this.needsCode;
+        return alternativesPrompt({ title: card.title, file: card.file, excerpt, guess: own, depth: (await engine.status()).depth });
+      },
+      async (reply, by) => {
+        const found = parseAlternatives(reply);
+        if (!found) return "The AI's reply could not be read. Try again.";
+        this.extra(key).alternatives = { ...found, by, guess: own };
+        // Thinking of another way before being shown one is going first.
+        if (own) await updateGrowth((g) => count(g, { kind: "first" }));
+      },
+    );
+  }
+
+  /** Keeps the choice in the decision log, where it comes back on review. */
+  private async saveAlternative(key: string): Promise<void> {
+    const alt = this.extras[key]?.alternatives;
+    const card = this.card(key);
+    if (!alt || alt.saved || !card) return;
+    const problem = await this.coach.saveDecision({
+      typed: {
+        title: `${card.title} in ${path.basename(card.file)}`,
+        chose: alt.chosen,
+        over: alt.alternatives.map((a) => a.name).join(", "),
+        because: [alt.why, alt.verdict].filter(Boolean).join(" "),
+      },
+    });
+    if (problem) {
+      this.errors[`${key}|alternatives`] = problem;
+    } else {
+      alt.saved = true;
+    }
+    void this.pushState();
+  }
+
+  /* ---- the project's glossary ------------------------------------ */
+
+  /** Every open project's terms, with what the panel needs to list and open them. */
+  private glossaryView(): { projects: Array<{ name: string; root: string }>; terms: unknown[] } {
+    const roots = this.deps.roots();
+    const projects = roots.map((root) => ({ name: path.basename(root), root }));
+    const names = new Set(projects.map((p) => p.name));
+    const terms = [...names].flatMap((name) =>
+      termsFor(this.glossary, name).map((t) => ({
+        id: t.id,
+        term: t.term,
+        meaning: t.meaning,
+        inProject: t.inProject,
+        where: t.where,
+        related: t.related,
+        project: t.project,
+        root: t.root,
+        by: t.by,
+        guess: t.guess ?? "",
+        onReview: Boolean(t.conceptId),
+        canReview: Boolean(t.question),
+      })),
+    );
+    return { projects, terms };
+  }
+
+  private async reloadGlossary(): Promise<void> {
+    this.glossary = await loadGlossary();
+    void this.pushState();
+  }
+
+  /** Asks the learner's AI for the words that belong to this project, from a change or from the code itself. */
+  private async findTerms(from: { lesson?: string; root?: string }): Promise<void> {
+    const lesson = from.lesson ? this.lesson(from.lesson) : undefined;
+    const root = lesson?.root ?? from.root ?? this.deps.roots()[0];
+    if (!root) return;
+    const project = path.basename(root);
+    const slot = lesson ? `${lesson.id}|terms` : `glossary|${project}`;
+    let shown: string[] = [];
+    await this.ask(
+      slot,
+      async () => {
+        const tracked = await trackedFiles(root).catch(() => [] as string[]);
+        let files: ChangedFile[];
+        if (lesson) {
+          files = await this.changedFiles(lesson);
+        } else {
+          files = [];
+          for (const file of domainFiles(tracked, 6)) {
+            const head = await engine.headOf(root, file, 80);
+            if (head?.trim()) files.push({ file, excerpt: head });
+          }
+        }
+        if (!files.length) {
+          return lesson
+            ? "Miyagi could not find the code for this change any more."
+            : "Miyagi found no model, schema or type files to read. Open the project's main folder and try again.";
+        }
+        shown = [...new Set([...files.map((f) => f.file), ...tracked])];
+        return glossaryPrompt({
+          files,
+          tree: lesson ? [] : chooseFiles(tracked, { tree: 120, heads: 0 }).tree,
+          known: termsFor(this.glossary, project).map((t) => t.term),
+          depth: (await engine.status()).depth,
+        });
+      },
+      async (reply, by) => {
+        const found = parseGlossary(reply, shown, termsFor(this.glossary, project).map((t) => t.term));
+        if (!found) return "The AI's reply could not be read. Try again.";
+        const added = await updateGlossary((g) => addTerms(g, found, { project, root, by }));
+        if (lesson) this.lessonTerms[lesson.id] = { ids: added.map((t) => t.id), by };
+        await this.reloadGlossary();
+        if (!added.length) {
+          return lesson
+            ? `${by} found no new project words in this change.`
+            : `${by} found no new project words. The ones it knows are already in your glossary.`;
+        }
+      },
+    );
+  }
+
+  private async termGuess(id: string, text: string): Promise<void> {
+    const guess = text.trim().slice(0, 600);
+    if (!guess) return;
+    await updateGlossary((g) => {
+      const t = g.terms.find((x) => x.id === id);
+      if (t && !t.guess) t.guess = guess;
+    });
+    await updateGrowth((g) => count(g, { kind: "first" }));
+    await this.reloadGlossary();
+  }
+
+  /** Puts a term on spaced review. Only ever because the learner asked. */
+  private async termReview(id: string): Promise<void> {
+    const t = this.glossary.terms.find((x) => x.id === id);
+    if (!t || t.conceptId) return;
+    const conceptId = registerTerm(t);
+    if (!conceptId) {
+      this.errors[`term|${id}`] = "The question your AI wrote for this word did not pass Miyagi's quality check, so it cannot go on review. Remove the word and find it again for a new question.";
+      return void this.pushState();
+    }
+    await engine.adoptIdeas([conceptId], `the ${t.project} glossary`);
+    await updateGlossary((g) => {
+      const x = g.terms.find((y) => y.id === id);
+      if (x) x.conceptId = conceptId;
+    });
+    await this.reloadGlossary();
+  }
+
+  private async termRemove(id: string): Promise<void> {
+    await updateGlossary((g) => {
+      g.terms = g.terms.filter((t) => t.id !== id);
+    });
+    for (const entry of Object.values(this.lessonTerms)) entry.ids = entry.ids.filter((x) => x !== id);
+    await this.reloadGlossary();
   }
 
   private contrastPick(key: string, pick: "a" | "b"): void {
@@ -1162,7 +1350,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     if (this.heartbeat && this.heartbeat.root === root) this.heartbeat.taught += cards;
     await this.coach.changes(root, changes, lesson?.id ?? null);
 
-    const mode = setting<string>("ai.findIdeas", "off");
+    const mode = setting<string>("ai.findIdeas", "whenNothingFound");
     if (!repeat && (mode === "always" || (mode === "whenNothingFound" && !cards))) {
       void this.findIdeas(root, source, changes);
     }
@@ -1454,6 +1642,18 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return this.bugGuess(message.key, null);
         case "contrastPick":
           return this.contrastPick(message.key, message.pick === "b" ? "b" : "a");
+        case "alternatives":
+          return void (await this.alternatives(message.key, String(message.guess ?? "")));
+        case "saveAlternative":
+          return void (await this.saveAlternative(message.key));
+        case "findTerms":
+          return void (await this.findTerms({ lesson: message.lesson, root: message.root }));
+        case "termGuess":
+          return void (await this.termGuess(String(message.id), String(message.text ?? "")));
+        case "termReview":
+          return void (await this.termReview(String(message.id)));
+        case "termRemove":
+          return void (await this.termRemove(String(message.id)));
         case "ownCard":
           return void (await this.ownCard(message.key, {
             question: String(message.question ?? ""),
@@ -1511,22 +1711,12 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.coach.debugSelf(message.key, message.right === true));
         case "debugLesson":
           return this.post({ type: "incidentPrefill", text: this.coach.incidentFrom(message.key) });
-        case "predictOpen":
-          return void (await this.coach.predictOpen("manual"));
-        case "predictLock":
-          return void (await this.coach.predictLock(Array.isArray(message.files) ? message.files.map(String) : [], String(message.approach ?? "")));
-        case "predictDismiss":
-          return this.coach.predictDismiss();
-        case "predictApproach":
-          return void (await this.coach.predictApproach(message.key));
-        case "predictWalk":
-          return this.coach.walk(message.key);
         case "gateAsk":
           return void (await this.coach.gateAsk(message.key));
         case "dismissItem":
           return this.coach.dismiss(message.key);
-        case "findIdeasOffer":
-          return void (await this.coach.offerFindIdeas(message.accept === true));
+        case "aiOffer":
+          return void (await this.coach.aiOffer(message.accept === true));
         case "grow":
           return void (await this.coach.refreshGrow());
         case "incident":

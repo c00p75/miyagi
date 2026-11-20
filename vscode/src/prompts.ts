@@ -1005,22 +1005,6 @@ export function recallGradePrompt(req: { idea: string; question: string; truth: 
   ]);
 }
 
-export function approachPrompt(req: { approach: string; files: readonly ChangedFile[]; depth: Depth }): Prompt {
-  return prompt([
-    `Before my AI assistant made this change, I predicted how it would do it: "${req.approach.slice(0, 500)}"`,
-    "",
-    changeBlock(req.files),
-    "",
-    "Rules:",
-    '- verdict: "right" if the change took essentially my approach, "partly" if some of it, "wrong" if it went another way.',
-    "- feedback: at most 50 words. Where my prediction matched, and the one difference most worth understanding, with why the change did it that way.",
-    `- ${DEPTH_NOTE[req.depth]}`,
-    "",
-    JSON_ONLY,
-    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
-  ]);
-}
-
 /* ------------------------------------------------------------------ *
  * Blind spots: one exercise for a skill not met yet
  * ------------------------------------------------------------------ */
@@ -1085,4 +1069,155 @@ export function storyFeedbackPrompt(req: { question: string; answer: string; ent
     JSON_ONLY,
     '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
   ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Why not another way? The road not taken, for one idea in one place
+ * ------------------------------------------------------------------ */
+
+export interface Alternative {
+  name: string;
+  /** A few lines showing the other way, or "" when words say it better. */
+  sketch: string;
+  /** What this way would have done better here. */
+  wins: string;
+  /** What it would have cost here. */
+  costs: string;
+  /** When this would be the better choice. */
+  when: string;
+}
+
+export interface Alternatives {
+  /** The approach the code took, in a few words. */
+  chosen: string;
+  /** Why it fits this code. */
+  why: string;
+  alternatives: Alternative[];
+  /** One sentence: was the choice right for this project? */
+  verdict: string;
+  /** Feedback on the learner's own idea, or "" when they skipped. */
+  onGuess: string;
+}
+
+export function alternativesPrompt(req: { title: string; file: string; excerpt: string; guess: string; depth: Depth }): Prompt {
+  const guess = req.guess.trim().slice(0, 600);
+  return prompt([
+    `This code from ${req.file} uses "${req.title}". An AI assistant wrote it for my project. Show me the other ways it could have been done, and why this one was picked.`,
+    fenced(req.excerpt),
+    "",
+    guess ? `Before asking, I guessed another way myself: "${guess}"` : "",
+    "",
+    "Rules:",
+    "- chosen: at most 10 words naming the approach this code takes.",
+    "- why: at most 40 words on why it suits THIS code, citing a line number or a fragment.",
+    "- alternatives: exactly 2 real alternatives a competent developer might have picked here. Not straw men, not the same thing renamed.",
+    "- For each: name (at most 8 words); sketch (at most 8 lines of code in the same language showing the other way, or an empty string if code would not help); wins (at most 30 words, what it does better here); costs (at most 30 words, what it would cost in this project); when (at most 20 words, the situation where it would be the better pick).",
+    "- verdict: one sentence, at most 30 words, on whether the chosen way was the right call for this project, and what would change that.",
+    guess
+      ? "- onGuess: at most 40 words on my guess. Say plainly whether it would work here and what it would trade, as one of the real options or not. No praise words."
+      : '- onGuess: "".',
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"chosen": "...", "why": "...", "alternatives": [{"name": "...", "sketch": "...", "wins": "...", "costs": "...", "when": "..."}], "verdict": "...", "onGuess": "..."}',
+  ]);
+}
+
+/** Null unless there is a chosen way, a reason, and at least one usable alternative. */
+export function parseAlternatives(text: string): Alternatives | null {
+  const o = obj(extractJson(text));
+  const chosen = str(o.chosen, 120);
+  const why = str(o.why, 500);
+  const seen = new Set<string>([chosen.toLowerCase()]);
+  const alternatives: Alternative[] = [];
+  for (const raw of Array.isArray(o.alternatives) ? o.alternatives : []) {
+    const a = obj(raw);
+    const name = str(a.name, 100);
+    const costs = str(a.costs, 400);
+    if (!name || !costs || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    const sketch = str(a.sketch, 1_200)
+      .replace(/^```[a-zA-Z0-9]*\n?/, "")
+      .replace(/\n?```$/, "")
+      .split("\n")
+      .slice(0, 10)
+      .join("\n");
+    alternatives.push({ name, sketch, wins: str(a.wins, 400), costs, when: str(a.when, 300) });
+  }
+  if (!chosen || !why || !alternatives.length) return null;
+  return { chosen, why, alternatives: alternatives.slice(0, 2), verdict: str(o.verdict, 400), onGuess: str(o.onGuess, 500) };
+}
+
+/* ------------------------------------------------------------------ *
+ * The project's own glossary
+ * ------------------------------------------------------------------ */
+
+export interface GlossaryTerm {
+  term: string;
+  /** What the word means, in plain language. */
+  meaning: string;
+  /** How this codebase uses it: the type, table or function it lives in. */
+  inProject: string;
+  /** Files it appears in, from the files shown. */
+  where: string[];
+  /** Other terms it connects to. */
+  related: string[];
+  question: OwnQuestion | null;
+}
+
+export function glossaryPrompt(req: { files: readonly ChangedFile[]; tree: readonly string[]; known: readonly string[]; depth: Depth }): Prompt {
+  return prompt([
+    "I am building a project with an AI assistant. Find the words that belong to THIS project's world, the ones a new person on the team would have to learn, and explain each as it is used here.",
+    "",
+    req.tree.length ? "Files in the project:\n" + req.tree.slice(0, 120).join("\n") : "",
+    "",
+    changeBlock(req.files),
+    "",
+    req.known.length ? `Terms already in my glossary (do not repeat them): ${req.known.slice(0, 80).join(", ")}` : "",
+    "",
+    "Rules:",
+    "- A term is a word from the project's domain or a name this project coined: a business concept (an invoice, a tenant, a settlement), a role, a status, or a project-specific type or table name.",
+    "- Not programming concepts (async, state, endpoint, middleware), not library or tool names (React, Prisma, Stripe), not file names, not generic words like user or data unless this project gives them a special meaning.",
+    "- At most 8 terms, most important first. If the code shows none, return an empty list. That is a good answer.",
+    "- For each: term (at most 4 words, as written in the code or as people would say it); meaning (at most 30 words, plain language, what it is in the real world of this product); inProject (at most 40 words, how the code represents it: the type, table, field or function, and what it holds); where (1 to 3 file paths, copied exactly from the files shown); related (0 to 3 other terms from your list or my glossary).",
+    "- question: one multiple-choice question about what the term means in this project, with the right answer and three wrong ones a newcomer might believe, all of similar length, and a one-sentence explanation.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"terms": [{"term": "...", "meaning": "...", "inProject": "...", "where": ["..."], "related": ["..."], "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}]}',
+  ]);
+}
+
+/**
+ * Terms with their claims checked: files must be ones that were shown, and a
+ * term already in the glossary is dropped rather than duplicated.
+ */
+export function parseGlossary(text: string, knownFiles: readonly string[], existing: readonly string[]): GlossaryTerm[] | null {
+  const o = obj(extractJson(text));
+  if (!Array.isArray(o.terms)) return null;
+  const files = new Set(knownFiles);
+  const taken = new Set(existing.map((t) => t.toLowerCase()));
+  const out: GlossaryTerm[] = [];
+  for (const raw of o.terms) {
+    const t = obj(raw);
+    const term = str(t.term, 60);
+    const meaning = str(t.meaning, 400);
+    if (!term || !meaning || taken.has(term.toLowerCase())) continue;
+    taken.add(term.toLowerCase());
+    const where = (Array.isArray(t.where) ? t.where : []).map((w) => str(w, 300)).filter((w) => files.has(w)).slice(0, 3);
+    const related = (Array.isArray(t.related) ? t.related : [])
+      .map((r) => str(r, 60))
+      .filter((r) => r && r.toLowerCase() !== term.toLowerCase())
+      .slice(0, 3);
+    out.push({
+      term,
+      meaning,
+      inProject: str(t.inProject, 500),
+      where,
+      related,
+      question: t.question ? parseOwnQuestion(JSON.stringify(t.question)) : null,
+    });
+    if (out.length >= 8) break;
+  }
+  return out;
 }

@@ -1143,7 +1143,7 @@ export function bringForward(conceptId: string): Promise<boolean> {
   );
 }
 
-/** XP for something done without the assistant, or before it: a read error, a prediction, a commit check. */
+/** XP for something done without the assistant, or before it: a read error, a commit check. */
 export function credit(label: string, detail: string, xp: number): Promise<number> {
   return run(
     () => {

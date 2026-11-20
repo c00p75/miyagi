@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **Why not another way?** A button on an idea's page. You name another way the code could have been written, or skip, and your AI shows two real alternatives: a short sketch, what each does better, what it would cost in your project, and when it would be the better pick, plus a verdict on the choice that was made and a note on your own idea. One click saves it to your decision log, where it comes back on review.
+- **Your project's glossary.** The words that belong to your project, found by your AI from its models, schemas and types (the Dojo's **Find words in this project**) or from one change (**Project words in it**). Each word has a page: guess what it means first, then see the meaning, how the code represents it, the files it lives in, and related words. Add a word to your review and its question comes back like any other. Words are kept per project in `~/.miyagi/glossary.json`, and files the AI was not shown are never listed.
+
 ## 0.5.1
 
 ### Removed
