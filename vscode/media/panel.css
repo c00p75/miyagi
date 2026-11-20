@@ -1164,6 +1164,17 @@ button.chip:hover:not(:disabled) {
 
 /* ---- the Now list ----------------------------------------------- */
 
+:root {
+  /*
+   * A tile is a thin wash of the text colour over whatever the side bar is.
+   * Theme surfaces like editorWidget are the same colour as the side bar in
+   * some themes, which would make the tiles vanish; a wash always shows.
+   */
+  --tile: color-mix(in srgb, var(--vscode-foreground, #888) 6%, transparent);
+  --tile-hover: color-mix(in srgb, var(--vscode-foreground, #888) 10%, transparent);
+  --tile-open: var(--vscode-list-inactiveSelectionBackground, color-mix(in srgb, var(--vscode-foreground, #888) 14%, transparent));
+}
+
 .day > h3 {
   margin: 0 0 4px;
   font-size: 0.85em;
@@ -1177,17 +1188,26 @@ button.chip:hover:not(:disabled) {
   margin-bottom: 16px;
 }
 
+/*
+ * Filled tiles: each idea sits on its own slightly lighter surface with a
+ * small gap between, and no borders. The open tile takes the editor's
+ * selection colour, so it reads as chosen in any theme. High-contrast themes
+ * get a border back, because there a fill alone is not a boundary.
+ */
 .rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
 }
 
-.row + .row {
-  border-top: 1px solid var(--border);
+.row {
+  border-radius: var(--radius);
+  background: var(--tile);
+  overflow: hidden;
+  border: 1px solid var(--vscode-contrastBorder, transparent);
 }
 
 .row-head {
@@ -1204,11 +1224,17 @@ button.chip:hover:not(:disabled) {
 }
 
 .row-head:hover:not(:disabled) {
-  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+  background: var(--tile-hover);
 }
 
-.row.open .row-head {
-  background: var(--vscode-list-inactiveSelectionBackground, rgba(128, 128, 128, 0.12));
+.row.open {
+  background: var(--tile-open);
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, transparent));
+}
+
+.row.open .row-head,
+.row.open .row-head:hover:not(:disabled) {
+  background: none;
 }
 
 .row-main {
@@ -1256,7 +1282,6 @@ button.chip:hover:not(:disabled) {
 
 .preview {
   padding: 0 10px 10px 34px;
-  background: var(--vscode-list-inactiveSelectionBackground, rgba(128, 128, 128, 0.12));
 }
 
 .preview .hook {
