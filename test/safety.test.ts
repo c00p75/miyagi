@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { screenDanger, sanitizeForSpeech, titleForLevel } = await import("../src/miyagi.js");
+const { screenDanger, titleForLevel } = await import("../src/miyagi.js");
 
 test("catastrophic commands are flagged", () => {
   const mustFlag = [
@@ -52,33 +52,6 @@ test("ordinary teaching commands are not flagged", () => {
 test("--force-with-lease is allowed where --force is not", () => {
   assert.ok(screenDanger("git push --force").length > 0);
   assert.deepEqual(screenDanger("git push --force-with-lease"), []);
-});
-
-test("speech text drops markdown, code, URLs and emoji", () => {
-  const spoken = sanitizeForSpeech(
-    "## Heading\n" +
-      "Run `ls -lah` then read [the docs](https://example.com/a?b=c).\n" +
-      "```bash\nrm -rf /\n```\n" +
-      "- **bold** and _italic_ 🔥🥋\n" +
-      "> quoted\n",
-  );
-  assert.ok(!spoken.includes("#"), "no heading marks");
-  assert.ok(!spoken.includes("`"), "no backticks");
-  assert.ok(!spoken.includes("http"), "no raw URLs");
-  assert.ok(!spoken.includes("**"), "no bold marks");
-  assert.ok(!/[\u{1F300}-\u{1FAFF}]/u.test(spoken), "no emoji");
-  assert.ok(spoken.includes("the docs"), "link text survives");
-  assert.ok(spoken.includes("code block"), "fenced code becomes a spoken noun");
-});
-
-test("speech output is bounded", () => {
-  assert.ok(sanitizeForSpeech("word ".repeat(5000)).length <= 1200);
-});
-
-test("empty and whitespace input yields nothing to speak", () => {
-  assert.equal(sanitizeForSpeech(""), "");
-  assert.equal(sanitizeForSpeech("   \n\t "), "");
-  assert.equal(sanitizeForSpeech("```\ncode\n```").includes("code block"), true);
 });
 
 test("titles unlock at their level boundaries", () => {

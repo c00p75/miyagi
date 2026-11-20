@@ -25,7 +25,7 @@ const exists = (p: string) => fs.stat(p).then(() => true).catch(() => false);
 
 async function ready(client: TestClient): Promise<void> {
   await client.initialize();
-  await client.call("quick_config", { mode: "drill", voice_enabled: false });
+  await client.call("quick_config", { mode: "drill" });
 }
 
 /** Waits for a fire-and-forget write, without pinning a fixed sleep in the test. */
@@ -385,11 +385,11 @@ test("nothing but MCP frames ever reaches stdout", async () => {
   await client.initialize();
   try {
     // The client throws on any non-JSON stdout line, so exercising the noisy
-    // paths — diagnostics, warnings, speech — is the assertion.
+    // paths, diagnostics and warnings, is the assertion.
     await client.call("run_teaching_command", { command: "ls /definitely/not/here", cwd: work });
     await client.call("quick_config", { roadmap_name: "Nonexistent Track" });
     await client.call("verify_step", { cwd: work });
-    await client.call("get_user_stats", { speak: true });
+    await client.call("get_user_stats", {});
     assert.ok(client.stderr.join("").length > 0, "diagnostics went to stderr, where they belong");
   } finally {
     client.close();

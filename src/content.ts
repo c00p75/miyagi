@@ -23,7 +23,7 @@ export interface Lens {
 
 export interface CommandContent {
   concept: string;
-  /** One-line summary of the binary's job, used in speech and headings. */
+  /** One-line summary of the binary's job, used in headings. */
   summary: string;
   lens: Record<SkillLevel, Lens>;
   pitfalls: string[];

@@ -100,7 +100,7 @@ export interface PersistedProfile {
   version: number;
   updatedAt: string;
   player: PersistedPlayer;
-  settings: { skillLevel: string; voiceEnabled: boolean; wordsPerMinute: number; mode: string };
+  settings: { skillLevel: string; mode: string };
   roadmap: PersistedRoadmap;
   streak: PersistedStreak;
   mastery: Record<string, PersistedMastery>;
@@ -125,9 +125,6 @@ const int = (v: unknown, fallback: number, min: number, max: number): number => 
 
 const str = (v: unknown, fallback: string, max = 80): string =>
   typeof v === "string" && v.trim() ? v.trim().slice(0, max) : fallback;
-
-const bool = (v: unknown, fallback: boolean): boolean =>
-  typeof v === "boolean" ? v : fallback;
 
 const iso = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
@@ -304,8 +301,6 @@ export function normaliseProfile(raw: unknown): PersistedProfile | null {
     },
     settings: {
       skillLevel: SKILL_LEVELS.has(String(s.skillLevel)) ? String(s.skillLevel) : "Junior",
-      voiceEnabled: bool(s.voiceEnabled, true),
-      wordsPerMinute: int(s.wordsPerMinute, 180, 80, 400),
       mode: resolveMode(s.mode),
     },
     roadmap: {

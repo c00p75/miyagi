@@ -41,7 +41,8 @@ Since your last debrief, your assistant ran 7 commands and edited 3 files (+212 
 
 1. **It watches, quietly.** One command installs an editor hook. After each command or
    edit your assistant makes, one line goes into a local log: the command, the file name,
-   and which ideas the change used. Never file contents, never output, nothing off your
+   and which ideas the change used. Never file contents, never full output (a failed command
+   keeps only its scrubbed error lines), never your prompts, nothing off your
    machine. No hook? It reads `git diff` instead, so it works with zero setup.
 2. **It chooses.** A change can touch a dozen ideas. You get the few that matter most:
    new to you first, security before syntax, and nothing you have already proved you know.
@@ -116,7 +117,7 @@ It runs shell commands on your machine, so it's built to be read before it's tru
   conclusion a learner must never be led to.
 - **Small enough to audit.** Two runtime dependencies, the MCP SDK and zod. The MCP
   surface, the safety screen, the content pack, the quiz bank, scheduling, persistence,
-  execution, speech, rendering and session modes are separate modules.
+  execution, rendering and session modes are separate modules.
 
 ## Install
 
@@ -194,23 +195,12 @@ practice: *"Set my roadmap to Backend Developer and teach me `docker compose con
 | **Insights** | `miyagi://insights` answers the question the README used to ask rhetorically: practice cadence by week, first-sight accuracy against *review* accuracy, checkpoint pass rates, and a verdict that refuses to claim anything on thin evidence. |
 | **Streaks** | Two of them. The quiz streak drives the XP multiplier; the *practice-day* streak counts consecutive calendar days, which is the habit hook a per-session number cannot be. The card tells you when today is the day you lose it. |
 | **Mastery** | Per-command attempt and success counts, so stats can say *"you are 40% on `git rebase` over 8 attempts"* rather than just showing a level. Weaknesses need three attempts before they are called weaknesses; two attempts at 50% is noise. |
-| **Audio** | A non-blocking FIFO queue, so lines never talk over each other. Markdown, URLs and emoji are stripped before anything is spoken, and the OS engine is probed before it's called, so a missing binary goes quiet instead of taking the server down. On Windows one PowerShell is kept alive rather than paying ~1s of `Add-Type` startup per line. |
 | **Roadmap** | Six built-in tracks with 26 checkpointed steps, plus your own: any JSON file in `~/.miyagi/roadmaps/` becomes a track, and one named after a built-in shadows it. An unknown track name is *reported*, not silently swapped for Command Line Basics. Every track declares the shell it was written for. |
 | **Windows** | Tracks declare `posix` or `powershell`. On a mismatched host, a step with a PowerShell equivalent is substituted and labelled, then executed through `powershell.exe` — not `cmd.exe`. Checkpoints have PowerShell probes too. A step without an alternative gets an explicit warning instead of a command line that is known to fail. Silence was the bug. |
 | **Gamification** | Nothing for a technique merely appearing in code: XP is paid for recall and verified work, not exposure. Attempt XP follows the session mode (10 in drill, 3 in ride-along, 0 in focus), **30 for a verified outcome**, 25 per correct quiz (30 for a review — cold recall is the harder skill) with streak multipliers, `Level = floor(XP/100) + 1`, four titles, streak and practice-day badges. |
 | **Progress** | `~/.miyagi/profile.json` for state, plus an append-only `history.jsonl` for the practice log, so a note export after a restart describes what you actually did instead of an empty session. Saves *merge* with what is on disk, so two clients cannot roll each other's XP backwards: counters take the higher total, badges union, and verified checkpoints are never dropped. Parallel sessions that each earn XP from the same baseline keep the larger score, not the sum. |
 | **Safety** | Two tiers, screened independently of the caller: catastrophic shapes never run, destructive ones need a human's confirmation. Checkpoint probes are screened too — a "probe" that deletes something is not a probe, and a track file is where one would hide. |
 | **Notes** | `ROADMAP_PROGRESS.md` export with quiz accuracy, weak spots, what is due for review, and the full log — session-scoped or lifetime. |
-
-### Speech engines
-
-| Platform | Engine |
-| --- | --- |
-| macOS | `say -r <wpm>` |
-| Windows | PowerShell `System.Speech.Synthesis.SpeechSynthesizer` |
-| Linux | `spd-say`, falling back to `espeak-ng`, `espeak` then `festival` |
-
-Linux users who want audio: `sudo apt install speech-dispatcher`.
 
 ## In a terminal
 
@@ -238,11 +228,11 @@ For learning from what your assistant built:
 
 For practice, progress and configuration:
 
-- `quick_config`: skill level (Junior/Mid/Senior), category, track, topic, voice on/off,
-  words per minute, a test phrase, and session mode (`drill` / `ride-along` / `focus`), in one call. `reset_progress: true` wipes XP,
+- `quick_config`: skill level (Junior/Mid/Senior), category, track, topic, and session
+  mode (`drill` / `ride-along` / `focus`), in one call. `reset_progress: true` wipes XP,
   streaks, mastery and the review queue back to first-run state. Call it with no
   arguments to read the current configuration. The default mode is **ride-along**:
-  a short card, no inline quiz, no voice. Intensity is opted into with `mode: "drill"`.
+  a short card, no inline quiz. Intensity is opted into with `mode: "drill"`.
 - `list_roadmaps`: every track, built-in and yours, with step counts and the JSON schema
   for authoring your own. Worth calling before you set a track name.
 - `set_active_roadmap`: category, track, topic and step counters. An unknown name is
@@ -268,9 +258,10 @@ All twelve tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idem
 so a client can tell `get_user_stats` apart from `run_teaching_command` when it decides
 what to prompt about.
 
-> **Upgrading from 1.x:** `configure_voice` is gone — its three fields duplicated
-> `quick_config`, and two ways to set one value is one of them drifting. Voice settings,
-> including `test_phrase`, now live in `quick_config`.
+> **Voice was removed in 3.1.** `voice_enabled`, `words_per_minute` and `test_phrase` are
+> no longer accepted by `quick_config`, `get_user_stats` no longer takes `speak`, and the
+> doctor no longer looks for a speech engine. Old profiles load as before; their voice
+> settings are ignored.
 >
 > **Upgrading from 2.x:** XP moved to outcomes. Drill still pays 10 XP for running a
 > command (was 15); ride-along pays 3; a verified checkpoint is 30. The default mode is
@@ -345,7 +336,7 @@ it had to skip — a track silently ignored is worse than one that fails loudly.
 ## Where progress lives
 
 `~/.miyagi/profile.json` holds XP, level, both streaks, badges, per-command mastery, the
-review queue, your skill level, voice settings and roadmap position. `~/.miyagi/history.jsonl`
+review queue, your skill level, session mode and roadmap position. `~/.miyagi/history.jsonl`
 is the append-only practice log: one line per event, so a crash costs at most the line
 being written and one corrupt line costs only itself. Override the directory with
 `MIYAGI_HOME`, which is also how the tests keep away from a real profile.
@@ -369,8 +360,7 @@ npx miyagi-mcp --doctor
 Checks the Node version, whether ride-along capture is installed and how much is waiting
 for a debrief, that commands can actually be executed, that the profile
 directory is writable, that a saved profile parses, which track files were skipped and
-why, whether any track is written for the wrong shell for this host, and whether a speech
-engine exists. Plain text on stdout — the one mode where that is safe, because there is no
+why, and whether any track is written for the wrong shell for this host. Plain text on stdout — the one mode where that is safe, because there is no
 protocol to corrupt. A warning is a working install; only a real failure exits non-zero.
 
 ## Development

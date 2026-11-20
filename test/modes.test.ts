@@ -28,7 +28,6 @@ test('the default is quiet, not the drill', () => {
   // costs mild disappointment. Intensity is opted into.
   assert.equal(DEFAULT_MODE, 'ride-along');
   assert.equal(policyFor(DEFAULT_MODE).quiz, false);
-  assert.equal(policyFor(DEFAULT_MODE).speak, false);
 });
 
 test('a refusal surfaces in every mode, including focus', () => {
@@ -56,11 +55,9 @@ test('recall is deferred by every mode, never dropped', () => {
   }
 });
 
-test('only drill asks inline, and only drill speaks', () => {
+test('only drill asks inline', () => {
   const inline = MODES.filter((p) => p.quiz).map((p) => p.mode);
-  const speaking = MODES.filter((p) => p.speak).map((p) => p.mode);
   assert.deepEqual(inline, ['drill']);
-  assert.deepEqual(speaking, ['drill'], 'voice follows mode rather than being a separate dial');
 });
 
 test('unrecognised and hostile input falls back to the default', () => {
@@ -137,7 +134,6 @@ test('ride-along is still meaningfully lighter than drill', () => {
   };
   assert.ok(count('ride-along') < count('drill') - 1, 'at least two sections lighter');
   assert.equal(policyFor('ride-along').quiz, false);
-  assert.equal(policyFor('ride-along').speak, false);
 });
 
 test('focus surfaces nothing at all for an ordinary command', () => {

@@ -63,7 +63,7 @@ export interface SurfaceSections {
    * telling is the reward loop and belongs on every turn. In ride-along it is
    * the opposite: forty commands across a working afternoon would be forty
    * lines reporting that a number went up by three and nothing happened, which
-   * is precisely the chirping the mode exists to remove. So it speaks only when
+   * is precisely the chirping the mode exists to remove. So it appears only when
    * something actually changed, and forty lines become one worth reading.
    */
   xpFootnote: 'always' | 'on-change' | 'never';
@@ -91,8 +91,6 @@ export interface ModePolicy {
   surface: SurfaceSections;
   /** Ask the recall question inline, in the same turn. */
   quiz: boolean;
-  /** Narrate through the OS speech engine. */
-  speak: boolean;
   /**
    * XP for merely running a command. Exposure pays little: if presence earns
    * the same as recall then XP stops meaning "I retrieved this" and starts
@@ -115,7 +113,7 @@ const POLICIES: Record<SessionMode, ModePolicy> = {
   drill: {
     mode: 'drill',
     label: 'Drill',
-    when: 'You sat down to learn. Full card, a question every time, spoken aloud.',
+    when: 'You sat down to learn. Full card and a question every time.',
     card: 'full',
     surface: {
       roadmap: true,
@@ -128,14 +126,13 @@ const POLICIES: Record<SessionMode, ModePolicy> = {
       xpFootnote: 'always',
     },
     quiz: true,
-    speak: true,
     xpPerCommand: 10,
     queueForReview: true,
   },
   'ride-along': {
     mode: 'ride-along',
     label: 'Ride-along',
-    when: 'You are working. What it is, how it works and what it costs. No question, no voice.',
+    when: 'You are working. What it is, how it works and what it costs. No question.',
     card: 'brief',
     // What it is, how it works, and the one thing it costs you. The diagram,
     // the pitfalls and the docs stay off: they read fine an hour later, and the
@@ -151,7 +148,6 @@ const POLICIES: Record<SessionMode, ModePolicy> = {
       xpFootnote: 'on-change',
     },
     quiz: false,
-    speak: false,
     xpPerCommand: 3,
     queueForReview: true,
   },
@@ -171,7 +167,6 @@ const POLICIES: Record<SessionMode, ModePolicy> = {
       xpFootnote: 'never',
     },
     quiz: false,
-    speak: false,
     xpPerCommand: 0,
     queueForReview: true,
   },

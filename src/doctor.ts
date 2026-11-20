@@ -4,7 +4,7 @@
  * A stdio MCP server is a bad place to debug an install: everything the user
  * would want to see is either invisible or would corrupt the protocol if
  * printed. So there is a non-MCP mode that checks the things that actually go
- * wrong — an unwritable profile, a corrupt track file, no speech binary, a
+ * wrong — an unwritable profile, a corrupt track file, a
  * POSIX track on a PowerShell host — and says so in plain text on stdout,
  * where a person can read it.
  *
@@ -42,19 +42,6 @@ interface Check {
 }
 
 const ICON: Record<Status, string> = { ok: "✅", warn: "⚠️ ", fail: "❌" };
-
-async function commandExists(cmd: string): Promise<boolean> {
-  try {
-    if (os.platform() === "win32") {
-      await exec(`where ${cmd}`);
-    } else {
-      await exec(`command -v ${cmd}`, { shell: "/bin/sh" });
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function checkNode(): Promise<Check> {
   const major = Number(process.versions.node.split(".")[0]);
@@ -192,35 +179,6 @@ async function checkIdeaPacks(): Promise<Check[]> {
   return checks;
 }
 
-async function checkSpeech(): Promise<Check> {
-  const platform = os.platform();
-  if (platform === "darwin") {
-    return (await commandExists("say"))
-      ? { name: "Speech engine", status: "ok", detail: "`say` is available" }
-      : { name: "Speech engine", status: "warn", detail: "`say` not found; audio will stay silent" };
-  }
-  if (platform === "win32") {
-    return (await commandExists("powershell"))
-      ? { name: "Speech engine", status: "ok", detail: "PowerShell System.Speech is available" }
-      : {
-          name: "Speech engine",
-          status: "warn",
-          detail: "powershell not found; audio will stay silent",
-        };
-  }
-  for (const cmd of ["spd-say", "espeak-ng", "espeak", "festival"]) {
-    if (await commandExists(cmd)) {
-      return { name: "Speech engine", status: "ok", detail: `\`${cmd}\` is available` };
-    }
-  }
-  return {
-    name: "Speech engine",
-    status: "warn",
-    detail: "no Linux speech binary found; audio degrades silently",
-    fix: "sudo apt install speech-dispatcher",
-  };
-}
-
 async function checkQuizzes(): Promise<Check> {
   const generated = await loadGeneratedCache();
   return {
@@ -286,7 +244,6 @@ export async function runDoctor(write: (line: string) => void = console.log): Pr
   checks.push(await checkQuizzes());
   checks.push(...(await checkIdeaPacks()));
   checks.push(await checkCapture());
-  checks.push(await checkSpeech());
 
   write(`miyagi ${VERSION} — doctor`);
   write(`platform ${os.platform()} ${os.release()} · shell ${hostShell()} · cwd ${process.cwd()}`);

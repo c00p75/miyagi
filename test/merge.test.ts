@@ -26,7 +26,7 @@ const profile = (over: Record<string, unknown> = {}): any =>
     version: PROFILE_VERSION,
     updatedAt: new Date().toISOString(),
     player: { xp: 100, quizStreak: 1, bestStreak: 3, badges: ["A"] },
-    settings: { skillLevel: "Mid", voiceEnabled: true, wordsPerMinute: 180 },
+    settings: { skillLevel: "Mid" },
     roadmap: {
       category: "Skill Based",
       roadmap_name: "Git and GitHub",
@@ -130,7 +130,7 @@ test("the day streak comes from whichever copy owns the later day", () => {
 test("this session's settings and roadmap position win", () => {
   const merged = mergeProfiles(
     profile({
-      settings: { skillLevel: "Junior", voiceEnabled: false, wordsPerMinute: 120 },
+      settings: { skillLevel: "Junior" },
       roadmap: {
         category: "Role Based",
         roadmap_name: "Backend Developer",

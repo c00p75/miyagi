@@ -86,6 +86,7 @@ test("the transcript is looked up by session id, then by project folder", async 
 /* ---- ideas a model found ---------------------------------------- */
 
 const debounce: FoundIdea = {
+  kind: "idea",
   title: "Debouncing",
   topic: "Frontend",
   hook: "Wait for the typing to stop before you do the expensive thing.",

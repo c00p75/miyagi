@@ -27,7 +27,7 @@ async function open(name: string, mode = "ride-along") {
   const { home, work } = await scratch(name);
   const client = new TestClient({ home, cwd: work });
   await client.initialize();
-  await client.call("quick_config", { mode, voice_enabled: false, skill_level: "Mid" });
+  await client.call("quick_config", { mode, skill_level: "Mid" });
   return { client, home, work };
 }
 

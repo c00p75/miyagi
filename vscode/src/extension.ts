@@ -48,6 +48,7 @@ import { chooseFiles, practisedDays, trackedFiles, weekProgress, weeklyReport } 
 import { buildSummary, fileNameFor, readSummaries, renderTour, teamReport, tourStops } from "./team.js";
 import { quietNow, tomorrowMorning, type QuietReason } from "./schedule.js";
 import { supportsSecondarySidebar } from "./docking.js";
+import { registerSkillIdeas, restoreTools } from "./coach.js";
 
 const WELCOMED_KEY = "miyagi.welcomed.v1";
 const PAUSED_KEY = "miyagi.pausedUntil.v1";
@@ -191,6 +192,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   const packs = await loadIdeaPacks().catch(() => []);
   await loadAiIdeas().catch(() => 0);
   await loadOwnCards().catch(() => 0);
+  // The coach's own ideas (reading errors, the commit check) and the
+  // vocabulary of every tool met so far, so their questions are still there.
+  registerSkillIdeas();
+  await restoreTools().catch(() => 0);
 
   /* ---- status bar ----------------------------------------------- */
 
@@ -261,6 +266,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     quiet,
     onStatus: renderStatus,
     holding: () => Boolean(watcher?.isHolding()),
+    rootOf: (dir) => watcher?.rootOf(dir) ?? watcher?.getRoots().find((r) => dir === r || dir.startsWith(r + path.sep)),
   });
 
   /**
@@ -287,6 +293,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     }
   };
 
+  /** Staging fires several state changes in a row; look once it settles. */
+  const stagedTimers = new Map<string, NodeJS.Timeout>();
+  const stagedSoon = (root: string) => {
+    clearTimeout(stagedTimers.get(root));
+    stagedTimers.set(
+      root,
+      setTimeout(() => {
+        stagedTimers.delete(root);
+        void panel.coach.staged(root);
+      }, 1_500),
+    );
+  };
+  context.subscriptions.push({ dispose: () => stagedTimers.forEach((t) => clearTimeout(t)) });
+
   watcher = new Watcher({
     onChanges: (root, source, changes) => void panel.teach(root, source, changes),
     onObservations: (observations) => {
@@ -296,7 +316,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
     onRoots: () => void panel.pushState(),
     onScan: (scan) => panel.scanned(scan),
     onBaseline: (root, files) => panel.baselined(root, files),
-    onCommit: () => void offerReviewAfterCommit(),
+    onCommit: (root) => {
+      panel.coach.committed(root);
+      void offerReviewAfterCommit();
+    },
+    onRepoState: (root) => stagedSoon(root),
   });
   const configureWatcher = () =>
     watcher?.configure({
@@ -310,6 +334,51 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
           : 0,
     });
   configureWatcher();
+
+  /*
+   * The learner's own terminal. When a command they ran fails, the debugging
+   * coach offers to read the error with them. Output is read into memory only
+   * while the command runs, reduced to its error lines, and never written down.
+   */
+  const shell = vscode.window as unknown as {
+    onDidStartTerminalShellExecution?: vscode.Event<{ execution: { read(): AsyncIterable<string> } }>;
+    onDidEndTerminalShellExecution?: vscode.Event<{
+      execution: { commandLine: { value: string }; cwd?: vscode.Uri };
+      exitCode: number | undefined;
+      terminal: { shellIntegration?: { cwd?: vscode.Uri } };
+    }>;
+  };
+  if (shell.onDidStartTerminalShellExecution && shell.onDidEndTerminalShellExecution) {
+    const outputs = new WeakMap<object, { text: string }>();
+    context.subscriptions.push(
+      shell.onDidStartTerminalShellExecution((e) => {
+        const buffer = { text: "" };
+        outputs.set(e.execution, buffer);
+        void (async () => {
+          try {
+            for await (const chunk of e.execution.read()) buffer.text = (buffer.text + chunk).slice(-40_000);
+          } catch {
+            // A stream that cannot be read leaves an empty buffer; the failure is still noticed.
+          }
+        })();
+      }),
+      shell.onDidEndTerminalShellExecution((e) => {
+        const code = e.exitCode;
+        // 130 and 143 are Ctrl+C and a kill: the learner stopped it, nothing broke.
+        if (code === undefined || code === 0 || code === 130 || code === 143) return;
+        const output = outputs.get(e.execution)?.text ?? "";
+        // Let the stream finish draining before the error is read from it.
+        setTimeout(() => {
+          void panel.coach.failed({
+            command: e.execution.commandLine.value,
+            output: (outputs.get(e.execution)?.text ?? output) || "",
+            cwd: e.execution.cwd?.fsPath ?? e.terminal.shellIntegration?.cwd?.fsPath,
+            by: "you",
+          });
+        }, 300);
+      }),
+    );
+  }
 
   const viewOptions = { webviewOptions: { retainContextWhenHidden: true } };
   context.subscriptions.push(
@@ -510,6 +579,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
   });
 
   register("miyagi.clearFeed", () => panel.clear());
+
+  /* ---- growing: tools, predictions, incidents, the story -------- */
+
+  register("miyagi.learnAbout", async () => {
+    const text = await vscode.window.showInputBox({
+      title: "Teach me about a tool or an idea",
+      prompt: "A library, service or idea: Sentry, Stripe, Zod, debouncing… Miyagi explains it and how your project uses it.",
+      placeHolder: "Sentry",
+    });
+    if (!text?.trim()) return;
+    await open();
+    await panel.coach.learnAbout(text);
+  });
+  register("miyagi.predict", async () => {
+    await open();
+    panel.showTab("now");
+    await panel.coach.predictOpen("manual");
+  });
+  register("miyagi.growth", async () => {
+    await open();
+    panel.showTab("grow");
+  });
+  register("miyagi.incident", async () => {
+    await open();
+    panel.showTab("grow");
+  });
+  register("miyagi.story", async () => {
+    const text = await panel.coach.storyMarkdown();
+    await showMarkdown("reports", `story-${new Date().toISOString().slice(0, 10)}.md`, text);
+  });
 
   /* ---- reading matter: the week, and the project ---------------- */
 
@@ -756,6 +855,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Miyagi
       `  editor language-model API: ${options.editor ? `present, ${editorList.length} model(s)${editorList.length ? ": " + editorList.join(", ") : ""}` : "not offered by this editor"}`,
       `  ${describeMeter(currentMeter(context.globalState.get(METER_KEY)))}`,
       `  find ideas with AI: ${config().get("ai.findIdeas", "off")}`,
+      "",
+      "COACH",
+      `  tools: ${config().get("coach.tools", true)}, debugging: ${config().get("coach.debugging", true)}, predictions: ${config().get("coach.predictions", "onNewTask")}, commit check from: ${config().get("coach.commitCheckLines", 60)} lines`,
+      `  explain in your own words: ${config().get("explainBack", true)}`,
+      `  terminal failures: ${(vscode.window as { onDidEndTerminalShellExecution?: unknown }).onDidEndTerminalShellExecution ? "read through shell integration" : "not available in this editor"}`,
       "",
       "COMMAND CAPTURE",
       `  assistants found: ${clientsHere().map((c) => CLIENT_NAMES[c]).join(", ") || "(none)"}`,

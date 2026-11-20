@@ -26,7 +26,6 @@ const { CONTENT, binOf, diagramFor, docsFor, lensFor, pitfallsFor, teachingBrief
 const { QUIZ_BANK, ask, grade, shuffleChoices } = await import("../src/quiz.js");
 const { allTracks } = await import("../src/roadmaps.js");
 const { renderTeachingCard, quizBlock, hotfixDiagnostic } = await import("../src/render.js");
-const { sanitizeForSpeech } = await import("../src/tts.js");
 const { screenCommand, screenDanger } = await import("../src/safety.js");
 const { titleForLevel } = await import("../src/profile.js");
 
@@ -357,19 +356,6 @@ test("every mermaid diagram is balanced and renderable", () => {
   }
 });
 
-test("every card is speakable: sanitising leaves prose, not punctuation soup", () => {
-  for (const track of allTracks()) {
-    for (const step of track.steps.slice(0, 3)) {
-      const spoken = sanitizeForSpeech(card(step.command, "Mid", true));
-      assert.ok(spoken.length > 40, `nothing left to speak for ${step.command}`);
-      assert.ok(!/[`*#|]/.test(spoken), `markdown survived into speech for ${step.command}`);
-      assert.ok(!spoken.includes("http"), `a URL survived into speech for ${step.command}`);
-      const letters = spoken.replace(/[^a-z]/gi, "").length;
-      assert.ok(letters / spoken.length > 0.6, `mostly punctuation for ${step.command}`);
-    }
-  }
-});
-
 test("a hotfix diagnostic always ends with something actionable", () => {
   const cases: Array<[string, string, number | null]> = [
     ["ls /nope", "No such file or directory", 2],
@@ -452,7 +438,6 @@ test("hostile and malformed command lines are handled, not thrown on", () => {
       docsFor(command);
       lensFor(command, "Mid");
       diagramFor(command, true, "topic with 'quotes' and \"more\"");
-      sanitizeForSpeech(command);
       teachingBrief({
         command,
         level: "Senior",

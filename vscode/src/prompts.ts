@@ -378,6 +378,8 @@ function matchFile(said: string, known: readonly string[]): string {
 
 /** An idea a model found that the built-in pack has no pattern for. */
 export interface FoundIdea {
+  /** A general idea, or a specific tool the change brought in (taught as a tool track instead). */
+  kind: "idea" | "tool";
   title: string;
   topic: Topic;
   hook: string;
@@ -397,11 +399,12 @@ export function findIdeasPrompt(files: readonly ChangedFile[], alreadyKnown: rea
     "",
     "Name the ideas in this change that are most worth my understanding. Rules:",
     "- At most 2. An idea is a concept I could meet again in other code (for example: debouncing, optimistic updates, database indexes, recursion), not a description of this change.",
-    "- Skip anything trivial, and skip these, which I am already being taught: " +
+    "- A specific library, framework or service this change newly brings in also counts (for example: Sentry, Stripe, Zod). Mark it kind \"tool\" and use its real name as the title. A general idea below does not cover a specific tool: \"Handling failure\" is not \"Sentry\".",
+    "- Skip anything trivial, and skip these exact ideas, which I am already being taught: " +
       (alreadyKnown.length ? alreadyKnown.slice(0, 40).join("; ") : "(none)") +
       ".",
     "- If nothing here is worth a lesson, return an empty list. That is a good answer.",
-    "- For each idea: title (at most 6 words), topic (one of: " + TOPICS.join(", ") + "),",
+    "- For each idea: kind (\"idea\" or \"tool\"), title (at most 6 words), topic (one of: " + TOPICS.join(", ") + "),",
     "  hook (one memorable line), what (one plain sentence saying what it is),",
     "  know (at most 60 words: the thing to understand, at my level),",
     "  pitfall (at most 45 words: how it goes wrong, told as what actually happens),",
@@ -410,7 +413,7 @@ export function findIdeasPrompt(files: readonly ChangedFile[], alreadyKnown: rea
     `- ${DEPTH_NOTE[depth]}`,
     "",
     JSON_ONLY,
-    '{"ideas": [{"title": "...", "topic": "...", "hook": "...", "what": "...", "know": "...", "pitfall": "...", "file": "path", "evidence": "...", "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}]}',
+    '{"ideas": [{"kind": "idea", "title": "...", "topic": "...", "hook": "...", "what": "...", "know": "...", "pitfall": "...", "file": "path", "evidence": "...", "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}]}',
   ]);
 }
 
@@ -426,6 +429,7 @@ export function parseFoundIdeas(text: string, known: readonly string[]): FoundId
     const pitfall = str(i.pitfall, 500);
     if (!title || !what || !know || !pitfall) continue;
     out.push({
+      kind: str(i.kind, 10).toLowerCase() === "tool" ? "tool" : "idea",
       title,
       topic: parseTopic(str(i.topic, 40)) ?? "Tooling",
       hook: str(i.hook, 200) || what,
@@ -659,5 +663,426 @@ export function transferQuestionPrompt(req: { title: string; what: string; file:
     "",
     JSON_ONLY,
     '{"question": "text with a ``` fenced snippet", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "one or two sentences"}',
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Tools: a primer tied to this project
+ * ------------------------------------------------------------------ */
+
+export interface ToolPrimer {
+  /** What it does in this project, in a few plain sentences. */
+  summary: string;
+  wired: Array<{ file: string; line: number | null; what: string }>;
+  flow: string[];
+  risks: Array<{ title: string; why: string }>;
+  verify: string;
+  /** Said about the learner's guess, when they made one. */
+  guessFeedback: string;
+  /** Only for tools the catalogue does not know: the model describes the tool too. */
+  spec?: {
+    name: string;
+    emoji: string;
+    job: string;
+    oneLiner: string;
+    terms: Array<{ term: string; meaning: string }>;
+    topic: string;
+  };
+}
+
+export function toolPrimerPrompt(req: {
+  name: string;
+  /** Known from the catalogue; absent when the model must describe the tool from scratch. */
+  job?: string;
+  terms?: readonly string[];
+  files: readonly ChangedFile[];
+  guess?: string;
+  depth: Depth;
+}): Prompt {
+  const describe = !req.job;
+  return prompt([
+    `My project uses ${req.name}${req.job ? ` (${req.job})` : ""}. My AI assistant set it up; I want to become conversant in it, not just have it.`,
+    "",
+    req.files.length ? "Where it appears in my project:" : "I could not find where it appears in my project.",
+    req.files.length ? changeBlock(req.files) : "",
+    req.guess ? `\nBefore reading anything, I guessed it is for: "${req.guess.slice(0, 300)}"` : "",
+    "",
+    "Rules:",
+    `- summary: at most 60 words. What ${req.name} does for THIS project specifically, and what would be missing without it.`,
+    "- wired: up to 5 places in the lines above where it is set up or used: file, line number, and what that line does in at most 15 words. Only lines that exist above. Empty if none.",
+    "- flow: 3 to 5 short steps (at most 15 words each) of what happens at runtime, in order, in this project.",
+    "- risks: up to 3 ways this particular setup could hurt me (cost, leaked data, silently not working), each a title of at most 8 words and why in at most 35 words. Only real ones.",
+    "- verify: one concrete way to prove it works in this project, in at most 35 words.",
+    req.guess
+      ? "- guessFeedback: at most 35 words. Say plainly what my guess got right and what it missed. No praise words."
+      : '- guessFeedback: "".',
+    describe
+      ? '- Also describe the tool: name, emoji (one), job (2-4 words, e.g. "Error monitoring"), oneLiner (at most 20 words), topic (one of: ' +
+          TOPICS.join(", ") +
+          "), and terms: the 5 or 6 words someone must know to be conversant, each with a meaning of one plain sentence (60-120 characters) that does not repeat the term itself."
+      : `- Do not redefine its vocabulary (${(req.terms ?? []).slice(0, 8).join(", ")}); that is taught separately.`,
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    describe
+      ? '{"summary": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "..."}], "verify": "...", "guessFeedback": "...", "name": "...", "emoji": "...", "job": "...", "oneLiner": "...", "topic": "...", "terms": [{"term": "...", "meaning": "..."}]}'
+      : '{"summary": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "..."}], "verify": "...", "guessFeedback": "..."}',
+  ]);
+}
+
+export function parseToolPrimer(text: string, known: readonly string[], describe: boolean): ToolPrimer | null {
+  const o = obj(extractJson(text));
+  const summary = str(o.summary, 700);
+  if (!summary) return null;
+  const wired = (Array.isArray(o.wired) ? o.wired : [])
+    .map(obj)
+    .map((w) => ({ file: matchFile(str(w.file, 300), known), line: int(w.line), what: str(w.what, 200) }))
+    .filter((w) => w.file && w.what)
+    .slice(0, 5);
+  const flow = (Array.isArray(o.flow) ? o.flow : []).map((s) => str(s, 160)).filter(Boolean).slice(0, 5);
+  const risks = (Array.isArray(o.risks) ? o.risks : [])
+    .map(obj)
+    .map((r) => ({ title: str(r.title, 100), why: str(r.why, 300) }))
+    .filter((r) => r.title && r.why)
+    .slice(0, 3);
+  const primer: ToolPrimer = { summary, wired, flow, risks, verify: str(o.verify, 300), guessFeedback: str(o.guessFeedback, 300) };
+  if (describe) {
+    const terms = (Array.isArray(o.terms) ? o.terms : [])
+      .map(obj)
+      .map((t) => ({ term: str(t.term, 40), meaning: str(t.meaning, 200) }))
+      .filter((t) => t.term && t.meaning.length >= 20)
+      .slice(0, 6);
+    const oneLiner = str(o.oneLiner, 200);
+    if (terms.length < 3 || !oneLiner) return null;
+    primer.spec = {
+      name: str(o.name, 60),
+      emoji: str(o.emoji, 8),
+      job: str(o.job, 60),
+      oneLiner,
+      terms,
+      topic: str(o.topic, 40),
+    };
+  }
+  return primer;
+}
+
+/* ------------------------------------------------------------------ *
+ * Debugging: reading an error before the assistant fixes it
+ * ------------------------------------------------------------------ */
+
+export interface Diagnosis {
+  /** Absent when the learner skipped straight to the answer. */
+  verdict?: Verdict;
+  feedback: string;
+  cause: string;
+  where: { file: string; line: number | null } | null;
+  fix: string;
+  /** 1-based line of the error excerpt that gives it away. */
+  clue: number | null;
+  /** The transferable habit: how to read the next error like this one. */
+  habit: string;
+}
+
+function errorBlock(error: string): string {
+  return error
+    .split("\n")
+    .map((l, i) => `${i + 1}: ${l}`)
+    .join("\n");
+}
+
+export function diagnosePrompt(req: {
+  command: string;
+  error: string;
+  guess: string;
+  /** The line of the error the learner picked as the clue, 1-based. */
+  picked: number | null;
+  code: readonly ChangedFile[];
+  depth: Depth;
+}): Prompt {
+  const tried = Boolean(req.guess.trim() || req.picked);
+  return prompt([
+    `This command failed in my project: \`${req.command.slice(0, 200)}\``,
+    "The error lines (numbered):",
+    fenced(errorBlock(req.error)),
+    req.code.length ? "\nCode it may be about:\n" + changeBlock(req.code) : "",
+    "",
+    tried
+      ? `Before asking, I tried to read it myself.${req.picked ? ` I thought line ${req.picked} of the error was the clue.` : ""}${req.guess.trim() ? ` My read: "${req.guess.slice(0, 600)}"` : ""}`
+      : "I did not try to read it; show me how.",
+    "",
+    "Rules:",
+    tried
+      ? '- verdict: "right" if my read has the actual cause, "partly" if I was close or found the place but not the reason, "wrong" otherwise. feedback: at most 50 words, what I read correctly, then what I missed. No praise words.'
+      : '- verdict: omit it. feedback: "".',
+    "- cause: at most 40 words, what actually went wrong, in plain words.",
+    "- where: the file and line in my code to look at, if the error or the code shows it; otherwise null.",
+    "- fix: one sentence, the change to make. Do not write the code.",
+    "- clue: the number of the error line above that gives it away most directly.",
+    "- habit: at most 25 words, a reading habit that would find this kind of error fast next time.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "...", "cause": "...", "where": {"file": "path", "line": 12} | null, "fix": "...", "clue": 2, "habit": "..."}',
+  ]);
+}
+
+export function parseDiagnosis(text: string, known: readonly string[], errorLines: number): Diagnosis | null {
+  const o = obj(extractJson(text));
+  const cause = str(o.cause, 500);
+  if (!cause) return null;
+  const v = str(o.verdict, 10).toLowerCase();
+  const w = o.where && typeof o.where === "object" ? obj(o.where) : null;
+  const whereFile = w ? str(w.file, 300) : "";
+  const clue = int(o.clue);
+  return {
+    ...(v === "right" || v === "partly" || v === "wrong" ? { verdict: v as Verdict } : {}),
+    feedback: str(o.feedback, 600),
+    cause,
+    // A path the error names may not be one we sent; keep it if it looks like a path.
+    where: whereFile ? { file: matchFile(whereFile, known) || whereFile.replace(/^\.?\//, ""), line: w ? int(w.line) : null } : null,
+    fix: str(o.fix, 400),
+    clue: clue && clue <= errorLines ? clue : null,
+    habit: str(o.habit, 300),
+  };
+}
+
+export function debugHintPrompt(req: { command: string; error: string; step: Hint; depth: Depth }): Prompt {
+  return prompt([
+    `This command failed: \`${req.command.slice(0, 200)}\``,
+    fenced(errorBlock(req.error)),
+    "",
+    req.step === "nudge"
+      ? "I am trying to read this error myself. Give me a nudge: one question (at most 25 words) that makes me look at the right part. Do NOT say what is wrong."
+      : "I am still stuck. Point me at the error line that matters and say what kind of problem it signals (at most 35 words). Do NOT give the fix.",
+    `${DEPTH_NOTE[req.depth]}`,
+    "Reply with the text only.",
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Decisions: what was chosen, over what, and why
+ * ------------------------------------------------------------------ */
+
+export interface FoundDecision {
+  title: string;
+  chose: string;
+  over: string[];
+  because: string;
+  tradeoff: string;
+  revisit: string;
+  question: OwnQuestion | null;
+}
+
+export function decisionsPrompt(req: { files: readonly ChangedFile[]; tool?: string; depth: Depth }): Prompt {
+  return prompt([
+    req.tool
+      ? `My project just adopted ${req.tool}. Help me record why, so I can still explain the choice in six months.`
+      : "An AI assistant just made this change in my project. Name the design decisions in it, so I can explain them later.",
+    "",
+    req.files.length ? changeBlock(req.files) : "",
+    "",
+    "Rules:",
+    `- At most ${req.tool ? 1 : 3} decisions. A decision is a real choice between alternatives a developer could reasonably have picked (a library, a data shape, where logic runs, sync vs background). Not style, not naming.`,
+    "- If nothing here was a real choice, return an empty list. That is a good answer.",
+    "- For each: title (at most 8 words), chose (at most 10 words), over (1 to 3 real alternatives, at most 8 words each), because (at most 40 words, the reason that applies to THIS project), tradeoff (at most 30 words, what was given up), revisit (at most 20 words, the sign it should be reconsidered).",
+    "- question: one multiple-choice question asking why this project chose it, with the real reason as the answer and three plausible but wrong reasons of similar length, and a one-sentence explanation.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"decisions": [{"title": "...", "chose": "...", "over": ["..."], "because": "...", "tradeoff": "...", "revisit": "...", "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}]}',
+  ]);
+}
+
+export function parseDecisions(text: string): FoundDecision[] | null {
+  const o = obj(extractJson(text));
+  if (!Array.isArray(o.decisions)) return null;
+  return o.decisions
+    .map(obj)
+    .map((d) => ({
+      title: str(d.title, 120),
+      chose: str(d.chose, 120),
+      over: (Array.isArray(d.over) ? d.over : []).map((x) => str(x, 120)).filter(Boolean).slice(0, 3),
+      because: str(d.because, 500),
+      tradeoff: str(d.tradeoff, 400),
+      revisit: str(d.revisit, 300),
+      question: d.question ? parseOwnQuestion(JSON.stringify(d.question)) : null,
+    }))
+    .filter((d) => d.title && d.chose && d.because)
+    .slice(0, 3);
+}
+
+/* ------------------------------------------------------------------ *
+ * Incidents: something broke for real
+ * ------------------------------------------------------------------ */
+
+export interface IncidentLesson {
+  title: string;
+  whatBroke: string;
+  cause: string;
+  prevention: string;
+  /** The id of a known idea this was an instance of, or "". */
+  related: string;
+  question: OwnQuestion | null;
+}
+
+export function incidentPrompt(req: { report: string; ideas: ReadonlyArray<{ id: string; title: string }>; depth: Depth }): Prompt {
+  return prompt([
+    "Something broke in my project for real. Here is what I have: an error, a bug report, or my notes.",
+    fenced(req.report.slice(0, 4_000)),
+    "",
+    "Turn it into a lesson I will remember. Rules:",
+    "- title: at most 8 words, what happened.",
+    "- whatBroke: at most 40 words, what users or I saw.",
+    "- cause: at most 50 words, the root cause in plain words. If the report is not enough to know, say what is most likely and what to check.",
+    "- prevention: at most 40 words, the habit or check that would have caught it before it shipped.",
+    "- related: the id of the idea below this was most an instance of, or \"\" if none fits.",
+    req.ideas.map((i) => `  ${i.id}: ${i.title}`).join("\n"),
+    "- question: one multiple-choice question that tests the lesson (not the specific error text), with one answer, three plausible wrong answers of similar length, and a one-sentence explanation.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"title": "...", "whatBroke": "...", "cause": "...", "prevention": "...", "related": "id or empty", "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}',
+  ]);
+}
+
+export function parseIncident(text: string, ideas: readonly string[]): IncidentLesson | null {
+  const o = obj(extractJson(text));
+  const title = str(o.title, 120);
+  const cause = str(o.cause, 500);
+  if (!title || !cause) return null;
+  const related = str(o.related, 60);
+  return {
+    title,
+    whatBroke: str(o.whatBroke, 500),
+    cause,
+    prevention: str(o.prevention, 500),
+    related: ideas.includes(related) ? related : "",
+    question: o.question ? parseOwnQuestion(JSON.stringify(o.question)) : null,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Before you commit: one question about the change
+ * ------------------------------------------------------------------ */
+
+export function commitQuestionPrompt(files: readonly ChangedFile[], depth: Depth): Prompt {
+  return prompt([
+    "I am about to commit this change. Ask me one question that checks I know what I am committing.",
+    "",
+    changeBlock(files),
+    "",
+    "Rules:",
+    "- One multiple-choice question about what this change does or what happens in a case it handles (or fails to handle). Something I should be able to answer if I read it; not trivia about names.",
+    "- One correct answer and three wrong answers of similar length. The correct answer must not be the longest.",
+    "- explanation: one or two sentences pointing at the line that decides it.",
+    `- ${DEPTH_NOTE[depth]}`,
+    "",
+    JSON_ONLY,
+    '{"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}',
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Explain it in your own words (free recall, graded)
+ * ------------------------------------------------------------------ */
+
+export function recallGradePrompt(req: { idea: string; question: string; truth: string; why: string; answer: string; depth: Depth }): Prompt {
+  return prompt([
+    `A review question about "${req.idea}", which I answered in my own words without seeing any choices.`,
+    `Question: ${req.question.slice(0, 600)}`,
+    `The expected answer: ${req.truth.slice(0, 300)}`,
+    `Why: ${req.why.slice(0, 500)}`,
+    "",
+    `What I wrote: ${req.answer.slice(0, 800)}`,
+    "",
+    "Judge the meaning, not the wording. Rules:",
+    '- verdict is "right" if I have the expected answer\'s main point, "partly" if I have part of it or something vague that could be it, "wrong" otherwise.',
+    "- feedback: at most 45 words. What I got right, then the one thing missing. No praise words.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
+  ]);
+}
+
+export function approachPrompt(req: { approach: string; files: readonly ChangedFile[]; depth: Depth }): Prompt {
+  return prompt([
+    `Before my AI assistant made this change, I predicted how it would do it: "${req.approach.slice(0, 500)}"`,
+    "",
+    changeBlock(req.files),
+    "",
+    "Rules:",
+    '- verdict: "right" if the change took essentially my approach, "partly" if some of it, "wrong" if it went another way.',
+    "- feedback: at most 50 words. Where my prediction matched, and the one difference most worth understanding, with why the change did it that way.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Blind spots: one exercise for a skill not met yet
+ * ------------------------------------------------------------------ */
+
+export function skillExercisePrompt(req: { skill: string; why: string; tree: readonly string[]; heads: readonly ChangedFile[]; depth: Depth }): Prompt {
+  return prompt([
+    `I am building a project with an AI assistant, and I have not practised this yet: "${req.skill}" (${req.why}).`,
+    "Suggest one small exercise I can do by hand, in my own project, to practise it.",
+    "",
+    "Files in the project:",
+    req.tree.slice(0, 150).join("\n"),
+    req.heads.length ? "\n" + changeBlock(req.heads) : "",
+    "",
+    "Rules:",
+    "- task: at most 45 words, something real this project would be better for, about 10 to 30 minutes of work. Describe what to achieve; do NOT write the code.",
+    "- file: the one file above to start in.",
+    "- done: one sentence saying how I will know it works.",
+    "- hint: one sentence I can ask for if stuck, which still does not give the code.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"task": "...", "file": "path", "done": "...", "hint": "..."}',
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * Your story: interview practice from real work
+ * ------------------------------------------------------------------ */
+
+export function storyQuestionPrompt(entries: ReadonlyArray<{ kind: string; title: string; detail: string }>): Prompt {
+  return prompt([
+    "These are things I really did while building my projects:",
+    entries.map((e, i) => `${i + 1}. [${e.kind}] ${e.title}: ${e.detail}`).join("\n"),
+    "",
+    'Ask me one behavioural interview question ("Tell me about a time…") that one of these would be a strong answer to.',
+    "Rules: the question at most 30 words; entry is the number of the item it fits best.",
+    "",
+    JSON_ONLY,
+    '{"question": "...", "entry": 1}',
+  ]);
+}
+
+export function parseStoryQuestion(text: string, count: number): { question: string; entry: number } | null {
+  const o = obj(extractJson(text));
+  const question = str(o.question, 300);
+  const entry = int(o.entry);
+  if (!question) return null;
+  return { question, entry: entry && entry <= count ? entry : 1 };
+}
+
+export function storyFeedbackPrompt(req: { question: string; answer: string; entry: { title: string; detail: string } }): Prompt {
+  return prompt([
+    `Interview question: ${req.question}`,
+    `What really happened (from my notes): ${req.entry.title}: ${req.entry.detail}`,
+    "",
+    `My spoken answer, typed: ${req.answer.slice(0, 1_500)}`,
+    "",
+    "Coach my answer like a kind, direct interviewer. Rules:",
+    '- verdict: "right" if it would land well, "partly" if it has the bones but is missing something, "wrong" if it does not answer the question.',
+    "- feedback: at most 80 words. Check it has the situation, what I did (not what the AI did), the result, and what I learned. Name the one thing to add or cut.",
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
   ]);
 }

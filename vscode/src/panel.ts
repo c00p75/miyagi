@@ -18,7 +18,6 @@ import path from "node:path";
 import { conceptsIn, gitChanges } from "../../src/changes.js";
 import { CONCEPTS, scrub, type FileChange } from "../../src/concepts.js";
 import type { Observation } from "../../src/observe.js";
-import { AudioQueue } from "../../src/tts.js";
 import * as engine from "./engine.js";
 import { resolveProvider, type AiOptions, type Prompt } from "./ai.js";
 import {
@@ -62,6 +61,8 @@ import type { QuietReason } from "./schedule.js";
 import { assistantReasoning } from "./transcript.js";
 import { parseTopic } from "./topics.js";
 import type { Scan } from "./watch.js";
+import { Coach } from "./coach.js";
+import { addStory, count, updateGrowth } from "./growth.js";
 
 const FEED_KEY = "miyagi.feed.v1";
 const TOPIC_KEY = "miyagi.topic.v1";
@@ -147,7 +148,6 @@ type Inbound =
   | { type: "attemptSubmit"; key: string; text: string }
   | { type: "bug"; key: string }
   | { type: "why"; key: string }
-  | { type: "speak"; key: string }
   | { type: "risks"; lesson: string }
   | { type: "walk"; lesson: string }
   | { type: "walkStep"; lesson: string; index: number }
@@ -172,7 +172,38 @@ type Inbound =
   | { type: "idea"; id: string }
   | { type: "command"; id: string }
   | { type: "openLink"; url: string }
-  | { type: "copy"; text: string };
+  | { type: "copy"; text: string }
+  // The coach: tools, debugging, predictions, commit checks, decisions, growth.
+  | { type: "learnAbout"; text: string }
+  | { type: "toolGuess"; key: string; text: string }
+  | { type: "toolPrimer"; key: string }
+  | { type: "toolAdopt"; key: string }
+  | { type: "toolDecision"; key: string }
+  | { type: "termQuiz"; slot: string; id: string }
+  | { type: "saveDecision"; key?: string; lesson?: string; index?: number; typed?: { title: string; chose: string; over: string; because: string } }
+  | { type: "lessonDecisions"; lesson: string }
+  | { type: "copyDecision"; id: string }
+  | { type: "debugPick"; key: string; line: number }
+  | { type: "debugSubmit"; key: string; text: string }
+  | { type: "debugSkip"; key: string }
+  | { type: "debugHint"; key: string; step: Hint }
+  | { type: "debugSelf"; key: string; right: boolean }
+  | { type: "debugLesson"; key: string }
+  | { type: "predictOpen" }
+  | { type: "predictLock"; files: string[]; approach: string }
+  | { type: "predictDismiss" }
+  | { type: "predictApproach"; key: string }
+  | { type: "predictWalk"; key: string }
+  | { type: "gateAsk"; key: string }
+  | { type: "dismissItem"; key: string }
+  | { type: "answerOwn"; token: string; text: string; confidence?: string }
+  | { type: "findIdeasOffer"; accept: boolean }
+  | { type: "grow" }
+  | { type: "incident"; text: string }
+  | { type: "skillExercise"; id: string }
+  | { type: "skillDone"; id: string }
+  | { type: "storyAsk" }
+  | { type: "storyAnswer"; text: string };
 
 export interface PanelDeps {
   context: vscode.ExtensionContext;
@@ -186,6 +217,8 @@ export interface PanelDeps {
   onStatus(status: engine.StatusView): void;
   /** Are changes read and waiting for a stopping point? */
   holding(): boolean;
+  /** The watched repository a folder belongs to. */
+  rootOf(dir: string): string | undefined;
 }
 
 const setting = <T>(key: string, fallback: T): T => vscode.workspace.getConfiguration("miyagi").get<T>(key, fallback);
@@ -236,9 +269,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private readonly turnBaselines = new Map<string, { lines: number; at: number }>();
   private turnsProposed = 0;
   private lastDepth: engine.Level = "Junior";
+  readonly coach: Coach;
 
-  private readonly voice = { enabled: true, words_per_minute: 180 };
-  private readonly audio = new AudioQueue(this.voice);
   private readonly highlight = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
     backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
@@ -254,6 +286,44 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       this.lastSeen = saved.lastSeen ?? {};
     }
     this.topic = parseTopic(deps.context.globalState.get<string>(TOPIC_KEY));
+    this.coach = new Coach({
+      context: deps.context,
+      ask: (slot, build, use) => this.ask(slot, build, use),
+      push: () => void this.pushState(),
+      post: (message) => this.post(message),
+      depth: async () => (await engine.status()).depth,
+      aiReady: async () => Boolean((await this.resolveAi()).provider),
+      quiet: () => this.deps.quiet().quiet,
+      announce: (count, title) => this.announce(count, title),
+      lessonFiles: async (id) => {
+        const lesson = this.lesson(id);
+        return lesson ? this.changedFiles(lesson) : [];
+      },
+      lessonInfo: (id) => {
+        const lesson = this.lesson(id);
+        return lesson ? { root: lesson.root, files: lesson.files } : null;
+      },
+      walk: (id) => {
+        this.post({ type: "openLesson", lesson: id });
+        void this.walk(id);
+      },
+      roots: () => this.deps.roots(),
+      rootOf: (dir) => this.deps.rootOf(dir),
+      sourceName: (source) => SOURCE_NAMES[source],
+    });
+  }
+
+  /** Something new arrived: a badge, and a toast if the learner asked for those. */
+  private announce(count: number, title: string): void {
+    if (!count || this.visible) return void this.pushState();
+    this.unseen += count;
+    this.badge();
+    if (setting<string>("notify", "badge") === "toast" && title) {
+      void vscode.window.showInformationMessage(`Miyagi: ${title}`, "Open").then((choice) => {
+        if (choice) void vscode.commands.executeCommand("miyagi.open");
+      });
+    }
+    void this.pushState();
   }
 
   /* ---- webviews -------------------------------------------------- */
@@ -411,6 +481,10 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       mirror: this.mirrorLine(),
       check: this.check && { asked: this.check.asked, of: this.check.plan.length + this.check.asked },
       turnsLeft: this.turnsProposed === 0,
+      coach: await this.coach.view(),
+      lessonDecisions: this.coach.lessonDecisionView(),
+      explainBack: setting("explainBack", true) && Boolean(resolved.provider),
+      predictions: setting<string>("coach.predictions", "onNewTask"),
     });
   }
 
@@ -603,7 +677,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         this.explanations[key] = { text, by };
         this.reflect((m) => m.explained++);
         this.save();
-        if (setting("voice.autoRead", false)) this.speakText(text);
       },
     );
   }
@@ -679,6 +752,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         if (!feedback) return "The AI's reply could not be read. Try again.";
         Object.assign(attempt, feedback, { by });
         this.reflect((m) => m.attempted++);
+        void updateGrowth((g) => count(g, { kind: "explained", verdict: feedback.verdict }));
       },
     );
     // Their explanation first, then the model's, so the two can be compared.
@@ -833,6 +907,10 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       turn.verdict = "done";
       turn.lines = gained;
       await engine.creditUnaided(turn.task, XP_YOUR_TURN);
+      await updateGrowth((g) => {
+        count(g, { kind: "unaided" });
+        addStory(g, { kind: "turn", title: `Wrote it without the AI: ${turn.task.slice(0, 80)}`, detail: `${gained} lines in ${turn.file}, checked against the diff.` });
+      });
     }
     void this.pushState();
   }
@@ -850,6 +928,11 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     if (!quiz) {
       const result = await engine.recordCheck(this.check.asked, this.check.correct);
       this.check = null;
+      if (result && result.correct / result.asked >= 0.8) {
+        await updateGrowth((g) =>
+          addStory(g, { kind: "check", title: `Unaided check: ${result.correct} of ${result.asked}`, detail: "Answered with every kind of help switched off." }),
+        );
+      }
       this.post({ type: "review", quiz: null, checked: result });
       return void this.pushState();
     }
@@ -1006,7 +1089,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     const step = this.lessonExtras[id]?.walk?.steps[index];
     if (!lesson || !step) return;
     if (step.file) await this.openAt(lesson.root, step.file, step.line, true);
-    if (setting("voice.autoRead", false)) this.speakText(`${step.title}. ${step.text}`);
   }
 
   /* ---- the editor ------------------------------------------------ */
@@ -1050,32 +1132,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     await this.openAt(card.root, card.file, line);
   }
 
-  /* ---- voice ----------------------------------------------------- */
-
-  private speakText(text: string): void {
-    this.voice.words_per_minute = Math.max(90, Math.min(360, setting("voice.wordsPerMinute", 180)));
-    this.audio.enqueue(text);
-  }
-
-  private speak(key: string): void {
-    const card = this.card(key);
-    if (!card) return;
-    // Pressing it again while more is queued is how you stop it.
-    if (this.audio.pending) return this.audio.clear();
-    this.speakText(
-      [
-        card.title,
-        card.hook,
-        card.what,
-        card.lens[this.lastDepth],
-        `How it goes wrong. ${card.pitfall}`,
-        this.explanations[key]?.text ?? "",
-      ]
-        .filter(Boolean)
-        .join(". "),
-    );
-  }
-
   /* ---- things that arrive from the watcher ----------------------- */
 
   private attribution(root: string, files: readonly string[]): string | undefined {
@@ -1104,6 +1160,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     }
     const cards = this.addLesson(lesson);
     if (this.heartbeat && this.heartbeat.root === root) this.heartbeat.taught += cards;
+    await this.coach.changes(root, changes, lesson?.id ?? null);
 
     const mode = setting<string>("ai.findIdeas", "off");
     if (!repeat && (mode === "always" || (mode === "whenNothingFound" && !cards))) {
@@ -1142,8 +1199,14 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         return findIdeasPrompt(changed, CONCEPTS.map((c) => c.title), (await engine.status()).depth);
       },
       async (reply, by) => {
-        const found = parseFoundIdeas(reply, files);
-        if (!found?.length) return;
+        const parsed = parseFoundIdeas(reply, files);
+        if (!parsed?.length) return;
+        // A tool is taught as a track of its own, not as one more idea card.
+        for (const tool of parsed.filter((f) => f.kind === "tool")) {
+          await this.coach.foundTool(root, tool.title, scrub(tool.evidence) || tool.title, tool.file);
+        }
+        const found = parsed.filter((f) => f.kind !== "tool");
+        if (!found.length) return;
         const registered = await registerFound(found);
         if (!registered.length) return;
         const lesson = await engine.teach({
@@ -1202,9 +1265,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     if (setting<string>("ai.explain", "onDemand") === "auto") {
       for (const card of lesson.cards) void this.explain(card.key);
     }
-    if (setting("voice.autoRead", false) && lesson.cards[0]) {
-      this.speakText(`New idea. ${lesson.cards[0].title}. ${lesson.cards[0].hook}`);
-    }
     return lesson.cards.length;
   }
 
@@ -1239,7 +1299,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         });
         continue;
       }
-      if (!o.cwd) continue;
+      if (o.kind !== "edit" || !o.cwd) continue;
       const abs = path.isAbsolute(o.file) ? o.file : path.join(o.cwd, o.file);
       const at = Date.parse(o.at) || Date.now();
       this.recentEdits.set(abs, { source: o.source, session: o.session, at });
@@ -1264,6 +1324,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         this.addLesson(lesson);
       }
     }
+    await this.coach.observed(observations);
     while (this.commands.size > MAX_COMMANDS) this.commands.delete(this.commands.keys().next().value as string);
     while (this.recentEdits.size > 400) this.recentEdits.delete(this.recentEdits.keys().next().value as string);
     void this.pushState();
@@ -1282,6 +1343,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     this.commands.clear();
     this.commandTotal = 0;
     this.unseen = 0;
+    this.coach.clear();
     engine.forgetSession();
     this.badge();
     this.save();
@@ -1293,7 +1355,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     return this.lessons.map((l) => ({ source: l.source, concepts: l.cards.map((c) => c.conceptId) }));
   }
 
-  showTab(tab: "now" | "review" | "dojo"): void {
+  showTab(tab: "now" | "review" | "dojo" | "grow"): void {
     this.post({ type: "tab", tab });
   }
 
@@ -1309,6 +1371,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         case "openAt":
           return void (await this.openAt(message.root, message.file, message.line));
         case "explain":
+          // Asking before trying is the AI going first. Counted, never scolded.
+          if (!this.extras[message.key]?.attempt) void updateGrowth((g) => count(g, { kind: "aiFirst" }));
           return void (await this.explain(message.key));
         case "followUp":
           return void (await this.followUp(message.key, message.text));
@@ -1322,8 +1386,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.bug(message.key));
         case "why":
           return void (await this.why(message.key));
-        case "speak":
-          return this.speak(message.key);
         case "risks":
           return void (await this.risks(message.lesson));
         case "walk":
@@ -1345,6 +1407,16 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           if (this.check && this.check.token === message.token && answer?.correct) this.check.correct++;
           this.week = null;
           this.post({ type: "answered", token: message.token, answer });
+          await this.coach.answered(message.token, answer);
+          return void (await this.pushState());
+        }
+        case "answerOwn": {
+          const questionId = engine.questionIdFor(message.token);
+          if (questionId) this.reviewed.push(questionId);
+          await this.coach.answerOwnWords(message.token, String(message.text ?? ""), message.confidence ?? null, {
+            blackBeltNeedsTransfer: setting("blackBeltNeedsTransfer", true),
+          });
+          this.week = null;
           return void (await this.pushState());
         }
         case "review": {
@@ -1354,7 +1426,9 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
             this.reviewed = [];
             return this.post({ type: "review", quiz: null });
           }
-          const quiz = await engine.nextReview(this.reviewed, this.topic, setting("mixTopicsInReview", true));
+          // Unaided checks stay multiple choice: the point there is no help at all, including an AI judge.
+          const explainBack = !this.check && setting("explainBack", true) && Boolean((await this.resolveAi()).provider);
+          const quiz = await engine.nextReview(this.reviewed, this.topic, setting("mixTopicsInReview", true), { explainBack });
           if (!quiz) {
             this.reviewed = [];
             this.reviewCap = null;
@@ -1398,6 +1472,74 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
         }
         case "recap":
           return this.recap(String(message.text ?? ""));
+        case "learnAbout":
+          return void (await this.coach.learnAbout(String(message.text ?? "")));
+        case "toolGuess":
+          return void (await this.coach.toolGuess(message.key, String(message.text ?? "")));
+        case "toolPrimer":
+          return void (await this.coach.toolPrimer(message.key));
+        case "toolAdopt":
+          return void (await this.coach.toolAdopt(message.key));
+        case "toolDecision":
+          return void (await this.coach.toolDecision(message.key));
+        case "termQuiz":
+          return void (await this.coach.termQuiz(message.slot, message.id));
+        case "saveDecision": {
+          const problem = await this.coach.saveDecision({ key: message.key, lesson: message.lesson, index: message.index, typed: message.typed });
+          if (problem) this.post({ type: "decisionProblem", problem });
+          return void (await this.coach.refreshGrow());
+        }
+        case "lessonDecisions":
+          return void (await this.coach.lessonDecisionsFind(message.lesson));
+        case "copyDecision": {
+          const text = await this.coach.decisionMarkdown(String(message.id ?? ""));
+          if (text) {
+            await vscode.env.clipboard.writeText(text);
+            void vscode.window.setStatusBarMessage("Miyagi: decision record copied. Paste it into your docs.", 3000);
+          }
+          return;
+        }
+        case "debugPick":
+          return this.coach.debugPick(message.key, Number(message.line));
+        case "debugSubmit":
+          return void (await this.coach.debugSubmit(message.key, String(message.text ?? "")));
+        case "debugSkip":
+          return void (await this.coach.debugSubmit(message.key, "", true));
+        case "debugHint":
+          return void (await this.coach.debugHint(message.key, message.step === "pointer" ? "pointer" : "nudge"));
+        case "debugSelf":
+          return void (await this.coach.debugSelf(message.key, message.right === true));
+        case "debugLesson":
+          return this.post({ type: "incidentPrefill", text: this.coach.incidentFrom(message.key) });
+        case "predictOpen":
+          return void (await this.coach.predictOpen("manual"));
+        case "predictLock":
+          return void (await this.coach.predictLock(Array.isArray(message.files) ? message.files.map(String) : [], String(message.approach ?? "")));
+        case "predictDismiss":
+          return this.coach.predictDismiss();
+        case "predictApproach":
+          return void (await this.coach.predictApproach(message.key));
+        case "predictWalk":
+          return this.coach.walk(message.key);
+        case "gateAsk":
+          return void (await this.coach.gateAsk(message.key));
+        case "dismissItem":
+          return this.coach.dismiss(message.key);
+        case "findIdeasOffer":
+          return void (await this.coach.offerFindIdeas(message.accept === true));
+        case "grow":
+          return void (await this.coach.refreshGrow());
+        case "incident":
+          await this.coach.incident(String(message.text ?? ""));
+          return void (await this.coach.refreshGrow());
+        case "skillExercise":
+          return void (await this.coach.skillExercise(String(message.id ?? "")));
+        case "skillDone":
+          return void (await this.coach.skillDone(String(message.id ?? "")));
+        case "storyAsk":
+          return void (await this.coach.storyAsk());
+        case "storyAnswer":
+          return void (await this.coach.storyAnswer(String(message.text ?? "")));
         case "dojo":
           return this.post({
             type: "dojo",
@@ -1438,7 +1580,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
 
   dispose(): void {
     for (const b of this.busy.values()) b.abort.abort();
-    this.audio.dispose();
     this.highlight.dispose();
     this.tab?.dispose();
   }

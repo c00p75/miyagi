@@ -72,7 +72,7 @@ before(async () => {
   });
   assert.equal(init.result.serverInfo.name, "miyagi");
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-  await call("quick_config", { mode: "drill", voice_enabled: false });
+  await call("quick_config", { mode: "drill" });
 });
 
 after(() => {
@@ -97,8 +97,12 @@ test("the handshake advertises tools, resources, prompts and completions", async
   ]) {
     assert.ok(names.includes(expected), `missing tool: ${expected}`);
   }
-  // The duplicated voice tool is gone; quick_config owns configuration now.
+  // Voice was removed entirely: no tool for it, and no voice fields on quick_config.
   assert.ok(!names.includes("configure_voice"));
+  const config = tools.result.tools.find((t: { name: string }) => t.name === "quick_config");
+  for (const gone of ["voice_enabled", "words_per_minute", "test_phrase"]) {
+    assert.ok(!(gone in config.inputSchema.properties), `quick_config still accepts ${gone}`);
+  }
 
   const verify = tools.result.tools.find((t: { name: string }) => t.name === "verify_step");
   assert.equal(verify.annotations?.readOnlyHint, false, "verify_step mutates XP and the step index");
