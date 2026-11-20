@@ -1,0 +1,551 @@
+{
+  "name": "miyagi-vscode",
+  "displayName": "Miyagi: learn while your AI codes",
+  "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
+  "version": "0.4.2",
+  "publisher": "georgemsapenda",
+  "author": "George M'sapenda",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "Education",
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "learn",
+    "tutor",
+    "vibe coding",
+    "claude code",
+    "cursor",
+    "copilot",
+    "spaced repetition"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/c00p75/miyagi.git",
+    "directory": "vscode"
+  },
+  "main": "./dist/extension.js",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0B0B0B",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "miyagi",
+          "title": "Miyagi",
+          "icon": "media/activity.svg",
+          "when": "!miyagi.secondarySidebar"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "miyagi-secondary",
+          "title": "Miyagi",
+          "icon": "media/activity.svg",
+          "when": "miyagi.secondarySidebar"
+        }
+      ]
+    },
+    "views": {
+      "miyagi": [
+        {
+          "type": "webview",
+          "id": "miyagi.panel",
+          "name": "Miyagi",
+          "when": "!miyagi.secondarySidebar"
+        }
+      ],
+      "miyagi-secondary": [
+        {
+          "type": "webview",
+          "id": "miyagi.panelSecondary",
+          "name": "Miyagi",
+          "when": "miyagi.secondarySidebar"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "miyagi.open",
+        "title": "Open Panel",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.openBeside",
+        "title": "Open Beside the Editor",
+        "category": "Miyagi",
+        "icon": "$(split-horizontal)"
+      },
+      {
+        "command": "miyagi.setup",
+        "title": "Set Up Everything for Me",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.review",
+        "title": "Review What Is Due",
+        "category": "Miyagi",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "miyagi.unaidedCheck",
+        "title": "Take the Unaided Check",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.pause",
+        "title": "Pause",
+        "category": "Miyagi",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "miyagi.resume",
+        "title": "Resume",
+        "category": "Miyagi",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "miyagi.explainChanges",
+        "title": "Teach Me My Uncommitted Changes",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.teachBranch",
+        "title": "Teach Me a Branch or Pull Request",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.projectMap",
+        "title": "Explain How This Project Works",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.tour",
+        "title": "Tour the Ideas in This Codebase",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.weeklyReport",
+        "title": "Show My Week",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.recap",
+        "title": "Wrap Up This Session",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.shareWithTeam",
+        "title": "Share My Progress with My Team",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.teamReport",
+        "title": "Show Team Report",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.chooseAi",
+        "title": "Choose Which AI Writes Explanations",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.enableCapture",
+        "title": "Turn On Command Capture (choose assistant and scope)",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.disableCapture",
+        "title": "Turn Off Command Capture",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.moveToSide",
+        "title": "Move Panel to Another Side Bar",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.clearFeed",
+        "title": "Clear the Lesson Feed",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.settings",
+        "title": "Open Settings",
+        "category": "Miyagi",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "miyagi.doctor",
+        "title": "Show Diagnostics",
+        "category": "Miyagi"
+      }
+    ],
+    "configuration": {
+      "title": "Miyagi",
+      "properties": {
+        "miyagi.watch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch the workspace for code changes and add a lesson card when a change uses an idea worth understanding. Read-only: uses git diff and never edits files."
+        },
+        "miyagi.watch.ignore": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Files Miyagi should never teach from, as glob patterns relative to the repository. A pattern with no slash matches at any depth, like a `.gitignore` line. Examples: `**/*.test.ts`, `migrations/**`, `*.generated.*`."
+        },
+        "miyagi.watch.excludeRepositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Repositories to leave alone, by folder name or full path. Useful when one window holds several projects and only some are yours to learn."
+        },
+        "miyagi.watch.teachAt": {
+          "type": "string",
+          "default": "breakpoints",
+          "enum": [
+            "breakpoints",
+            "immediately"
+          ],
+          "enumDescriptions": [
+            "Hold new cards until a commit, a test run, or a pause in the work.",
+            "Show a card as soon as a change is read."
+          ],
+          "description": "When a change becomes a card. A card that arrives mid-task interrupts the task and is read by nobody, so by default Miyagi waits for a stopping point."
+        },
+        "miyagi.watch.quietSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "maximum": 600,
+          "description": "With teaching at breakpoints: how many seconds without a change count as a pause."
+        },
+        "miyagi.ideasPerChange": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "The most ideas taught from one change. The rest are named and left for next time."
+        },
+        "miyagi.recallFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a question without its choices first. You answer in your head, tap how sure you are, and then the choices appear. Recalling an answer teaches more than recognising it."
+        },
+        "miyagi.explainFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "\"Explain in my code\" asks what you think the lines do before showing an explanation, with a nudge and a pointer on the way. \"Skip, just show me\" is always there."
+        },
+        "miyagi.fadeSupport": {
+          "type": "boolean",
+          "default": true,
+          "description": "From green belt up, show an idea's question first and keep its lesson behind a link."
+        },
+        "miyagi.mixTopicsInReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "With a topic chosen, still take about one review question in four from another topic. Mixed questions are harder and are remembered longer."
+        },
+        "miyagi.blackBeltNeedsTransfer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Before an idea reaches black belt, ask one question about it in a different language or framework. Needs an AI; without one this is skipped."
+        },
+        "miyagi.weeklyGoalDays": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 7,
+          "description": "How many days a week you aim to practise. Miyagi shows progress toward this instead of a daily streak, and a week that falls one day short still counts."
+        },
+        "miyagi.reviewAfterFirstCommit": {
+          "type": "boolean",
+          "default": false,
+          "description": "After your first commit of the day, offer up to three review questions. Once a day, and only if something is due."
+        },
+        "miyagi.notify": {
+          "type": "string",
+          "default": "badge",
+          "enum": [
+            "off",
+            "badge",
+            "toast"
+          ],
+          "enumDescriptions": [
+            "Nothing. New cards wait in the panel.",
+            "A count on the Miyagi icon.",
+            "A count on the icon and a notification naming the idea."
+          ],
+          "description": "How you are told about a new card while the panel is not showing."
+        },
+        "miyagi.reviewReminder": {
+          "type": "string",
+          "default": "daily",
+          "enum": [
+            "off",
+            "daily"
+          ],
+          "enumDescriptions": [
+            "Never remind me.",
+            "At most once a day, when three or more questions are due."
+          ],
+          "description": "Whether Miyagi reminds you that review questions are due."
+        },
+        "miyagi.quietHours": {
+          "type": "string",
+          "default": "",
+          "pattern": "^$|^\\s*\\d{1,2}:\\d{2}\\s*-\\s*\\d{1,2}:\\d{2}\\s*$",
+          "markdownDescription": "A daily time range with no cards, notifications or reminders, as `HH:MM-HH:MM` in 24-hour time. `22:00-07:00` crosses midnight. Empty means none. Changes are still read during quiet hours so nothing is taught late."
+        },
+        "miyagi.statusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Miyagi in the status bar, with the number of questions due."
+        },
+        "miyagi.ai.provider": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "editor",
+            "claude",
+            "codex",
+            "gemini",
+            "ollama",
+            "custom",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Use the assistant you were seen working with, else the first one found.",
+            "Chat models the editor exposes to extensions (GitHub Copilot in VS Code).",
+            "Claude Code, run headless on your existing login.",
+            "OpenAI Codex, run headless on your existing login.",
+            "Gemini CLI, run headless on your existing login.",
+            "A model running on this machine through Ollama. Nothing leaves it.",
+            "Your own command (miyagi.ai.customCommand).",
+            "No AI. Cards use the built-in lessons only."
+          ],
+          "description": "Which AI writes the explanation tied to your code. It runs on your own account with that provider; Miyagi has no account and no key of its own."
+        },
+        "miyagi.ai.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to ask for. Empty picks a small, cheap model where the provider lets Miyagi choose (Claude Code: haiku; Ollama: the first model you have pulled)."
+        },
+        "miyagi.ai.customCommand": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "A shell command that reads the prompt on stdin and prints the answer on stdout, for example `llm -m gpt-4o-mini` or `ollama run llama3.2`. Used when the provider is `custom`."
+        },
+        "miyagi.ai.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Where your Ollama server listens. Empty stops Miyagi from looking for one."
+        },
+        "miyagi.ai.explain": {
+          "type": "string",
+          "default": "onDemand",
+          "enum": [
+            "onDemand",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Only when you press \"Explain in my code\" on a card.",
+            "Automatically for every new card. Uses more of your AI allowance."
+          ],
+          "description": "When Miyagi asks your AI for an explanation."
+        },
+        "miyagi.ai.findIdeas": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "whenNothingFound",
+            "always"
+          ],
+          "enumDescriptions": [
+            "Only the built-in ideas and your idea packs are taught.",
+            "Ask your AI what is worth understanding when a change matches none of the built-in ideas.",
+            "Ask your AI about every change, as well as the built-in ideas."
+          ],
+          "markdownDescription": "Let your AI find ideas the built-in list does not know. This runs **without a button press** and uses your AI allowance, so it is off by default and limited by `miyagi.ai.findIdeasPerHour`. Lessons it writes are marked as written by your AI."
+        },
+        "miyagi.ai.findIdeasPerHour": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "The most times per hour Miyagi may ask your AI to look for ideas in a change."
+        },
+        "miyagi.voice.autoRead": {
+          "type": "boolean",
+          "default": false,
+          "description": "Read new cards, explanations and walkthrough steps aloud using your system's speech engine."
+        },
+        "miyagi.voice.wordsPerMinute": {
+          "type": "number",
+          "default": 180,
+          "minimum": 90,
+          "maximum": 360,
+          "description": "How fast Miyagi speaks."
+        },
+        "miyagi.team.folder": {
+          "type": "string",
+          "default": ".miyagi/team",
+          "description": "Where team summaries are written and read, relative to the repository. Sharing happens when you commit the file; Miyagi sends nothing anywhere."
+        },
+        "miyagi.team.name": {
+          "type": "string",
+          "default": "",
+          "description": "The name on the summary you share with your team."
+        }
+      }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "miyagi.review",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "miyagi.pause",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary) && !miyagi.paused",
+          "group": "navigation@2"
+        },
+        {
+          "command": "miyagi.resume",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary) && miyagi.paused",
+          "group": "navigation@2"
+        },
+        {
+          "command": "miyagi.openBeside",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "navigation@3"
+        },
+        {
+          "command": "miyagi.settings",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "navigation@4"
+        },
+        {
+          "command": "miyagi.explainChanges",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@1"
+        },
+        {
+          "command": "miyagi.teachBranch",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@2"
+        },
+        {
+          "command": "miyagi.projectMap",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@3"
+        },
+        {
+          "command": "miyagi.weeklyReport",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@4"
+        },
+        {
+          "command": "miyagi.setup",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "2_setup@1"
+        },
+        {
+          "command": "miyagi.chooseAi",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "2_setup@2"
+        },
+        {
+          "command": "miyagi.moveToSide",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "2_setup@3"
+        },
+        {
+          "command": "miyagi.clearFeed",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "3_misc@1"
+        },
+        {
+          "command": "miyagi.doctor",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "3_misc@2"
+        },
+        {
+          "command": "miyagi.unaidedCheck",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@5"
+        },
+        {
+          "command": "miyagi.recap",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@6"
+        },
+        {
+          "command": "miyagi.tour",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "1_teach@7"
+        },
+        {
+          "command": "miyagi.shareWithTeam",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "4_team@1"
+        },
+        {
+          "command": "miyagi.teamReport",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "4_team@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "miyagi.pause",
+          "when": "!miyagi.paused"
+        },
+        {
+          "command": "miyagi.resume",
+          "when": "miyagi.paused"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node esbuild.mjs && node esbuild.mjs --tests && node --test dist-test/*.test.cjs",
+    "test:host": "node esbuild.mjs && sh test/host/run.sh",
+    "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --baseContentUrl https://github.com/c00p75/miyagi/blob/main/vscode --baseImagesUrl https://github.com/c00p75/miyagi/raw/main/vscode",
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "publish:marketplace": "vsce publish --no-dependencies --packagePath miyagi-vscode-$npm_package_version.vsix",
+    "publish:openvsx": "npx --yes ovsx publish miyagi-vscode-$npm_package_version.vsix",
+    "release": "npm run package && npm run publish:marketplace && npm run publish:openvsx",
+    "harness": "mkdir -p dist-test/harness && esbuild test/harness/mock.ts --bundle --platform=node --format=cjs --outfile=dist-test/harness/mock.cjs --log-level=error --log-override:empty-import-meta=silent && node dist-test/harness/mock.cjs dist-test/harness/mock.js && cp test/harness/index.html media/panel.css media/panel.js dist-test/harness/ && echo \"Serving on http://localhost:8765/index.html#feed\" && python3 -m http.server 8765 --directory dist-test/harness"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/vscode": "~1.94.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  }
+}

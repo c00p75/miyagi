@@ -52,11 +52,11 @@ jobs:
                   .filter(Boolean)
                   .map((l) => JSON.parse(l))
                   .find((m) => m.id === 2)?.result?.tools;
-                if (!tools || tools.length !== 10) {
-                  console.error("expected 10 tools, got", tools?.length);
+                if (!tools || tools.length !== 12) {
+                  console.error("expected 12 tools, got", tools?.length);
                   process.exit(1);
                 }
-                console.log("ok: 10 tools over stdio");
+                console.log("ok: 12 tools over stdio");
               });
             '
         env:
@@ -92,11 +92,11 @@ jobs:
               process.stdin.on("end", () => {
                 const msgs = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l));
                 const tools = msgs.find((m) => m.id === 2)?.result?.tools;
-                if (!tools || tools.length !== 10) {
+                if (!tools || tools.length !== 12) {
                   console.error("bin served no tools; the entry guard is broken");
                   process.exit(1);
                 }
-                console.log("ok: installed bin served 10 tools");
+                console.log("ok: installed bin served 12 tools");
               });
             '
         env:

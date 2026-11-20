@@ -354,7 +354,7 @@ test("getting-started is readable without spending a turn asking for it", async 
   try {
     const res = await client.send("resources/read", { uri: "miyagi://getting-started" });
     const text = res.result.contents[0].text as string;
-    assert.match(text, /You run the commands/);
+    assert.match(text, /makes sure you understood it/);
     assert.match(text, /verify_step/);
     assert.match(text, /--doctor/);
   } finally {

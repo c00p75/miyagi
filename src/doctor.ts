@@ -24,6 +24,10 @@ import { allTracks, loadUserTracks, roadmapsDir, verifiableSteps } from "./roadm
 import { hostShell, execShellName } from "./platform.js";
 import { generatedCachePath, loadGeneratedCache } from "./sampling.js";
 import { QUIZ_BANK } from "./quiz.js";
+import { CONCEPTS, CONCEPT_QUESTIONS } from "./concepts.js";
+import { observationsPath, readCursor, readObservations } from "./observe.js";
+import { hookInstalled } from "./setup.js";
+import { ideaPacksDir, loadIdeaPacks, packProblems } from "./packs.js";
 
 const exec = promisify(execCb);
 
@@ -157,6 +161,37 @@ async function checkTracks(): Promise<Check[]> {
   return checks;
 }
 
+/**
+ * Idea packs, reported the way track files are: a count when all is well, and
+ * a separate warning naming every file or concept that was left out.
+ *
+ * Runs before the capture check so the technique count that check prints
+ * includes whatever the packs added.
+ */
+async function checkIdeaPacks(): Promise<Check[]> {
+  const loads = await loadIdeaPacks();
+  const added = loads.reduce((n, l) => n + l.added.length, 0);
+  const checks: Check[] = [
+    {
+      name: "Idea packs",
+      status: "ok",
+      detail: loads.length
+        ? `${added} idea${added === 1 ? "" : "s"} from ${loads.length} file${loads.length === 1 ? "" : "s"} in ${ideaPacksDir()}`
+        : `none; add a JSON pack under ${ideaPacksDir()} to teach your own ideas`,
+    },
+  ];
+  const problems = packProblems(loads);
+  if (problems.length) {
+    checks.push({
+      name: "Idea packs skipped",
+      status: "warn",
+      detail: problems.join("; "),
+      fix: "Fix or remove those entries. A skipped idea is never detected and never taught, with no other sign that anything is wrong.",
+    });
+  }
+  return checks;
+}
+
 async function checkSpeech(): Promise<Check> {
   const platform = os.platform();
   if (platform === "darwin") {
@@ -218,6 +253,28 @@ async function checkExecShell(): Promise<Check> {
   }
 }
 
+async function checkCapture(): Promise<Check> {
+  const claude = await hookInstalled("claude");
+  const cursor = await hookInstalled("cursor");
+  const all = await readObservations();
+  const pending = (await readObservations({ since: await readCursor() })).length;
+  const pack = `${CONCEPTS.length} techniques, ${CONCEPT_QUESTIONS.length} recall questions`;
+  if (!claude && !cursor) {
+    return {
+      name: "Ride-along capture",
+      status: "warn",
+      detail: `not installed for this project or globally (${pack} in the pack)`,
+      fix: "Run `npx miyagi-mcp --setup` so the tutor notices what your assistant does. `explain_change` and `debrief` still work from the git diff without it.",
+    };
+  }
+  const where = [claude ? `Claude Code (${claude})` : "", cursor ? `Cursor (${cursor})` : ""].filter(Boolean).join(", ");
+  return {
+    name: "Ride-along capture",
+    status: "ok",
+    detail: `installed for ${where}; ${all.length} observations logged, ${pending} waiting for a debrief (${observationsPath()}); ${pack}`,
+  };
+}
+
 export async function runDoctor(write: (line: string) => void = console.log): Promise<number> {
   const checks: Check[] = [];
   checks.push(await checkNode());
@@ -227,6 +284,8 @@ export async function runDoctor(write: (line: string) => void = console.log): Pr
   checks.push(await checkHistory());
   checks.push(...(await checkTracks()));
   checks.push(await checkQuizzes());
+  checks.push(...(await checkIdeaPacks()));
+  checks.push(await checkCapture());
   checks.push(await checkSpeech());
 
   write(`miyagi ${VERSION} — doctor`);

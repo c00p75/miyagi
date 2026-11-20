@@ -1,0 +1,13 @@
+src/**
+test/**
+dist-test/**
+node_modules/**
+../**
+esbuild.mjs
+tsconfig.json
+.gitignore
+**/*.map
+media/icon.svg
+media/icon-original.png
+media/screenshots/**
+media/demo.gif

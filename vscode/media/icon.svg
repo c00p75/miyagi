@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0B0B0B"/>
+  <!-- rising sun -->
+  <circle cx="256" cy="212" r="170" fill="#D8392B"/>
+  <!-- headband tails -->
+  <g fill="#D8392B" stroke="#0B0B0B" stroke-width="9" stroke-linejoin="round">
+    <path d="M338 168 L462 112 L436 160 L474 172 L344 204 Z"/>
+    <path d="M340 190 L446 214 L420 236 L342 216 Z"/>
+  </g>
+  <!-- body: gi -->
+  <path d="M84 470 C92 396 132 356 196 340 L300 340 C352 352 386 384 398 470 Z" fill="#F4E8CC" stroke="#0B0B0B" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M196 342 L250 418 L300 342" fill="none" stroke="#0B0B0B" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- head -->
+  <circle cx="248" cy="232" r="110" fill="#F4E8CC" stroke="#0B0B0B" stroke-width="9"/>
+  <!-- hair above the band -->
+  <path d="M152 178 C176 128 214 112 248 112 C286 112 322 130 344 178 Z" fill="#0B0B0B"/>
+  <!-- headband -->
+  <path d="M140 196 C176 170 320 170 356 196 L352 232 C316 208 180 208 144 232 Z" fill="#D8392B" stroke="#0B0B0B" stroke-width="9" stroke-linejoin="round"/>
+  <circle cx="248" cy="196" r="17" fill="#D8392B" stroke="#F4E8CC" stroke-width="7"/>
+  <!-- face -->
+  <g fill="none" stroke="#0B0B0B" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M190 246 L228 258" stroke-width="13"/>
+    <path d="M306 246 L268 258" stroke-width="13"/>
+    <path d="M214 300 C234 318 264 318 284 300" stroke-width="10"/>
+  </g>
+  <!-- laptop, seen from behind -->
+  <path d="M262 352 L452 352 C462 352 468 360 466 370 L448 458 L236 458 L250 364 C251 356 255 352 262 352 Z" fill="#0B0B0B" stroke="#F4E8CC" stroke-width="10" stroke-linejoin="round"/>
+  <g fill="none" stroke="#F4E8CC" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M318 382 L290 406 L318 430"/>
+    <path d="M366 376 L340 436"/>
+    <path d="M388 382 L416 406 L388 430"/>
+  </g>
+  <!-- desk -->
+  <path d="M60 474 L452 474" stroke="#F4E8CC" stroke-width="12" stroke-linecap="round"/>
+</svg>

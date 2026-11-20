@@ -92,6 +92,8 @@ test("the handshake advertises tools, resources, prompts and completions", async
     "review_due_items",
     "get_user_stats",
     "export_roadmap_notes",
+    "explain_change",
+    "debrief",
   ]) {
     assert.ok(names.includes(expected), `missing tool: ${expected}`);
   }
@@ -110,7 +112,7 @@ test("the handshake advertises tools, resources, prompts and completions", async
 
   const prompts = await send("prompts/list");
   const promptNames = prompts.result.prompts.map((p: { name: string }) => p.name);
-  assert.deepEqual(promptNames.sort(), ["drill", "explain-last-error", "progress", "review"]);
+  assert.deepEqual(promptNames.sort(), ["debrief", "drill", "explain-last-error", "progress", "review", "ride-along", "teach-me-this-change"]);
 });
 
 test("track names complete, so nobody has to guess one", async () => {
@@ -144,6 +146,26 @@ test("set_active_roadmap uses the track length, not a caller-supplied total", as
   const next = await call("get_next_roadmap_command");
   assert.equal(next.result.structuredContent.total_steps, beginner.steps);
   assert.notEqual(next.result.structuredContent.total_steps, 9999);
+});
+
+test("list_roadmaps ranks a web project ahead of Command Line Basics", async () => {
+  const res = await call("list_roadmaps", { project: "Next.js portfolio with Tailwind" });
+  const recs = res.result.structuredContent.recommendations as { name: string }[];
+  assert.ok(recs.length >= 1);
+  assert.equal(recs[0]?.name, "Frontend Developer");
+  assert.match(res.result.content[0].text, /Suggested for you/);
+  assert.match(res.result.content[0].text, /You pick/);
+});
+
+test("placement is optional, pays nothing, and does not start a track", async () => {
+  const opened = await call("quick_config", { start_placement: true });
+  const asked = opened.result.structuredContent.placement as { quiz_id: string }[];
+  assert.equal(asked.length, 3);
+  assert.match(opened.result.content[0].text, /optional placement/i);
+  const first = await call("verify_quiz_answer", { quiz_id: asked[0]!.quiz_id, answer: "not-this" });
+  assert.equal(first.result.structuredContent.xp_awarded, 0);
+  assert.match(first.result.content[0].text, /Placement/);
+  assert.match(first.result.content[0].text, /does not pay XP/);
 });
 
 test("a successful command returns a card and structured output together", async () => {
@@ -293,6 +315,9 @@ test("resources are readable without a tool call", async () => {
 });
 
 test("notes are written from the durable history, so a restart cannot empty them", async () => {
+  // An idea has to have been met for the export to have one to explain.
+  await call("explain_change", { diff: "const [open, setOpen] = useState(false);", path: "src/Menu.tsx", quiz: false });
+
   const target = path.join(home, "NOTES.md");
   const res = await call("export_roadmap_notes", { output_path: target });
   assert.match(res.result.content[0].text, /Notes Exported/);
@@ -301,6 +326,23 @@ test("notes are written from the durable history, so a restart cannot empty them
   assert.match(written, /printf/);
   assert.match(written, /Due for Review/);
   assert.match(written, /Weak Spots/);
+  assert.match(written, /Quiz Log/);
+
+  // The lesson, not just the log: one entry per distinct command, however
+  // many times it was run, at the depth the learner is being taught at.
+  const section = (heading: string) => written.split(`## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+  const commands = section("What each command does");
+  assert.equal(commands.match(/^### `printf`/gm)?.length, 1, "printf was run several times and explained other than once");
+  assert.match(commands, /^### `ls`/m);
+  assert.match(commands, /\*\*What it is\.\*\*/);
+  assert.match(commands, /\*\*How it bites\.\*\*/);
+  assert.match(commands, /Read more: \[/);
+
+  const ideas = section("Ideas met in your code");
+  assert.match(ideas, /### 🧠 React state/);
+  assert.match(ideas, /A value a component remembers between renders/);
+  assert.match(ideas, /\*\*How it bites\.\*\*/);
+  assert.ok(!/Roadmap set|Suggested command/.test(ideas), "a config event was listed as an idea");
 });
 
 test("prompts render usable instructions", async () => {
@@ -311,6 +353,19 @@ test("prompts render usable instructions", async () => {
   const text = drill.result.messages[0].content.text as string;
   assert.match(text, /review_due_items/);
   assert.match(text, /I run the commands/);
+  assert.match(text, /mode: "drill"/);
+  assert.match(text, /Do not start Command Line Basics/);
+  assert.match(text, /start_placement/);
+  assert.match(text, /user story/);
+
+  const rideAlong = await send("prompts/get", {
+    name: "ride-along",
+    arguments: { roadmap: "Command Line Basics" },
+  });
+  const rideText = rideAlong.result.messages[0].content.text as string;
+  assert.match(rideText, /mode: "ride-along"/);
+  assert.match(rideText, /Do not ask the quiz inline/);
+  assert.match(rideText, /Command Line Basics/);
 
   const explain = await send("prompts/get", {
     name: "explain-last-error",

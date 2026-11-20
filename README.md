@@ -1,7 +1,7 @@
 # 🥋 miyagi
 
-**A patient, gamified, voice-enabled MCP coding tutor.**
-*You run the commands. It drills, corrects, catches the falls, and keeps score.*
+**Learn while you vibe code.**
+*Your AI writes the code. miyagi makes sure it ends up in your head too.*
 
 [![CI](https://github.com/c00p75/miyagi/actions/workflows/ci.yml/badge.svg)](https://github.com/c00p75/miyagi/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/miyagi-mcp)](https://www.npmjs.com/package/miyagi-mcp)
@@ -9,18 +9,73 @@
 
 **[Overview and setup guide](https://www.georgemsapenda.dev/miyagi)** · [How it was built](https://www.georgemsapenda.dev/work/miyagi) · [npm](https://www.npmjs.com/package/miyagi-mcp)
 
-Wax on, wax off. `miyagi` never does the work for you. It hands you the next command,
-explains it at your level, and turns every result into a lesson. The default session mode
-is **ride-along**: a short card, no inline quiz, no voice. Switch to `drill` when you want
-the full teaching card — What/How/Trade-offs, a mental model diagram, pitfalls, docs, an
-active-recall quiz, and narration through your OS's own speech engine. What you get wrong
-comes back on a spaced-repetition schedule until it sticks.
+You asked for a checkout page and got four hundred lines back. It works. Could you explain
+it? `miyagi` is an MCP server that rides along while you build with Claude Code, Cursor or
+any MCP client. It notices what your assistant wrote, picks the two or three ideas in it
+actually worth owning, ties each one to a real line in *your* project, and then asks you
+about it again next week, right before you would have forgotten.
 
-**XP is for outcomes, not for tool calls.** Most steps carry a checkpoint: a read-only
-probe that looks at your machine and confirms the thing you were asked to do actually
-exists. Running a command is worth 10 XP in drill (3 in ride-along, nothing in focus);
-a verified outcome is worth 30, once. You cannot farm a title by asking an assistant to
-call a tool.
+```text
+🥋 Debrief
+
+Since your last debrief, your assistant ran 7 commands and edited 3 files (+212 lines).
+
+1. 🔑 A secret written into the code · 🆕 new technique
+   Your house key is now taped to the front door.
+   📍 app/api/pay/route.ts
+   💥 How it bites. You delete the line, commit, and relax. Bots that scrape public
+      repos found the key in the history within minutes…
+   🎤 Ask your AI: "Is this a real credential? Move it to an environment variable
+      and tell me exactly what I need to rotate."
+
+2. 💉 SQL built by gluing strings together · 🆕 new technique
+   You just let strangers finish your sentences — and the database does whatever
+   the sentence says.
+
+❓ An API key was committed to git, then deleted in the next commit. What now?
+
+✨ 2 new techniques discovered · XP is earned by answering its question
+```
+
+## How it works
+
+1. **It watches, quietly.** One command installs an editor hook. After each command or
+   edit your assistant makes, one line goes into a local log: the command, the file name,
+   and which ideas the change used. Never file contents, never output, nothing off your
+   machine. No hook? It reads `git diff` instead, so it works with zero setup.
+2. **It chooses.** A change can touch a dozen ideas. You get the few that matter most:
+   new to you first, security before syntax, and nothing you have already proved you know.
+3. **It teaches in three lines, not thirty.** A hook, what the thing is, how it bites, and
+   a question to put to your assistant. Your assistant then explains it using the code it
+   just wrote, not a textbook example.
+4. **It comes back.** Every idea has a recall question on a spaced-repetition schedule
+   (10 minutes, then 1, 3, 7, 16, 35 days). This is the part that turns "I saw that once"
+   into "I know that".
+5. **You earn belts, not points for showing up.** Each of the 23 techniques has a belt,
+   white to black, that rises only when you answer its question cold after a longer gap,
+   and drops when you miss. Techniques unlock when your assistant writes code that uses
+   them. You cannot grind the dojo. You have to build something.
+
+It also still does what it started as: guided terminal, git and DevOps tracks where *you*
+run the command and a read-only probe checks the outcome really exists on your machine.
+
+## Start in 60 seconds
+
+```bash
+claude mcp add miyagi -- npx -y miyagi-mcp     # 1. add the server (Claude Code)
+npx -y miyagi-mcp --setup                      # 2. turn on ride-along capture
+npx -y miyagi-mcp --rules >> CLAUDE.md         # 3. optional: teach without being asked
+```
+
+Restart your editor, build something, then say: ***"miyagi, debrief me."***
+
+- `--setup` writes one hook into `.claude/settings.local.json` (and `.cursor/hooks.json` if
+  the project uses Cursor). It merges with what is there, never overwrites, and refuses to
+  touch a file it cannot parse. Add `--global` for every project, `--dry-run` to preview,
+  `--uninstall` to remove it.
+- `--rules` prints a short paragraph for `CLAUDE.md`, `AGENTS.md` or `.cursorrules` that
+  tells the assistant to call `explain_change` when it finishes a piece of work.
+- Busy? Say "miyagi, focus mode". Ideas are still queued for later; nothing is shown.
 
 ## Why it's safe to install
 
@@ -121,13 +176,17 @@ For Claude Code, one command does it:
 claude mcp add miyagi -- npx -y miyagi-mcp
 ```
 
-Restart the client, then try: *"Set my roadmap to Backend Developer and teach me
-`docker compose config`."*
+Restart the client, build something, then try: *"miyagi, debrief me."* Or, for terminal
+practice: *"Set my roadmap to Backend Developer and teach me `docker compose config`."*
 
 ## What's in it
 
 | Engine | What it does |
 | --- | --- |
+| **Concept pack** | 23 ideas an assistant commonly writes — hard-coded secrets, SQL built from strings, React state and effects, environment variables, tokens, migrations, CORS, async code and more — each at three depths, with a hook, a pitfall told as a story, a question to ask the AI, and its own recall questions. Detection is a few regular expressions over *added* lines, fast enough for a hook and deliberately conservative: a tutor that explains something you did not do stops being read. |
+| **Ride-along capture** | `miyagi-observe`, a separate tiny entry point the editor hook runs (about 0.1s, no MCP SDK loaded). Understands Claude Code `PostToolUse` and Cursor `afterShellExecution` / `afterFileEdit`. Always exits 0 and never prints: a hook must not break the tool call it follows. Secrets are scrubbed from commands, and the line that matched "hard-coded secret" is never stored at all. |
+| **Choosing what to teach** | Ideas are ranked by how much a misunderstanding would cost, whether you have seen them, and how often you have missed them. Anything you have recalled cold three times is named, not re-explained. |
+| **The dojo** | `miyagi://dojo`: every technique discovered and the belt held in each. A belt is the review box in a costume, so it cannot be farmed and it drops on a miss. A new technique pays 5 XP, once. |
 | **Teaching** | A content pack with per-command lessons at three depths for 33 commands, so `pwd`, `git rebase` and `terraform apply` get three different lessons rather than the same boilerplate. A test walks every track step and fails the build if a taught command has no lesson. Anything genuinely uncovered comes with a *tutor brief*: the card tells the model what to teach, with the command, the real output and your depth already in hand. |
 | **Checkpoints** | Steps carry a read-only probe and a stated pass criterion, shown *before* you start. `verify_step` runs it, credits the outcome once, and advances. A near-miss command does not claim the XP, and re-passing pays nothing. |
 | **Spaced repetition** | Every question you see and every command you run is scheduled on a Leitner ladder — 10 minutes, 1, 3, 7, 16, 35 days. A correct answer promotes it; a slow-but-correct answer holds its box, because hesitant recall is weaker recall; a miss drops it to the front, not to zero. `review_due_items` is what turns the XP into retention. |
@@ -138,7 +197,7 @@ Restart the client, then try: *"Set my roadmap to Backend Developer and teach me
 | **Audio** | A non-blocking FIFO queue, so lines never talk over each other. Markdown, URLs and emoji are stripped before anything is spoken, and the OS engine is probed before it's called, so a missing binary goes quiet instead of taking the server down. On Windows one PowerShell is kept alive rather than paying ~1s of `Add-Type` startup per line. |
 | **Roadmap** | Six built-in tracks with 26 checkpointed steps, plus your own: any JSON file in `~/.miyagi/roadmaps/` becomes a track, and one named after a built-in shadows it. An unknown track name is *reported*, not silently swapped for Command Line Basics. Every track declares the shell it was written for. |
 | **Windows** | Tracks declare `posix` or `powershell`. On a mismatched host, a step with a PowerShell equivalent is substituted and labelled, then executed through `powershell.exe` — not `cmd.exe`. Checkpoints have PowerShell probes too. A step without an alternative gets an explicit warning instead of a command line that is known to fail. Silence was the bug. |
-| **Gamification** | Attempt XP follows the session mode (10 in drill, 3 in ride-along, 0 in focus), **30 for a verified outcome**, 25 per correct quiz (30 for a review — cold recall is the harder skill) with streak multipliers, `Level = floor(XP/100) + 1`, four titles, streak and practice-day badges. |
+| **Gamification** | Nothing for a technique merely appearing in code: XP is paid for recall and verified work, not exposure. Attempt XP follows the session mode (10 in drill, 3 in ride-along, 0 in focus), **30 for a verified outcome**, 25 per correct quiz (30 for a review — cold recall is the harder skill) with streak multipliers, `Level = floor(XP/100) + 1`, four titles, streak and practice-day badges. |
 | **Progress** | `~/.miyagi/profile.json` for state, plus an append-only `history.jsonl` for the practice log, so a note export after a restart describes what you actually did instead of an empty session. Saves *merge* with what is on disk, so two clients cannot roll each other's XP backwards: counters take the higher total, badges union, and verified checkpoints are never dropped. Parallel sessions that each earn XP from the same baseline keep the larger score, not the sum. |
 | **Safety** | Two tiers, screened independently of the caller: catastrophic shapes never run, destructive ones need a human's confirmation. Checkpoint probes are screened too — a "probe" that deletes something is not a probe, and a track file is where one would hide. |
 | **Notes** | `ROADMAP_PROGRESS.md` export with quiz accuracy, weak spots, what is due for review, and the full log — session-scoped or lifetime. |
@@ -153,7 +212,31 @@ Restart the client, then try: *"Set my roadmap to Backend Developer and teach me
 
 Linux users who want audio: `sudo apt install speech-dispatcher`.
 
+## In a terminal
+
+No MCP client and no editor needed. The same ideas, questions, review schedule and profile:
+
+```bash
+npx miyagi-mcp watch      # teach from what changes in this repository, when the work pauses
+npx miyagi-mcp review     # answer what is due, from memory
+npx miyagi-mcp dojo       # what you have found, and the belt held in each
+```
+
+`watch` treats whatever was uncommitted when it started as old, and prints a card once a change has been still for twenty seconds. `review` shows each question alone first and the choices only after Enter. This is the way to use Miyagi beside a terminal agent, or inside JetBrains, Neovim or Zed.
+
 ## Tools
+
+For learning from what your assistant built:
+
+- `explain_change`: the ideas behind code that was just written. No arguments reads the
+  uncommitted git changes (or the last commit); `diff` takes a diff or a bare snippet;
+  `path` takes one file. Returns up to `limit` ideas, each tied to a real line, plus one
+  recall question. Read-only.
+- `debrief`: what the assistant did since the last debrief — commands run, files touched,
+  techniques used — and the few ideas in it worth understanding. Falls back to git when
+  capture is not installed. `replay: true` includes everything captured.
+
+For practice, progress and configuration:
 
 - `quick_config`: skill level (Junior/Mid/Senior), category, track, topic, voice on/off,
   words per minute, a test phrase, and session mode (`drill` / `ride-along` / `focus`), in one call. `reset_progress: true` wipes XP,
@@ -181,7 +264,7 @@ Linux users who want audio: `sudo apt install speech-dispatcher`.
   spots, review queue and lifetime totals.
 - `export_roadmap_notes`: write `ROADMAP_PROGRESS.md`, session-scoped or lifetime.
 
-All ten tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`),
+All twelve tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`),
 so a client can tell `get_user_stats` apart from `run_teaching_command` when it decides
 what to prompt about.
 
@@ -204,15 +287,23 @@ Progress is readable without spending a tool call, so a client can render it in 
 | `miyagi://review` | Every scheduled item with its box, due date and lapses |
 | `miyagi://history` | The durable practice log, most recent 200 events |
 | `miyagi://roadmaps/{name}` | One track as markdown; the name autocompletes |
+| `miyagi://dojo` | Every technique discovered, and the belt held in each |
 | `miyagi://insights` | Cadence by week, review accuracy, checkpoint pass rate, verdict |
 | `miyagi://getting-started` | How the tutor works, and the order to do things in |
 
 Subscribed clients get `notifications/resources/updated` when saved state moves, so a
 sidebar is never showing a level you passed twenty minutes ago.
 
-And four prompts, so nobody has to know tool names to start: `drill` (a guided session on
-a track), `review` (spaced repetition over what is due), `explain-last-error` (teach from
-a failure instead of fixing it), and `progress` (where am I, what is weak, what next).
+And seven prompts, so nobody has to know tool names to start: `debrief` (what did the
+assistant just do, and what should I understand?), `teach-me-this-change` (guess first,
+then get corrected, on the change just made), `ride-along` (the quiet
+default — a short card, no inline quiz), `drill` (pick a track and depth first — from
+your XP, what you are building, and an optional placement quiz — then a guided session
+with the quiz), `review` (spaced repetition over what is due), `explain-last-error`
+(teach from a failure instead of fixing it), and `progress` (where am I, what is weak,
+what next). Drill does not dump you onto Command Line Basics at Junior. It recommends
+tracks and a depth; you choose. Examples on the card are supposed to be user stories
+from the project in front of you.
 
 ## Authoring your own track
 
@@ -275,7 +366,8 @@ learner's XP on upgrade would be the worse bug.
 npx miyagi-mcp --doctor
 ```
 
-Checks the Node version, that commands can actually be executed, that the profile
+Checks the Node version, whether ride-along capture is installed and how much is waiting
+for a debrief, that commands can actually be executed, that the profile
 directory is writable, that a saved profile parses, which track files were skipped and
 why, whether any track is written for the wrong shell for this host, and whether a speech
 engine exists. Plain text on stdout — the one mode where that is safe, because there is no
@@ -295,7 +387,7 @@ npm run eval        # the content rubric, the learner journey, and coverage pari
 npm run doctor      # after a build
 ```
 
-`npm test` runs 230-odd `node:test` cases. Three layers, and the top two are the ones that
+`npm test` runs 300 `node:test` cases. Three layers, and the top two are the ones that
 find real bugs:
 
 - **Unit** — persistence, scheduling, safety tiers, quiz selection, platform resolution.
@@ -318,6 +410,16 @@ against Node 18, 20 and 22.
 
 ## Limits worth knowing
 
+- Concept detection is pattern matching, not understanding. It recognises 23 common ideas
+  by their shape in added lines; it will miss an idea written an unusual way and it says
+  nothing about plain business logic. When nothing matches, the card says so rather than
+  inventing a lesson.
+- Capture needs an editor with hooks (Claude Code, Cursor). Everywhere else, `explain_change`
+  and `debrief` read `git diff`, which sees the result but not the commands that produced it.
+- The server suggests when to teach (its MCP instructions and `--rules`), but the assistant
+  decides whether to call it. If yours stays quiet, ask: "miyagi, debrief me".
+- The observation log is plain text in `~/.miyagi/`. It holds commands (scrubbed), file
+  names and one scrubbed line per idea. Set `MIYAGI_OBSERVE=off` to pause capture.
 - Commands run with your own privileges in your own directory. No container, no restricted
   user, no syscall filter. That's right for a local teaching tool driven by its owner, and
   it's the first thing to change if it ever accepts untrusted input.

@@ -33,6 +33,8 @@ export interface AskedQuiz {
   bin: string;
   /** True when this asking came out of the spaced-repetition queue. */
   review: boolean;
+  /** Placement probes gauge depth. They are not a lesson and do not pay XP. */
+  placement?: boolean;
   askedAt: string;
 }
 
@@ -53,6 +55,8 @@ const q = (
   choices: [answer, ...distractors],
   explanation,
 });
+
+import { CONCEPT_QUESTIONS, isConceptBin } from "./concepts.js";
 
 export const QUIZ_BANK: QuizQuestion[] = [
   /* ---- shell fundamentals ---- */
@@ -405,7 +409,7 @@ export function registerGenerated(questions: readonly QuizQuestion[]): number {
 
 /** Every question available to selection, hand-written and generated. */
 export function allQuestions(): QuizQuestion[] {
-  return [...QUIZ_BANK, ...GENERATED];
+  return [...QUIZ_BANK, ...CONCEPT_QUESTIONS, ...GENERATED];
 }
 
 export function generatedCount(): number {
@@ -477,7 +481,9 @@ export function pickQuestion(opts: PickOptions): QuizQuestion {
   const bin = opts.bin.toLowerCase();
   const maxLevel = LEVEL_ORDER[opts.skillLevel];
   const recent = new Set(opts.recentIds);
-  const pool = allQuestions();
+  // Concept questions are about code, not commands: a quiz after `ls` must never
+  // draw one, and they are selected by their own rule in teach.ts.
+  const pool = allQuestions().filter((x) => !x.bins.some(isConceptBin));
 
   const specific = pool.filter((x) => x.bins.includes(bin));
   const generic = pool.filter((x) => x.bins.length === 0);
@@ -510,7 +516,7 @@ export function pickQuestion(opts: PickOptions): QuizQuestion {
 export function ask(
   question: QuizQuestion,
   bin: string,
-  opts: { review?: boolean; salt?: string } = {},
+  opts: { review?: boolean; salt?: string; placement?: boolean } = {},
 ): AskedQuiz {
   return {
     id: question.id,
@@ -520,6 +526,7 @@ export function ask(
     explanation: question.explanation,
     bin,
     review: opts.review ?? false,
+    placement: opts.placement ?? false,
     askedAt: new Date().toISOString(),
   };
 }
