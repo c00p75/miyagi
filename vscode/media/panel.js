@@ -1244,7 +1244,8 @@
       : "";
     const body = `${sec.hook ? prose(sec.hook) : ""}${lessonVisual(sec.show)}${task}${predict}${after}`;
     const sid = `${key}|L${i}`;
-    const open = ui.sections[sid] === undefined ? i === 0 : ui.sections[sid];
+    // Every section starts open: the lesson reads top to bottom without a tap. A closed one stays closed.
+    const open = ui.sections[sid] === undefined ? true : ui.sections[sid];
     const [, title, asks] = LESSON_SECTIONS[i];
     const done = (p && picked !== undefined) || lessonDone[id];
     return `<details class="ls-sec${done ? " done" : ""}" data-section="${esc(sid)}"${open ? " open" : ""}>
@@ -2818,7 +2819,7 @@
         return render();
       case "lessonNext": {
         const i = Number(d.index);
-        ui.sections[`${key}|L${i}`] = false;
+        // Sections stay open; this only moves on to the next one (opening it if it was closed).
         ui.sections[`${key}|L${i + 1}`] = true;
         remember();
         render();

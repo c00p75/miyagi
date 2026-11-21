@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5
+
+### Changed
+
+- **Lesson sections start open.** On a card's page all eight sections are expanded, so the lesson reads top to bottom without tapping each one. You can still close a section, and it stays closed.
+
 ## 0.8.4
 
 ### Changed
