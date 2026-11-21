@@ -105,7 +105,7 @@ const METER_KEY = "miyagi.meter.v1";
 const DEPTH_DISMISSED_KEY = "miyagi.depthSuggestionDismissed.v1";
 const MIRROR_KEY = "miyagi.mirror.v1";
 const TAILOR_KEY = "miyagi.tailored.v1";
-const LESSON_KEY = "miyagi.lessons.v1";
+const LESSON_KEY = "miyagi.lessons.v2";
 const PROFILE_KEY = "miyagi.profile.v1";
 /** v2: hooks written before 0.8.6 could claim things the code did not show. */
 const HOOK_KEY = "miyagi.hooks.v2";

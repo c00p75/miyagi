@@ -123,7 +123,7 @@ function parseVisual(raw: unknown): Visual | undefined {
         .map((c) => {
           const rows = strs(c.rows, 4, 80);
           const diff = typeof c.diff === "number" && Number.isInteger(c.diff) && c.diff >= 0 && c.diff < rows.length ? c.diff : -1;
-          return { title: str(c.title, 40), good: c.good === true, rows, diff, result: str(c.result, 40) };
+          return { title: str(c.title, 40), good: c.good === true, rows, diff, result: str(c.result, 90) };
         })
         .filter((c) => c.title && c.rows.length)
         .slice(0, 3);
@@ -299,7 +299,7 @@ function firstSentence(text: string): string {
 
 const SECTION_BRIEF: Record<SectionId, string> = {
   problem:
-    "the problem. hook: one everyday analogy (2 sentences), then 2 sentences of a small story in MY app where the problem happens. predict: what happens next. reveal: usually a \"signal\" (the error or symptom I would see, with its parts explained) or a \"compare\" (works vs fails, one difference). explain: why it happened. Do not name the subject here.",
+    "the problem. hook: one everyday analogy (2 sentences), then 2 sentences of an imagined small story in MY app that stops just before the problem shows. predict: what happens next (the story must not have said it). reveal: usually a \"signal\" (the error or symptom I would see, with its parts explained) or a \"compare\" (works vs fails, one difference). explain: why it happened. Do not name the subject here.",
   concept:
     "the concept, as the answer to that problem. hook: one sentence saying what it is, using the same analogy. show: \"compare\" (without it vs with it) or \"terms\" (its 2-4 basic parts, each in one plain line). predict: a question that checks I can tell the parts apart.",
   how: "how it works. show: a \"flow\" of 3-5 steps. predict: what happens in a specific case. explain: why, in terms of the mechanism.",
@@ -323,7 +323,7 @@ const SHAPE = [
   '  "check": {"sayIt": "...", "predict": {…}, "remember": ["...", "...", "..."]}',
   '}, "concepts": ["...", "..."], "deeper": [{"kind": "video" | "article" | "site" | "book", "title": "...", "by": "..."}]}',
   "VISUAL is one of:",
-  '  {"type": "compare", "cols": [{"title": "...", "good": true, "rows": ["...", "..."], "diff": 1, "result": "..."}, {…}]}   (diff = index of the one row that differs)',
+  '  {"type": "compare", "cols": [{"title": "...", "good": true, "rows": ["...", "..."], "diff": 1, "result": "..."}, {…}]}   (2-3 short rows; diff = index of the one row that differs; result at most 8 words)',
   '  {"type": "flow", "steps": [{"label": "...", "note": "..."}]}',
   '  {"type": "parts", "items": [{"name": "...", "role": "..."}]}',
   '  {"type": "code", "lines": [{"code": "...", "why": "..."}]}',

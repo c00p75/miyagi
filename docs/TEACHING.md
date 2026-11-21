@@ -33,6 +33,15 @@ explanation follows these rules.
 9. **Lead to the next thing.** End on the question the next section answers.
 10. **Concrete before abstract, problem before solution.** Show the problem
     happening before naming the thing that solves it.
+11. **Say each thing once.** Every part of a section adds something new. The
+    story sets up the situation but stops before the outcome, because the
+    question asks for it. The feedback gives the reason, the picture shows it,
+    and the explanation adds what the picture did not (the cause underneath,
+    how you would notice). The one line is the only summary. Saying it back
+    asks the learner to use the point, for example on a new case or to say
+    how to prevent it, not to repeat the one line.
+12. **Stories are imagined, never claimed.** Tell a story in the learner's
+    project as "Say two people…" or "Imagine…". Never say it already happened.
 
 ## 2. The lesson structure
 

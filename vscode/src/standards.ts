@@ -67,6 +67,8 @@ export const LESSON_STANDARD = [
   "6. Each section ends with the point in one plain sentence I could repeat.",
   "7. Each section ends on the question the next section answers.",
   "8. Problem before solution: section 1 shows the problem happening and does NOT name the thing being taught. Section 2 introduces it as the answer.",
+  "9. Say each thing once. Every part of a section adds something new: hook sets up the situation but stops BEFORE the outcome (predict asks for it); why gives the reason; reveal shows it; explain adds only what reveal did not (the cause underneath, how I would notice), never restating it; oneLine is the only summary; sayIt asks me to USE the point (a new case, or how to prevent it), never to repeat oneLine.",
+  "10. Stories in my project are imagined (\"Say two people…\", \"Imagine…\"). Never say something already happened in my project.",
 ].join("\n");
 
 export type HookStyle = "question" | "stake";

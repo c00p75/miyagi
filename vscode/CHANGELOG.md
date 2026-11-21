@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2
+
+### Changed
+
+- **Lessons say each thing once.** Each part of a section now has to add something new. The story stops before the outcome, so the question no longer gives away its own answer. The explanation adds what the picture did not show, the one line is the only summary, and saying it back asks you to apply the point rather than repeat it.
+- Stories in your project are told as imagined ("Say two people…"), never as something that already happened.
+- A comparison's result line is no longer cut off mid-sentence.
+- Lessons written before this version are written again the next time you open them.
+
 ## 0.9.1
 
 ### Changed
