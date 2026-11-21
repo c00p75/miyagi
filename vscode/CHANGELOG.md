@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.4
+
+### Changed
+
+- **A card's preview now makes you want to open it.** Expanding a card in the Now list no longer shows a three-part summary. It shows a hook, in one of two styles chosen by the card's type:
+  - **A question** on most cards and on tools: a short situation in your app, ending in a question the lesson answers.
+  - **The risk** on cards tagged Risk: what goes wrong for a real user, in a red box, so red keeps meaning danger.
+
+  Both are followed by one teasing line and a button that says what you get, such as "Find out why" or "See the trade-off". Your AI writes the hook for your project once, when you first expand the card; Miyagi's built-in line shows meanwhile and without an AI.
+- The teaching standard (`docs/TEACHING.md`) now has a section on hooks: true, concrete, about your app, and never giving the answer away.
+
 ## 0.8.3
 
 ### Changed

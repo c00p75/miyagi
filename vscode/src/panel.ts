@@ -63,7 +63,19 @@ import { assistantReasoning } from "./transcript.js";
 import { parseTopic } from "./topics.js";
 import type { Scan } from "./watch.js";
 import { Coach } from "./coach.js";
-import { builtInLesson, lessonPrompt, parseLesson, parseProfile, profilePrompt, type Lesson, type ProjectProfile, type Subject } from "./lesson.js";
+import {
+  builtInLesson,
+  hookPrompt,
+  lessonPrompt,
+  parseHook,
+  parseLesson,
+  parseProfile,
+  profilePrompt,
+  type Hook,
+  type Lesson,
+  type ProjectProfile,
+  type Subject,
+} from "./lesson.js";
 import { addStory, count, updateGrowth } from "./growth.js";
 import {
   alternativesPrompt,
@@ -94,6 +106,8 @@ const MIRROR_KEY = "miyagi.mirror.v1";
 const TAILOR_KEY = "miyagi.tailored.v1";
 const LESSON_KEY = "miyagi.lessons.v1";
 const PROFILE_KEY = "miyagi.profile.v1";
+const HOOK_KEY = "miyagi.hooks.v1";
+const MAX_HOOKS = 200;
 const MAX_LESSONS_KEPT = 60;
 /** A project's purpose changes slowly; describe it again after this long. */
 const PROFILE_DAYS = 21;
@@ -198,6 +212,7 @@ type Inbound =
   | { type: "saveAlternative"; key: string }
   | { type: "tailor"; key: string }
   | { type: "lesson"; key: string; depth: string }
+  | { type: "hook"; key: string }
   | { type: "lessonMove" }
   | { type: "findTerms"; lesson?: string; root?: string }
   | { type: "termGuess"; id: string; text: string }
@@ -527,6 +542,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       lessons: this.lessons,
       explanations: this.explanations,
       tailored: this.tailoredView(),
+      hooks: this.hooksView(),
       tailorMode: setting<string>("ai.tailorCards", "onOpen"),
       extras: this.extras,
       lessonExtras: this.lessonExtras,
@@ -945,6 +961,48 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       void this.deps.context.workspaceState.update(PROFILE_KEY, all);
     }
     return found ?? had?.profile ?? null;
+  }
+
+  /* ---- the hook: what an expanded card shows in the list ---------- */
+
+  private savedHooks(): Record<string, { hook: Hook; by: string; at: string }> {
+    return this.deps.context.workspaceState.get<Record<string, { hook: Hook; by: string; at: string }>>(HOOK_KEY) ?? {};
+  }
+
+  private hooksView(): Record<string, Hook> {
+    return Object.fromEntries(Object.entries(this.savedHooks()).map(([key, h]) => [key, h.hook]));
+  }
+
+  /**
+   * Writes the preview for a card the learner just expanded: a question for
+   * most cards, what is at stake for the ones tagged Risk. Asked once per card
+   * and kept. The built-in text is on screen meanwhile, and stays if this fails.
+   */
+  private async hook(key: string): Promise<void> {
+    if (setting<string>("ai.tailorCards", "onOpen") === "off") return;
+    if (this.savedHooks()[key] || !(await this.resolveAi()).provider) return;
+    const found = await this.lessonSubject(key, (await engine.status()).depth);
+    if (!found) return;
+    const style = this.card(key)?.risk ? "stake" : "question";
+    const slot = `${key}|hook`;
+    if (this.busy.has(slot)) return;
+    // Only a profile already written is used: a preview is not worth a second model call.
+    const profiles = this.deps.context.workspaceState.get<Record<string, { profile: ProjectProfile }>>(PROFILE_KEY) ?? {};
+    await this.ask(
+      slot,
+      async () => hookPrompt({ subject: found.subject, style, profile: profiles[found.root]?.profile ?? null, files: found.files }),
+      (reply, by) => {
+        const hook = parseHook(reply, style);
+        if (!hook) return "unusable";
+        const all = this.savedHooks();
+        all[key] = { hook, by, at: new Date().toISOString() };
+        const keys = Object.keys(all);
+        if (keys.length > MAX_HOOKS) keys.sort((a, b) => all[a].at.localeCompare(all[b].at)).slice(0, keys.length - MAX_HOOKS).forEach((k) => delete all[k]);
+        void this.deps.context.workspaceState.update(HOOK_KEY, all);
+      },
+    );
+    // The built-in preview is still there; a failed hook is not the learner's problem.
+    delete this.errors[slot];
   }
 
   /** An idea card or a tool, reduced to what a lesson is written from. */
@@ -1918,6 +1976,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.alternatives(message.key, String(message.guess ?? "")));
         case "lesson":
           return void (await this.openLesson(String(message.key), String(message.depth)));
+        case "hook":
+          return void (await this.hook(String(message.key)));
         case "lessonMove":
           // The learner predicted, explained or did a task before being told.
           return void (await updateGrowth((g) => count(g, { kind: "first" })));

@@ -197,6 +197,10 @@ import { builtInLesson, parseLesson, type Subject } from "../../src/lesson.js";
     lessonDecisions: {},
     lessonTerms: {},
     tailored: {},
+    hooks: {
+      [lesson.cards[1]?.key ?? "none"]: { style: "stake", lead: "Someone steals your database, and every customer's password is readable in plain text the same afternoon.", tease: "Your sign-up code already prevents this. One number in it decides how well.", button: "See the number" },
+      "tool:docker": { style: "question", lead: "A new developer joins on Monday. How long until they can place a test order on their own laptop?", tease: "With the file your assistant added, the answer changed from a day to one command.", button: "Find out how" },
+    },
     tailorMode: "off",
     explainBack: true,
   });

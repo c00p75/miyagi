@@ -2180,37 +2180,6 @@ button.tf-row.quiet .tf-row-l {
 
 
 
-/* ---- the three questions in a row's preview ---- */
-
-.tq3-list {
-  display: grid;
-  margin-bottom: 4px;
-}
-
-.tq3 {
-  padding: 8px 0;
-  border-top: 1px solid var(--border);
-}
-
-.tq3:first-child {
-  padding-top: 2px;
-  border-top: 0;
-}
-
-.tq3 h4 {
-  margin: 0 0 2px;
-  font-size: 0.95em;
-  font-weight: 600;
-  letter-spacing: normal;
-  text-transform: none;
-  color: var(--vscode-foreground);
-}
-
-.tq3 p {
-  margin: 0;
-  font-style: normal;
-  color: var(--vscode-foreground);
-}
 
 .tool-why {
   display: flex;
@@ -2330,3 +2299,13 @@ button.term-open { font-weight: 600; }
 .greet-icon {
   margin-right: 6px;
 }
+
+/* ---- the hook in a row's preview ---- */
+
+.preview .hk-lead { margin: 0 0 6px; font-size: 1.1em; font-style: normal; font-weight: 600; line-height: 1.4; color: var(--vscode-foreground); }
+.preview .hk-stake { margin: 0 0 6px; padding: 9px 11px; border-left: 3px solid var(--miss); border-radius: 0 var(--radius) var(--radius) 0; background: color-mix(in srgb, var(--miss) 9%, transparent); font-size: 1.05em; font-style: normal; font-weight: 600; line-height: 1.4; color: var(--vscode-foreground); }
+.hk-stake > span { display: block; margin-bottom: 2px; font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase; color: var(--miss); }
+.preview .hk-tease { margin: 0 0 8px; font-style: normal; color: var(--muted); }
+.hk-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.hk-meta { font-size: 0.85em; color: var(--muted); }
+.hk-foot .link { margin-left: auto; }

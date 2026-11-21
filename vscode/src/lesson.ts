@@ -20,7 +20,7 @@
 
 import type { Prompt } from "./ai.js";
 import { DEPTH_NOTE, JSON_ONLY, buildPrompt, changeBlock, extractJsonObject, type ChangedFile, type Depth } from "./prompts.js";
-import { DEPTH_GOAL, LESSON_SECTIONS, LESSON_STANDARD, type SectionId } from "./standards.js";
+import { DEPTH_GOAL, HOOK_STANDARD, LESSON_SECTIONS, LESSON_STANDARD, type HookStyle, type SectionId } from "./standards.js";
 
 export type Visual =
   | { type: "compare"; cols: Array<{ title: string; good: boolean; rows: string[]; diff: number; result: string }> }
@@ -427,4 +427,57 @@ export function parseProfile(text: string): ProjectProfile | null {
     parts: list(r.parts).map(o).map((p) => ({ name: str(p.name, 40), role: str(p.role, 80) })).filter((p) => p.name).slice(0, 6),
     terms: strs(r.terms, 6, 30),
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * The hook: what an expanded card shows in the list
+ *
+ * A summary answers everything and leaves no reason to open the card. A hook
+ * opens a gap the lesson closes: a question for most cards, what is at stake
+ * for the ones tagged Risk. The style is chosen by rule, never by the model.
+ * ------------------------------------------------------------------ */
+
+export interface Hook {
+  style: HookStyle;
+  lead: string;
+  tease: string;
+  /** What the button says: what the learner gets by opening it. */
+  button: string;
+}
+
+export const DEFAULT_BUTTON: Record<HookStyle, string> = { question: "Find out", stake: "See how to avoid it" };
+
+export function hookPrompt(req: { subject: Subject; style: HookStyle; profile: ProjectProfile | null; files: readonly ChangedFile[] }): Prompt {
+  const { subject, profile } = req;
+  return buildPrompt([
+    `A card about "${subject.name}" (${subject.what}) is about to be shown to me. Write the short preview that makes me want to open its lesson.`,
+    "",
+    profile ? `My project: ${profile.summary}${profile.users ? ` Used by: ${profile.users}.` : ""}` : "You do not know what my project is for; stay with what the code below shows.",
+    req.files.length ? "Where it appears in my code:\n" + changeBlock(req.files) : "",
+    subject.pitfall ? `How it goes wrong in general: ${subject.pitfall}` : "",
+    "",
+    "Rules:",
+    `- ${HOOK_STANDARD[req.style]}`,
+    "- tease: one line, at most 22 words, hinting at what the lesson shows without giving it away.",
+    "- button: 2 to 4 words saying what I get by opening it (for example \"Find out why\", \"See the trade-off\"). Not \"Open\" or \"Learn more\".",
+    "- Everything must be true of this idea and my code. The lesson has to really answer it. No clickbait.",
+    "- Plain everyday words. No jargon the title does not already use.",
+    "",
+    JSON_ONLY,
+    '{"lead": "...", "tease": "...", "button": "..."}',
+  ]);
+}
+
+/** Null when the reply is not a usable hook in the style that was asked for. */
+export function parseHook(text: string, style: HookStyle): Hook | null {
+  const r = extractJsonObject(text);
+  const lead = str(r.lead, 260);
+  const tease = str(r.tease, 200);
+  if (lead.length < 20 || lead.split(/\s+/).length > 45) return null;
+  // A question hook that does not ask anything, or a stake that asks instead of saying, is the wrong style.
+  if (style === "question" && !lead.includes("?")) return null;
+  if (style === "stake" && lead.trim().endsWith("?")) return null;
+  let button = str(r.button, 40).replace(/[›>.\s]+$/, "");
+  if (!button || button.split(/\s+/).length > 5 || /^(open|learn more|read more|click here)$/i.test(button)) button = DEFAULT_BUTTON[style];
+  return { style, lead, tease, button };
 }

@@ -68,3 +68,13 @@ export const LESSON_STANDARD = [
   "7. Each section ends on the question the next section answers.",
   "8. Problem before solution: section 1 shows the problem happening and does NOT name the thing being taught. Section 2 introduces it as the answer.",
 ].join("\n");
+
+export type HookStyle = "question" | "stake";
+
+/** The hook standard, for the prompt that writes a card's preview. */
+export const HOOK_STANDARD: Record<HookStyle, string> = {
+  question:
+    "lead: a situation in MY app in one or two short sentences, ending in a question I cannot answer yet. At most 30 words. It must end with a question mark. Do not answer it.",
+  stake:
+    "lead: one sentence saying what goes wrong for a real user of MY app when this is got wrong, told as what actually happens. At most 30 words. No question. No exaggeration.",
+};

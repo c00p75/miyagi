@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { builtInLesson, lessonPrompt, parseLesson, parseProfile, profilePrompt, type Subject } from "../src/lesson.js";
+import { builtInLesson, hookPrompt, lessonPrompt, parseHook, parseLesson, parseProfile, profilePrompt, type Subject } from "../src/lesson.js";
 import { explainPrompt, riskPrompt } from "../src/prompts.js";
 import { DEPTH_GOAL, HOUSE_STYLE, LESSON_SECTIONS } from "../src/standards.js";
 
@@ -121,4 +121,21 @@ test("a project profile needs a summary", () => {
   assert.equal(parseProfile('{"users": "staff"}'), null);
   const p = parseProfile('{"summary": "Takes orders.", "parts": [{"name": "API", "role": "saves orders"}, {"role": "nameless"}], "terms": ["order"]}');
   assert.equal(p?.parts.length, 1);
+});
+
+test("a hook is held to the style that was asked for", () => {
+  const q = parseHook('{"lead": "Your app recommends a video. Next month it is deleted. What does your reader see?", "tease": "Your code has an answer, one line long.", "button": "Find out ›"}', "question");
+  assert.deepEqual(q, { style: "question", lead: "Your app recommends a video. Next month it is deleted. What does your reader see?", tease: "Your code has an answer, one line long.", button: "Find out" });
+  assert.equal(parseHook('{"lead": "Links can break when pages move around the web."}', "question"), null, "a question hook that asks nothing was kept");
+  assert.equal(parseHook('{"lead": "What happens when a link in your app dies?"}', "stake"), null, "a stake that asks instead of saying was kept");
+  assert.equal(parseHook('{"lead": "Too short?"}', "question"), null);
+  const s = parseHook('{"lead": "One dead link, and your reader stops trusting every other link you give them.", "button": "Open"}', "stake");
+  assert.equal(s?.button, "See how to avoid it", "a button that only says Open was kept");
+});
+
+test("the hook prompt asks for the style the rule chose, and forbids clickbait", () => {
+  const stake = hookPrompt({ subject, style: "stake", profile: null, files: [] });
+  assert.match(stake.user, /what goes wrong for a real user/);
+  assert.match(stake.user, /No clickbait/);
+  assert.match(hookPrompt({ subject, style: "question", profile: null, files: [] }).user, /must end with a question mark/);
 });

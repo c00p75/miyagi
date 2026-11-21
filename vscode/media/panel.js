@@ -80,6 +80,8 @@
   /** @type {Record<string, any>} */
   const lessons = {};
   const lessonAsked = new Set();
+  /** Rows whose hook has been asked for in this sitting. */
+  const hookAsked = new Set();
   /** @type {Record<string, number>} */
   const lessonPicks = {};
   /** @type {Record<string, boolean>} */
@@ -929,8 +931,7 @@
         ${
           open
             ? `<div class="preview">
-                 ${threeQuestions(cardAnswers(c))}
-                 <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(c.key)}">Open ›</button></div>
+                 ${hookPreview(c.key, cardHook(c))}
                </div>`
             : ""
         }
@@ -1134,9 +1135,13 @@
         ${
           open
             ? `<div class="preview">
-                 ${i.kind === "tool" ? threeQuestions(toolAnswers(i)) : `<p class="hook">${inline(m.hook)}</p>`}
-                 <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(i.key)}">${i.kind === "tool" ? "Open ›" : esc(m.open)}</button>
-                 <button class="link" data-action="dismissItem" data-key="${esc(i.key)}">Remove</button></div>
+                 ${
+                   i.kind === "tool"
+                     ? hookPreview(i.key, toolHook(i), `<button class="link" data-action="dismissItem" data-key="${esc(i.key)}">Remove</button>`)
+                     : `<p class="hook">${inline(m.hook)}</p>
+                        <div class="actions"><button class="primary" data-action="openCard" data-key="${esc(i.key)}">${esc(m.open)}</button>
+                        <button class="link" data-action="dismissItem" data-key="${esc(i.key)}">Remove</button></div>`
+                 }
                </div>`
             : ""
         }
@@ -1305,7 +1310,7 @@
     </div>`;
   }
 
-  /* ---- the three questions in a row's preview ---- */
+  /* ---- the hook in a row's preview ---- */
 
   /** The first sentence of a text, so a preview stays a glance. */
   function firstSentence(/** @type {string} */ text) {
@@ -1314,37 +1319,51 @@
     return m ? m[1] : t.length > 220 ? t.slice(0, 219) + "…" : t;
   }
 
-  /** What is it, where is it in your app, what if it goes wrong. Questions without an answer are left out. */
-  function threeQuestions(/** @type {{ what: string, where: string, wrong: string }} */ a) {
-    const q = (/** @type {string} */ ask, /** @type {string} */ answer) =>
-      answer ? `<section class="tq3"><h4>${ask}</h4><p>${inline(firstSentence(answer))}</p></section>` : "";
-    return `<div class="tq3-list">${q("What is it?", a.what)}${q("Where is it in your app?", a.where)}${q("What if it goes wrong?", a.wrong)}</div>`;
+  /** The first `n` sentences, when they fit in a preview; otherwise just the first. */
+  function firstSentences(/** @type {string} */ text, /** @type {number} */ n) {
+    const parts = String(text || "").replace(/\s+/g, " ").trim().match(/[^.!?]+[.!?]+/g) || [];
+    const joined = parts.slice(0, n).join(" ").trim();
+    return joined && joined.length <= 200 ? joined : firstSentence(text);
   }
 
-  /** An idea card: the tailored text when there is one, else where it was seen and the general lesson. */
-  function cardAnswers(/** @type {any} */ c) {
-    const fitted = (state.tailored || {})[c.key];
-    const where = fitted && fitted.hook
-      ? fitted.hook
-      : c.file
-      ? c.evidence
-        ? `In \`${c.file}\`: \`${c.evidence.replace(/`/g, "'").slice(0, 80)}\``
-        : `In \`${c.file}\`.`
-      : "";
-    return { what: c.what, where, wrong: (fitted && fitted.pitfall) || c.pitfall };
+  /**
+   * What an expanded row shows: a hook, not a summary. A question for most
+   * cards, what is at stake for the ones tagged Risk (docs/TEACHING.md). The
+   * built-in text shows at once; the one written about the learner's app
+   * replaces it when their AI has written it.
+   */
+  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string }} */ builtIn, extra = "") {
+    const written = (state.hooks || {})[key];
+    const h = written || builtIn;
+    if (!written && state.ai.label && state.tailorMode !== "off" && !hookAsked.has(key)) {
+      hookAsked.add(key);
+      queueMicrotask(() => send({ type: "hook", key }));
+    }
+    const lead = h.style === "stake"
+      ? `<p class="hk-stake"><span>The risk</span>${inline(h.lead)}</p>`
+      : `<p class="hk-lead">${inline(h.lead)}</p>`;
+    return `${lead}
+      ${h.tease ? `<p class="hk-tease">${inline(h.tease)}</p>` : ""}
+      <div class="hk-foot"><button class="primary" data-action="openCard" data-key="${esc(key)}">${esc(h.button)} ›</button>
+        <span class="hk-meta">8 short steps</span>${extra}</div>`;
   }
 
-  /** A tool: what it does, what your AI found it doing in this project (or where it was seen), and its first risk. */
-  function toolAnswers(/** @type {any} */ t) {
+  /** An idea card's built-in hook: its pitfall as the stake on Risk cards, its hook line otherwise. */
+  function cardHook(/** @type {any} */ c) {
+    return c.risk
+      ? { style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
+      : { style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
+  }
+
+  /** A tool's built-in hook: what it does, and where it arrived. */
+  function toolHook(/** @type {any} */ t) {
     const spec = t.spec || {};
-    const primer = t.primer;
-    const where = primer && primer.summary
-      ? primer.summary
-      : t.file
-      ? `Added in \`${t.file}\`. Open it to see how your project uses it.`
-      : "";
-    const risk = primer && primer.risks && primer.risks[0] ? primer.risks[0].why : (spec.risks || [])[0] || "";
-    return { what: spec.oneLiner || t.job, where, wrong: risk };
+    return {
+      style: "question",
+      lead: spec.analogy || spec.oneLiner || t.job,
+      tease: t.file ? `It arrived in \`${t.file}\`. See what it is doing for your app.` : "See what it is doing for your app.",
+      button: "Find out",
+    };
   }
 
   function itemPage(/** @type {any} */ i) {

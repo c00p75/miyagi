@@ -88,7 +88,33 @@ chosen per card, because a senior front-end developer may be new to Docker.
 - Tell failures as what actually happens to a user, not as a category.
 - Numbers and names over adjectives: "four containers", not "several".
 
-## 5. Questions
+## 5. Hooks: the preview that makes someone open a card
+
+When a card is expanded in the list, it shows a hook, not a summary. A summary
+answers everything and leaves no reason to open the card.
+
+There are two styles, chosen by rule, never by the model:
+
+- **A question** (every card not tagged Risk): a two-sentence situation in the
+  learner's app, ending in a question they cannot yet answer. The answer is
+  held back for the lesson.
+- **What is at stake** (cards tagged Risk only): one sentence saying what goes
+  wrong for a real user, told as what happens. Red is kept for these cards so
+  it keeps meaning danger.
+
+Both are followed by one teasing line that hints at what the lesson reveals,
+and a button that says what the learner gets ("Find out", "See the
+trade-off"), not "Open".
+
+Rules for every hook:
+
+- **True.** The lesson must really answer the question or explain the stake.
+  No clickbait, no exaggeration, no invented numbers.
+- **Concrete and about their app.** Name the thing a user sees or does.
+- **Do not give the answer away.** The hook opens a gap; the lesson closes it.
+- **Short.** The lead is at most 30 words, the teasing line at most 22.
+
+## 6. Questions
 
 - A question tests the idea, not the wording of the lesson.
 - Wrong answers are things a learner might really believe.
@@ -97,7 +123,7 @@ chosen per card, because a senior front-end developer may be new to Docker.
 - A question about the learner's own code never goes on the review schedule;
   the idea's own question does.
 
-## 6. Honesty
+## 7. Honesty
 
 - Never invent a link, a version detail, a file or a line number. If unsure,
   say so plainly.
@@ -106,13 +132,13 @@ chosen per card, because a senior front-end developer may be new to Docker.
 - Lessons written by the learner's AI are marked as such.
 - Only lines that were actually shown may be quoted or pointed at.
 
-## 7. Privacy
+## 8. Privacy
 
 - Code sent to a model is scrubbed of secrets first; a line holding a
   credential is withheld, not scrubbed.
 - Nothing leaves the learner's machine except to the AI they chose.
 
-## 8. Interface
+## 9. Interface
 
 - The learner goes first: guess, predict or explain before the answer shows.
 - One primary action per screen.
