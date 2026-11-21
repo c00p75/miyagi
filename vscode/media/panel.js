@@ -1353,26 +1353,18 @@
     // While the learner's AI writes, the row says what is happening and gives
     // them something to think about. Text that silently changes reads as a glitch.
     if (!written && canAsk && hookAsked.has(key) && !hookDone.has(key)) {
-      const fact = builtIn.fact;
-      const open = `<div class="hk-foot"><button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
-      // A true fact about the idea, where Miyagi has one it can stand behind.
-      if (fact) {
-        return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
-            <p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>
-            <div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
-            <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>
-          </div>${open}`;
-      }
-      const stake = builtIn.style === "stake";
-      const steps = [
-        builtIn.file ? `Reading \`${builtIn.file}\`` : "Reading your code",
-        stake ? "Working out what could go wrong for your users" : "Finding where this matters in your app",
-        stake ? "Writing what is at stake" : "Writing a question worth answering",
-      ];
+      // A true fact while the hook is written: the idea's own where Miyagi has
+      // one, otherwise one about software in general, the same one each time for this card.
+      const general = state.generalFacts || [];
+      let pick = 0;
+      for (const ch of key) pick = (pick * 31 + ch.charCodeAt(0)) >>> 0;
+      const fact = builtIn.fact || general[general.length ? pick % general.length : 0] || "";
       return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
-          <p class="hk-wait"><span>While you wait</span>${stake ? "What is the worst thing a stranger could do with this part of your app?" : "Where in your app do you think this shows up?"}</p>
-          <ol class="hk-steps">${steps.map((t, i) => `<li class="s${i}">${inline(t)}</li>`).join("")}</ol>
-        </div>${open}`;
+          ${fact ? `<p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>` : ""}
+          <div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
+          <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>
+        </div>
+        <div class="hk-foot"><button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
     }
     const h = written || builtIn;
     // The written hook fades in once, the first time it is drawn.

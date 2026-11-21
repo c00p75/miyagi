@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.9
+
+### Fixed
+
+- **Every card now shows "Did you know" with the shimmer while its hook is written.** Before, only built-in ideas with a fact of their own did; ideas your AI found, and tools, fell back to an older loading with no shimmer. Those cards now show one of eight sourced facts about software in general, the same one each time for a given card.
+
 ## 0.8.8
 
 ### Changed

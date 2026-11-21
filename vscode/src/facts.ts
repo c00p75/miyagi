@@ -95,3 +95,28 @@ export const FACTS: Readonly<Record<string, string>> = {
   "skill-reading-errors":
     "In 1947, engineers on the Harvard Mark II computer found a moth stuck in a relay and taped it into the logbook as the \"first actual case of bug being found\". The page is in the Smithsonian.",
 };
+
+/**
+ * For cards with no fact of their own: ideas the learner's AI found, tools,
+ * and the few built-in ideas above without one. These are about software in
+ * general, held to the same rule: well documented, source noted, written by a
+ * person. One is picked per card, and stays the same for that card.
+ */
+export const GENERAL_FACTS: readonly string[] = [
+  // Brendan Eich, Netscape, May 1995.
+  "JavaScript was written in ten days, in May 1995, by one person: Brendan Eich at Netscape. Much of the web still runs on decisions made that week.",
+  // info.cern.ch, published 6 August 1991 by Tim Berners-Lee.
+  "The first website went live in 1991 at CERN, the physics lab where Tim Berners-Lee worked. It was a page explaining what the web was, and it is still online.",
+  // Linus Torvalds began Git in April 2005 after the Linux project lost its previous tool.
+  "Git was started in 2005 by Linus Torvalds, the creator of Linux, when his project lost the tool it had been using. He had a working version within days.",
+  // Ada Lovelace's notes on the Analytical Engine, published 1843.
+  "What is often called the first computer program was published in 1843 by Ada Lovelace, for a machine that was never finished being built.",
+  // Guido van Rossum named Python after "Monty Python's Flying Circus".
+  "Python is not named after the snake. Its creator, Guido van Rossum, named it after the comedy show Monty Python's Flying Circus.",
+  // Kernighan and Ritchie, "The C Programming Language", 1978.
+  "The tradition of a first program that prints \"hello, world\" was spread by one book: The C Programming Language, published in 1978.",
+  // Ray Tomlinson, ARPANET email, 1971.
+  "The @ sign in email addresses was chosen in 1971 by Ray Tomlinson, who sent the first email between two computers. He picked it because it was unlikely to appear in anyone's name.",
+  // Margaret Hamilton led the MIT team that wrote Apollo's onboard flight software.
+  "The onboard software that landed Apollo 11 on the Moon was written by a team led by Margaret Hamilton, who is credited with making \"software engineering\" a recognised term.",
+];

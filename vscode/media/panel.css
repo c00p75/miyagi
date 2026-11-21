@@ -2326,23 +2326,11 @@ button.term-open { font-weight: 600; }
 .hk-load { display: grid; gap: 8px; margin-bottom: 8px; }
 .preview .hk-wait { margin: 0; font-size: 1.05em; font-style: normal; font-weight: 600; line-height: 1.4; color: var(--vscode-foreground); }
 .hk-wait > span { display: block; margin-bottom: 2px; font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
-.hk-steps { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; font-size: 0.92em; color: var(--muted); }
-.hk-steps li { display: flex; align-items: center; gap: 8px; opacity: 0; animation: hk-step 0.4s ease-out forwards; }
-.hk-steps li::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: hk-pulse 1.2s ease-in-out infinite; }
-.hk-steps .s0 { animation-delay: 0.1s; }
-.hk-steps .s1 { animation-delay: 1.8s; }
-.hk-steps .s2 { animation-delay: 3.6s; }
-.hk-steps .s0::before { animation-iteration-count: 2; }
-.hk-steps .s1::before { animation-delay: 1.8s; animation-iteration-count: 2; }
-.hk-steps .s2::before { animation-delay: 3.6s; }
-@keyframes hk-step { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-@keyframes hk-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 .hk-in { animation: hk-arrive 0.45s ease-out; }
 @keyframes hk-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .preview .hk-note { margin: 0 0 8px; font-size: 0.88em; font-style: normal; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
-  .hk-steps li, .hk-in { opacity: 1; animation: none; }
-  .hk-steps li::before { animation: none; }
+  .hk-in { opacity: 1; animation: none; }
 }
 
 .preview .hk-writing { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.88em; font-style: normal; color: var(--muted); }

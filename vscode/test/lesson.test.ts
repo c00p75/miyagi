@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { builtInLesson, hookPrompt, lessonPrompt, parseHook, parseLesson, parseProfile, profilePrompt, type Subject } from "../src/lesson.js";
 import { explainPrompt, riskPrompt } from "../src/prompts.js";
 import { DEPTH_GOAL, HOUSE_STYLE, LESSON_SECTIONS } from "../src/standards.js";
-import { FACTS } from "../src/facts.js";
+import { FACTS, GENERAL_FACTS } from "../src/facts.js";
 import { conceptById, registerConcepts } from "../../src/concepts.js";
 
 const subject: Subject = {
@@ -161,4 +161,13 @@ test("every fact belongs to a real idea, is short, and reads as finished sentenc
     assert.ok(fact.length >= 60 && fact.length <= 260, `${id}: ${fact.length} characters`);
     assert.match(fact, /[.!?]$/, `${id} does not end as a sentence`);
   }
+});
+
+test("there are general facts for cards without their own, each a short finished sentence", () => {
+  assert.ok(GENERAL_FACTS.length >= 6);
+  for (const fact of GENERAL_FACTS) {
+    assert.ok(fact.length >= 60 && fact.length <= 260, `${fact.length} characters: ${fact.slice(0, 30)}`);
+    assert.match(fact, /[.!?]$/);
+  }
+  assert.equal(new Set(GENERAL_FACTS).size, GENERAL_FACTS.length);
 });

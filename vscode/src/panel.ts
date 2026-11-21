@@ -63,7 +63,7 @@ import { assistantReasoning } from "./transcript.js";
 import { parseTopic } from "./topics.js";
 import type { Scan } from "./watch.js";
 import { Coach } from "./coach.js";
-import { FACTS } from "./facts.js";
+import { FACTS, GENERAL_FACTS } from "./facts.js";
 import {
   builtInLesson,
   hookPrompt,
@@ -546,6 +546,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       tailored: this.tailoredView(),
       hooks: this.hooksView(),
       facts: FACTS,
+      generalFacts: GENERAL_FACTS,
       tailorMode: setting<string>("ai.tailorCards", "onOpen"),
       extras: this.extras,
       lessonExtras: this.lessonExtras,
