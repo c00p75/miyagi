@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.7
+
+### Changed
+
+- **Did you know.** While your AI writes a card's hook, the row now shows a true fact about the idea, such as the 2008 breach that stole 130 million card numbers through SQL injection. There are 28, each with its source noted in `vscode/src/facts.ts`. An idea with no fact keeps the "While you wait" question.
+
 ## 0.8.6
 
 ### Fixed

@@ -117,6 +117,9 @@ Rules for every hook:
   apply.
 - **Never swap text silently.** While a hook is being written, show that it is,
   and give the learner something to think about meanwhile.
+- **Facts are written by people and sourced.** The "Did you know" facts in
+  `vscode/src/facts.ts` each name their source in a comment. A model never
+  writes one, and an idea without a well-documented fact has none.
 - **Do not give the answer away.** The hook opens a gap; the lesson closes it.
 - **Short.** The lead is at most 30 words, the teasing line at most 22.
 

@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import { builtInLesson, hookPrompt, lessonPrompt, parseHook, parseLesson, parseProfile, profilePrompt, type Subject } from "../src/lesson.js";
 import { explainPrompt, riskPrompt } from "../src/prompts.js";
 import { DEPTH_GOAL, HOUSE_STYLE, LESSON_SECTIONS } from "../src/standards.js";
+import { FACTS } from "../src/facts.js";
+import { conceptById, registerConcepts } from "../../src/concepts.js";
 
 const subject: Subject = {
   kind: "tool",
@@ -144,4 +146,19 @@ test("the hook prompt asks for the style the rule chose, and forbids clickbait",
   assert.match(stake.user, /what goes wrong for a real user/);
   assert.match(stake.user, /No clickbait/);
   assert.match(hookPrompt({ subject, style: "question", profile: null, files: [] }).user, /must end with a question mark/);
+});
+
+test("every fact belongs to a real idea, is short, and reads as finished sentences", () => {
+  // The skill ideas are registered by coach.ts, which needs the editor; stand one in.
+  if (!conceptById("skill-reading-errors")) {
+    registerConcepts([{ id: "skill-reading-errors", title: "Reading an error message", hook: "Most errors say what broke and where.", what: "An error names what went wrong.", lens: "Read the first line that names your file.", pitfall: "Pasting it to your AI teaches nothing." }], "skills");
+  }
+  const ids = Object.keys(FACTS);
+  assert.ok(ids.length >= 25);
+  for (const id of ids) {
+    assert.ok(conceptById(id), `a fact is filed under "${id}", which is not an idea`);
+    const fact = FACTS[id];
+    assert.ok(fact.length >= 60 && fact.length <= 260, `${id}: ${fact.length} characters`);
+    assert.match(fact, /[.!?]$/, `${id} does not end as a sentence`);
+  }
 });

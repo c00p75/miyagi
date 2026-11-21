@@ -1336,7 +1336,7 @@
    * built-in text shows at once; the one written about the learner's app
    * replaces it when their AI has written it.
    */
-  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string, file?: string }} */ builtIn, extra = "") {
+  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string, file?: string, fact?: string }} */ builtIn, extra = "") {
     const written = (state.hooks || {})[key];
     const canAsk = Boolean(state.ai.label) && state.tailorMode !== "off";
     if (!written && canAsk && !hookAsked.has(key)) {
@@ -1353,6 +1353,15 @@
     // While the learner's AI writes, the row says what is happening and gives
     // them something to think about. Text that silently changes reads as a glitch.
     if (!written && canAsk && hookAsked.has(key) && !hookDone.has(key)) {
+      const fact = builtIn.fact;
+      const open = `<div class="hk-foot"><button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
+      // A true fact about the idea, where Miyagi has one it can stand behind.
+      if (fact) {
+        return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
+            <p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>
+            <p class="hk-writing"><span class="spinner" aria-hidden="true"></span>Writing this card for your project…</p>
+          </div>${open}`;
+      }
       const stake = builtIn.style === "stake";
       const steps = [
         builtIn.file ? `Reading \`${builtIn.file}\`` : "Reading your code",
@@ -1362,8 +1371,7 @@
       return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
           <p class="hk-wait"><span>While you wait</span>${stake ? "What is the worst thing a stranger could do with this part of your app?" : "Where in your app do you think this shows up?"}</p>
           <ol class="hk-steps">${steps.map((t, i) => `<li class="s${i}">${inline(t)}</li>`).join("")}</ol>
-        </div>
-        <div class="hk-foot"><button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
+        </div>${open}`;
     }
     const h = written || builtIn;
     // The written hook fades in once, the first time it is drawn.
@@ -1383,8 +1391,8 @@
   /** An idea card's built-in hook: its pitfall as the stake on Risk cards, its hook line otherwise. */
   function cardHook(/** @type {any} */ c) {
     return c.risk
-      ? { file: c.file, style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
-      : { file: c.file, style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
+      ? { fact: (state.facts || {})[c.conceptId], file: c.file, style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
+      : { fact: (state.facts || {})[c.conceptId], file: c.file, style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
   }
 
   /** A tool's built-in hook: what it does, and where it arrived. */

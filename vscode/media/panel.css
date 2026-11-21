@@ -2344,3 +2344,6 @@ button.term-open { font-weight: 600; }
   .hk-steps li, .hk-in { opacity: 1; animation: none; }
   .hk-steps li::before { animation: none; }
 }
+
+.preview .hk-writing { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.88em; font-style: normal; color: var(--muted); }
+.hk-load .hk-wait { font-weight: 500; }
