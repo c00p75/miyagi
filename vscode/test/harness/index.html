@@ -50,6 +50,8 @@ window.acquireVsCodeApi = () => ({
     if (m.type === "dojo") reply({ type: "dojo", rows: M.dojo, belts: M.belts, insight: M.insight });
     if (m.type === "quiz") reply({ type: "quiz", key: m.key, quiz: M.quiz });
     if (m.type === "grow") reply({ type: "grow", data: M.grow });
+    // A hook arrives after a moment, as it would from the learner's AI.
+    if (m.type === "hook") setTimeout(() => { S.hooks[m.key] = { style: "stake", lead: "One crafted email address in your sign-up form, and a stranger can read every row in your users table.", tease: "One line in your sign-up code decides whether that works.", button: "See the line", general: false }; reply(S); reply({ type: "hookDone", key: m.key }); }, 1500);
     if (m.type === "lesson") reply({ type: "lesson", key: m.key, depth: m.depth, lesson: (m.depth === "Junior" && M.lessonSample.Junior) || Object.assign({}, M.lessonSample.builtIn, { depth: m.depth }) });
     if (m.type === "review") reply({ type: "review", quiz: Object.assign({}, M.quiz, { review: true, explainBack: scene === "ownwords" }) });
     if (m.type === "answer") reply({ type: "answered", token: m.token, answer: { token: m.token, correct: true, chosenIndex: m.index, answerIndex: m.index, explanation: "The database cannot tell your words from the user's, so a value pasted into the query text can change what the query does.", xpAwarded: 25, nextDueAt: new Date(Date.now() + 864e5).toISOString(), belt: "Yellow", leveledUp: false, title: "", newBadges: [], quizStreak: 1, confidentMiss: false, repaysMiss: false, needsTransfer: false, transferPassed: false } });

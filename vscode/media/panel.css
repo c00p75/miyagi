@@ -2346,3 +2346,5 @@ button.term-open { font-weight: 600; }
   .hk-skel i { animation: none; }
   .hk-shine { animation: none; background: none; color: var(--muted); }
 }
+
+.preview .hk-ready { color: var(--ok); font-weight: 600; }

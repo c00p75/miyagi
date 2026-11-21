@@ -85,6 +85,11 @@
   /** Rows whose hook request has finished, written or not; and written hooks already shown once. */
   const hookDone = new Set();
   const hookShown = new Set();
+  /** When each row's loading first showed; rows whose fact the learner chose to leave; rows with a redraw scheduled. */
+  /** @type {Record<string, number>} */
+  const hookLoadAt = {};
+  const hookSkip = new Set();
+  const hookTimers = new Set();
   /** @type {Record<string, number>} */
   const lessonPicks = {};
   /** @type {Record<string, boolean>} */
@@ -1350,21 +1355,35 @@
         }
       }, 40000);
     }
-    // While the learner's AI writes, the row says what is happening and gives
-    // them something to think about. Text that silently changes reads as a glitch.
-    if (!written && canAsk && hookAsked.has(key) && !hookDone.has(key)) {
-      // A true fact while the hook is written: the idea's own where Miyagi has
-      // one, otherwise one about software in general, the same one each time for this card.
-      const general = state.generalFacts || [];
-      let pick = 0;
-      for (const ch of key) pick = (pick * 31 + ch.charCodeAt(0)) >>> 0;
-      const fact = builtIn.fact || general[general.length ? pick % general.length : 0] || "";
-      return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
+    // A true fact while the hook is written: the idea's own where Miyagi has
+    // one, otherwise one about software in general, the same one each time for this card.
+    const general = state.generalFacts || [];
+    let pick = 0;
+    for (const ch of key) pick = (pick * 31 + ch.charCodeAt(0)) >>> 0;
+    const fact = builtIn.fact || general[general.length ? pick % general.length : 0] || "";
+    const waiting = !written && canAsk && hookAsked.has(key) && !hookDone.has(key);
+    if (waiting && !hookLoadAt[key]) hookLoadAt[key] = Date.now();
+    // The fact stays long enough to be read, even when the hook arrives sooner:
+    // about a third of a second per word, between five and twelve seconds.
+    const readMs = Math.max(5000, Math.min(12000, fact.split(/\s+/).length * 330 + 1500));
+    const left = hookLoadAt[key] && !hookSkip.has(key) ? hookLoadAt[key] + readMs - Date.now() : 0;
+    const holding = !waiting && Boolean(fact) && left > 0;
+    if (holding && !hookTimers.has(key)) {
+      hookTimers.add(key);
+      setTimeout(render, left + 60);
+    }
+    // Text that silently changes reads as a glitch, so the row says what is happening.
+    if (waiting || holding) {
+      return `<div class="hk-load" role="status" aria-label="${holding ? "Your card is ready" : "Your AI is writing this card for your project"}">
           ${fact ? `<p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>` : ""}
-          <div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
-          <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>
+          ${
+            holding
+              ? `<p class="hk-writing hk-ready">Your card is ready.</p>`
+              : `<div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
+                 <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>`
+          }
         </div>
-        <div class="hk-foot"><button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
+        <div class="hk-foot">${holding ? `<button class="primary" data-action="hookShow" data-key="${esc(key)}">Show it ›</button>` : ""}<button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
     }
     const h = written || builtIn;
     // The written hook fades in once, the first time it is drawn.
@@ -2830,6 +2849,9 @@
         ui.cardKey = null;
         remember();
         send({ type: "grow" });
+        return render();
+      case "hookShow":
+        hookSkip.add(key);
         return render();
       case "lessonTab":
         ui.lessonTab[key] = d.tab;

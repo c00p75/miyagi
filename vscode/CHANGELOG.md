@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.10
+
+### Changed
+
+- **The "Did you know" fact stays long enough to read.** It is held for five to twelve seconds, depending on its length, even when your card's hook is ready sooner. When the hook is ready the row says "Your card is ready." with a "Show it" button, so you can move on at once.
+
 ## 0.8.9
 
 ### Fixed
