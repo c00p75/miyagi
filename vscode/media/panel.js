@@ -1359,7 +1359,8 @@
       if (fact) {
         return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
             <p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>
-            <p class="hk-writing"><span class="spinner" aria-hidden="true"></span>Writing this card for your project…</p>
+            <div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
+            <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>
           </div>${open}`;
       }
       const stake = builtIn.style === "stake";

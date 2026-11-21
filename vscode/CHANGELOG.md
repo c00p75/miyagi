@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.8
+
+### Changed
+
+- **A shimmer while a card's hook is written.** Under the "Did you know" fact, two shimmering bars mark where the hook will land, and the "Writing this card for your project…" line carries the same sweep. It stays still when your system asks for reduced motion.
+
 ## 0.8.7
 
 ### Changed
