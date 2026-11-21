@@ -10,6 +10,7 @@ import { explainPrompt, riskPrompt } from "../src/prompts.js";
 import { DEPTH_GOAL, HOUSE_STYLE, LESSON_SECTIONS } from "../src/standards.js";
 import { FACTS, GENERAL_FACTS } from "../src/facts.js";
 import { conceptById, registerConcepts } from "../../src/concepts.js";
+import { TOOL_CATALOG } from "../src/toolCatalog.js";
 
 const subject: Subject = {
   kind: "tool",
@@ -148,26 +149,23 @@ test("the hook prompt asks for the style the rule chose, and forbids clickbait",
   assert.match(hookPrompt({ subject, style: "question", profile: null, files: [] }).user, /must end with a question mark/);
 });
 
-test("every fact belongs to a real idea, is short, and reads as finished sentences", () => {
+test("every fact is filed under a real idea or tool, is short and plain, and names its source", () => {
   // The skill ideas are registered by coach.ts, which needs the editor; stand one in.
   if (!conceptById("skill-reading-errors")) {
     registerConcepts([{ id: "skill-reading-errors", title: "Reading an error message", hook: "Most errors say what broke and where.", what: "An error names what went wrong.", lens: "Read the first line that names your file.", pitfall: "Pasting it to your AI teaches nothing." }], "skills");
   }
-  const ids = Object.keys(FACTS);
-  assert.ok(ids.length >= 25);
-  for (const id of ids) {
-    assert.ok(conceptById(id), `a fact is filed under "${id}", which is not an idea`);
-    const fact = FACTS[id];
-    assert.ok(fact.length >= 60 && fact.length <= 260, `${id}: ${fact.length} characters`);
-    assert.match(fact, /[.!?]$/, `${id} does not end as a sentence`);
+  const tools = new Set(TOOL_CATALOG.map((t) => t.id));
+  const all = [...Object.entries(FACTS).flatMap(([id, list]) => list.map((f) => ({ id, ...f }))), ...GENERAL_FACTS.map((f) => ({ id: "general", ...f }))];
+  assert.ok(all.length >= 100, `only ${all.length} facts`);
+  assert.ok(GENERAL_FACTS.length >= 10);
+  for (const id of Object.keys(FACTS)) assert.ok(conceptById(id) || tools.has(id), `facts are filed under "${id}", which is not an idea or a tool`);
+  const seen = new Set<string>();
+  for (const f of all) {
+    assert.ok(f.text.length >= 50 && f.text.length <= 240, `${f.id}: ${f.text.length} characters: ${f.text.slice(0, 40)}`);
+    assert.match(f.text, /[.?]$/, `${f.id} does not end as a sentence: ${f.text.slice(-30)}`);
+    assert.ok(!/[!\u2014]/.test(f.text), `${f.id} has an exclamation mark or an em dash`);
+    assert.match(f.source, /^https:\/\//, `${f.id} has no source: ${f.text.slice(0, 40)}`);
+    assert.ok(!seen.has(f.text), `duplicate: ${f.text.slice(0, 40)}`);
+    seen.add(f.text);
   }
-});
-
-test("there are general facts for cards without their own, each a short finished sentence", () => {
-  assert.ok(GENERAL_FACTS.length >= 6);
-  for (const fact of GENERAL_FACTS) {
-    assert.ok(fact.length >= 60 && fact.length <= 260, `${fact.length} characters: ${fact.slice(0, 30)}`);
-    assert.match(fact, /[.!?]$/);
-  }
-  assert.equal(new Set(GENERAL_FACTS).size, GENERAL_FACTS.length);
 });

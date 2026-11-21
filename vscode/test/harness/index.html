@@ -46,7 +46,7 @@ const reply = (m) => setTimeout(() => window.postMessage(m, "*"), 20);
 window.acquireVsCodeApi = () => ({
   getState: () => start, setState: () => {},
   postMessage: (m) => {
-    if (m.type === "ready") reply(S);
+    if (m.type === "ready") { reply(M.facts); reply(S); }
     if (m.type === "dojo") reply({ type: "dojo", rows: M.dojo, belts: M.belts, insight: M.insight });
     if (m.type === "quiz") reply({ type: "quiz", key: m.key, quiz: M.quiz });
     if (m.type === "grow") reply({ type: "grow", data: M.grow });

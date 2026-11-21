@@ -85,6 +85,9 @@
   /** Rows whose hook request has finished, written or not; and written hooks already shown once. */
   const hookDone = new Set();
   const hookShown = new Set();
+  /** "Did you know" facts, sent once by the host: several per idea or tool, and general ones. */
+  /** @type {{ byId: Record<string, string[]>, general: string[] }} */
+  let facts = { byId: {}, general: [] };
   /** When each row's loading first showed; rows whose fact the learner chose to leave; rows with a redraw scheduled. */
   /** @type {Record<string, number>} */
   const hookLoadAt = {};
@@ -1341,7 +1344,7 @@
    * built-in text shows at once; the one written about the learner's app
    * replaces it when their AI has written it.
    */
-  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string, file?: string, fact?: string }} */ builtIn, extra = "") {
+  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string, file?: string, factId?: string }} */ builtIn, extra = "") {
     const written = (state.hooks || {})[key];
     const canAsk = Boolean(state.ai.label) && state.tailorMode !== "off";
     if (!written && canAsk && !hookAsked.has(key)) {
@@ -1355,12 +1358,14 @@
         }
       }, 40000);
     }
-    // A true fact while the hook is written: the idea's own where Miyagi has
-    // one, otherwise one about software in general, the same one each time for this card.
-    const general = state.generalFacts || [];
+    // A true fact while the hook is written: one of the idea's or tool's own
+    // where Miyagi has any, otherwise one about software in general. The same
+    // one each time for this card.
     let pick = 0;
     for (const ch of key) pick = (pick * 31 + ch.charCodeAt(0)) >>> 0;
-    const fact = builtIn.fact || general[general.length ? pick % general.length : 0] || "";
+    const own = (builtIn.factId && facts.byId[builtIn.factId]) || [];
+    const pool = own.length ? own : facts.general;
+    const fact = pool.length ? pool[pick % pool.length] : "";
     const waiting = !written && canAsk && hookAsked.has(key) && !hookDone.has(key);
     if (waiting && !hookLoadAt[key]) hookLoadAt[key] = Date.now();
     // The fact stays long enough to be read, even when the hook arrives sooner:
@@ -1403,14 +1408,15 @@
   /** An idea card's built-in hook: its pitfall as the stake on Risk cards, its hook line otherwise. */
   function cardHook(/** @type {any} */ c) {
     return c.risk
-      ? { fact: (state.facts || {})[c.conceptId], file: c.file, style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
-      : { fact: (state.facts || {})[c.conceptId], file: c.file, style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
+      ? { factId: c.conceptId, file: c.file, style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
+      : { factId: c.conceptId, file: c.file, style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
   }
 
   /** A tool's built-in hook: what it does, and where it arrived. */
   function toolHook(/** @type {any} */ t) {
     const spec = t.spec || {};
     return {
+      factId: t.toolId,
       file: t.file,
       style: "question",
       lead: spec.analogy || spec.oneLiner || t.job,
@@ -3117,6 +3123,9 @@
       case "lesson":
         // The built-in lesson arrives first; one written by the learner's AI replaces it.
         if (m.lesson && (!lessons[`${m.key}|${m.depth}`] || m.lesson.by || !lessons[`${m.key}|${m.depth}`].by)) lessons[`${m.key}|${m.depth}`] = m.lesson;
+        break;
+      case "facts":
+        facts = { byId: m.facts || {}, general: m.general || [] };
         break;
       case "hookDone":
         hookDone.add(m.key);

@@ -545,8 +545,6 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       explanations: this.explanations,
       tailored: this.tailoredView(),
       hooks: this.hooksView(),
-      facts: FACTS,
-      generalFacts: GENERAL_FACTS,
       tailorMode: setting<string>("ai.tailorCards", "onOpen"),
       extras: this.extras,
       lessonExtras: this.lessonExtras,
@@ -1886,6 +1884,12 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     try {
       switch (message.type) {
         case "ready":
+          // The facts never change while the editor is open: sent once, not with every state.
+          this.post({
+            type: "facts",
+            facts: Object.fromEntries(Object.entries(FACTS).map(([id, list]) => [id, list.map((f) => f.text)])),
+            general: GENERAL_FACTS.map((f) => f.text),
+          });
           return void (await this.pushState());
         case "openFile":
           return void (await this.openFile(message.key));

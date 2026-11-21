@@ -198,8 +198,6 @@ import { FACTS, GENERAL_FACTS } from "../../src/facts.js";
     lessonDecisions: {},
     lessonTerms: {},
     tailored: {},
-    facts: FACTS,
-    generalFacts: GENERAL_FACTS,
     hooks: {
       [lesson.cards[1]?.key ?? "none"]: { style: "stake", lead: "Someone steals your database, and every customer's password is readable in plain text the same afternoon.", tease: "Your sign-up code already prevents this. One number in it decides how well.", button: "See the number" },
       "tool:docker": { style: "question", lead: "A new developer joins on Monday. How long until they can place a test order on their own laptop?", tease: "With the file your assistant added, the answer changed from a day to one command.", button: "Find out how" },
@@ -249,6 +247,7 @@ import { FACTS, GENERAL_FACTS } from "../../src/facts.js";
     state,
     grow: growData,
     lessonSample,
+    facts: { type: "facts", facts: Object.fromEntries(Object.entries(FACTS).map(([id, list]) => [id, list.map((f) => f.text)])), general: GENERAL_FACTS.map((f) => f.text) },
     debugDone,
     quiz: await engine.quizForConcept(first.conceptId),
     dojo: await engine.dojo(),
