@@ -1197,17 +1197,14 @@ button.chip:hover:not(:disabled) {
 .rows {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* A divided list: items separated by a thin line, with no box or fill of their own. */
 .row {
-  border-radius: var(--radius);
-  background: var(--tile);
-  overflow: hidden;
-  border: 1px solid var(--vscode-contrastBorder, transparent);
+  border-bottom: 1px solid var(--border);
 }
 
 .row-head {
@@ -1215,7 +1212,7 @@ button.chip:hover:not(:disabled) {
   align-items: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 2px;
   border: 0;
   border-radius: 0;
   background: none;
@@ -1224,12 +1221,12 @@ button.chip:hover:not(:disabled) {
 }
 
 .row-head:hover:not(:disabled) {
-  background: var(--tile-hover);
+  background: var(--vscode-list-hoverBackground, var(--tile-hover));
 }
 
+/* The open item keeps a faint tint, so its preview reads as belonging to it. */
 .row.open {
-  background: var(--tile-open);
-  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, transparent));
+  background: var(--tile);
 }
 
 .row.open .row-head,
@@ -1281,7 +1278,7 @@ button.chip:hover:not(:disabled) {
 }
 
 .preview {
-  padding: 0 10px 10px 34px;
+  padding: 0 6px 12px 30px;
 }
 
 .preview .hook {

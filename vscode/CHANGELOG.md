@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2
+
+### Changed
+
+- **The Now list is a list.** Items are separated by thin lines, without the filled tiles. The item you tap open keeps a faint tint so its preview reads as part of it.
+
 ## 0.8.1
 
 ### Changed
