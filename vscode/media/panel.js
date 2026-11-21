@@ -50,6 +50,8 @@
       lessonDepth: {},
       // Which type of further reading is showing on each card.
       lessonTab: {},
+      // Hashes of the "Did you know" facts already shown, so the next one is new.
+      factsSeen: [],
     },
     vscode.getState() || {},
   );
@@ -92,6 +94,9 @@
   /** @type {Record<string, number>} */
   const hookLoadAt = {};
   const hookSkip = new Set();
+  /** The fact chosen for each row's wait, so it does not change while it is on screen. */
+  /** @type {Record<string, string>} */
+  const hookFact = {};
   const hookTimers = new Set();
   /** @type {Record<string, number>} */
   const lessonPicks = {};
@@ -1358,15 +1363,10 @@
         }
       }, 40000);
     }
-    // A true fact while the hook is written: one of the idea's or tool's own
-    // where Miyagi has any, otherwise one about software in general. The same
-    // one each time for this card.
-    let pick = 0;
-    for (const ch of key) pick = (pick * 31 + ch.charCodeAt(0)) >>> 0;
-    const own = (builtIn.factId && facts.byId[builtIn.factId]) || [];
-    const pool = own.length ? own : facts.general;
-    const fact = pool.length ? pool[pick % pool.length] : "";
     const waiting = !written && canAsk && hookAsked.has(key) && !hookDone.has(key);
+    // A true fact while the hook is written, chosen once when the wait begins.
+    if (waiting && hookFact[key] === undefined) hookFact[key] = nextFact(builtIn.factId);
+    const fact = hookFact[key] || "";
     if (waiting && !hookLoadAt[key]) hookLoadAt[key] = Date.now();
     // The fact stays long enough to be read, even when the hook arrives sooner:
     // about a third of a second per word, between five and twelve seconds.
@@ -1403,6 +1403,39 @@
       </div>
       <div class="hk-foot"><button class="primary" data-action="openCard" data-key="${esc(key)}">${esc(h.button)} ›</button>
         <span class="hk-meta">8 short steps</span>${extra}</div>`;
+  }
+
+  /** A short, stable number for a fact's text, so "seen" can be remembered without storing the text. */
+  function factHash(/** @type {string} */ text) {
+    let h = 0;
+    for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) >>> 0;
+    return h;
+  }
+
+  /**
+   * The next fact to show: one the learner has not seen yet. The idea's or
+   * tool's own facts come first; when those are used up, a general one; when
+   * every fact has been seen, the cycle starts again. What has been seen is
+   * remembered across restarts.
+   */
+  function nextFact(/** @type {string | undefined} */ id) {
+    const seen = new Set(ui.factsSeen);
+    const unseen = (/** @type {string[]} */ pool) => pool.filter((f) => !seen.has(factHash(f)));
+    const own = (id && facts.byId[id]) || [];
+    let pool = unseen(own);
+    if (!pool.length) pool = unseen(facts.general);
+    if (!pool.length) {
+      // Everything has been shown: forget, and go round again.
+      const all = own.concat(facts.general);
+      const hashes = new Set(all.map(factHash));
+      ui.factsSeen = ui.factsSeen.filter((/** @type {number} */ h) => !hashes.has(h));
+      pool = own.length ? own : facts.general;
+    }
+    if (!pool.length) return "";
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    ui.factsSeen = ui.factsSeen.concat(factHash(pick)).slice(-3000);
+    remember();
+    return pick;
   }
 
   /** An idea card's built-in hook: its pitfall as the stake on Risk cards, its hook line otherwise. */
@@ -3154,6 +3187,7 @@
   if (!ui.sections) ui.sections = {};
   if (!ui.lessonDepth) ui.lessonDepth = {};
   if (!ui.lessonTab) ui.lessonTab = {};
+  if (!Array.isArray(ui.factsSeen)) ui.factsSeen = [];
   if (!ui.altOpen) ui.altOpen = {};
   if (!ui.termRevealed) ui.termRevealed = {};
   if (!ui.scroll) ui.scroll = {};

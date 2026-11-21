@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1
+
+### Changed
+
+- **504 fact-checked "Did you know" facts, up from 214.** Every one was researched against a source and then checked again by a separate reviewer, who confirmed it, corrected a detail or rejected it. About 1 in 12 new facts needed a correction. Every built-in idea and all 49 tools now have their own facts, and 141 general stories cover everything else.
+- Retellings of the same event were cut, so each story appears once.
+- **A new fact every time.** The panel remembers which facts you have seen and picks one you have not, starting with facts about the card's own idea or tool, then the general stories. Only when you have seen all of them does it start again.
+
 ## 0.9.0
 
 ### Changed
