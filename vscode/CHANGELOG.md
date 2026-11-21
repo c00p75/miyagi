@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **The greeting's quote stands apart.** The quote and its author sit behind their own thin bar, like a pulled quote, and the box around the greeting is a plain outline.
+
+## 0.8.4
+
+### Changed
+
 - **A card's preview now makes you want to open it.** Expanding a card in the Now list no longer shows a three-part summary. It shows a hook, in one of two styles chosen by the card's type:
   - **A question** on most cards and on tools: a short situation in your app, ending in a question the lesson answers.
   - **The risk** on cards tagged Risk: what goes wrong for a real user, in a red box, so red keeps meaning danger.

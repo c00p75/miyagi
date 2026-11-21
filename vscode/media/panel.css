@@ -2309,3 +2309,14 @@ button.term-open { font-weight: 600; }
 .hk-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .hk-meta { font-size: 0.85em; color: var(--muted); }
 .hk-foot .link { margin-left: auto; }
+
+/* The greeting: a plain box, with the quote set apart behind its own thin bar. */
+.today.greeting {
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.today.greeting .quote {
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--accent);
+}
