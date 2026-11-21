@@ -106,7 +106,8 @@ const MIRROR_KEY = "miyagi.mirror.v1";
 const TAILOR_KEY = "miyagi.tailored.v1";
 const LESSON_KEY = "miyagi.lessons.v1";
 const PROFILE_KEY = "miyagi.profile.v1";
-const HOOK_KEY = "miyagi.hooks.v1";
+/** v2: hooks written before 0.8.6 could claim things the code did not show. */
+const HOOK_KEY = "miyagi.hooks.v2";
 const MAX_HOOKS = 200;
 const MAX_LESSONS_KEPT = 60;
 /** A project's purpose changes slowly; describe it again after this long. */
@@ -979,30 +980,36 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
    * and kept. The built-in text is on screen meanwhile, and stays if this fails.
    */
   private async hook(key: string): Promise<void> {
-    if (setting<string>("ai.tailorCards", "onOpen") === "off") return;
-    if (this.savedHooks()[key] || !(await this.resolveAi()).provider) return;
-    const found = await this.lessonSubject(key, (await engine.status()).depth);
-    if (!found) return;
-    const style = this.card(key)?.risk ? "stake" : "question";
-    const slot = `${key}|hook`;
-    if (this.busy.has(slot)) return;
-    // Only a profile already written is used: a preview is not worth a second model call.
-    const profiles = this.deps.context.workspaceState.get<Record<string, { profile: ProjectProfile }>>(PROFILE_KEY) ?? {};
-    await this.ask(
-      slot,
-      async () => hookPrompt({ subject: found.subject, style, profile: profiles[found.root]?.profile ?? null, files: found.files }),
-      (reply, by) => {
-        const hook = parseHook(reply, style);
-        if (!hook) return "unusable";
-        const all = this.savedHooks();
-        all[key] = { hook, by, at: new Date().toISOString() };
-        const keys = Object.keys(all);
-        if (keys.length > MAX_HOOKS) keys.sort((a, b) => all[a].at.localeCompare(all[b].at)).slice(0, keys.length - MAX_HOOKS).forEach((k) => delete all[k]);
-        void this.deps.context.workspaceState.update(HOOK_KEY, all);
-      },
-    );
-    // The built-in preview is still there; a failed hook is not the learner's problem.
-    delete this.errors[slot];
+    try {
+      if (setting<string>("ai.tailorCards", "onOpen") === "off") return;
+      if (this.savedHooks()[key] || !(await this.resolveAi()).provider) return;
+      const found = await this.lessonSubject(key, (await engine.status()).depth);
+      if (!found) return;
+      const style = this.card(key)?.risk ? "stake" : "question";
+      const slot = `${key}|hook`;
+      if (this.busy.has(slot)) return;
+      // Only a profile already written is used: a preview is not worth a second model call.
+      const profiles = this.deps.context.workspaceState.get<Record<string, { profile: ProjectProfile }>>(PROFILE_KEY) ?? {};
+      await this.ask(
+        slot,
+        async () => hookPrompt({ subject: found.subject, style, profile: profiles[found.root]?.profile ?? null, files: found.files }),
+        (reply, by) => {
+          const hook = parseHook(reply, style, found.files.length > 0);
+          if (!hook) return "unusable";
+          const all = this.savedHooks();
+          all[key] = { hook, by, at: new Date().toISOString() };
+          const keys = Object.keys(all);
+          if (keys.length > MAX_HOOKS) keys.sort((x, y) => all[x].at.localeCompare(all[y].at)).slice(0, keys.length - MAX_HOOKS).forEach((k) => delete all[k]);
+          void this.deps.context.workspaceState.update(HOOK_KEY, all);
+        },
+      );
+      // The built-in preview is still there; a failed hook is not the learner's problem.
+      delete this.errors[slot];
+    } finally {
+      // Written or not, the row stops waiting: it shows the hook, or Miyagi's own line.
+      this.post({ type: "hookDone", key });
+      void this.pushState();
+    }
   }
 
   /** An idea card or a tool, reduced to what a lesson is written from. */

@@ -82,6 +82,9 @@
   const lessonAsked = new Set();
   /** Rows whose hook has been asked for in this sitting. */
   const hookAsked = new Set();
+  /** Rows whose hook request has finished, written or not; and written hooks already shown once. */
+  const hookDone = new Set();
+  const hookShown = new Set();
   /** @type {Record<string, number>} */
   const lessonPicks = {};
   /** @type {Record<string, boolean>} */
@@ -1333,18 +1336,46 @@
    * built-in text shows at once; the one written about the learner's app
    * replaces it when their AI has written it.
    */
-  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string }} */ builtIn, extra = "") {
+  function hookPreview(/** @type {string} */ key, /** @type {{ style: string, lead: string, tease: string, button: string, file?: string }} */ builtIn, extra = "") {
     const written = (state.hooks || {})[key];
-    const h = written || builtIn;
-    if (!written && state.ai.label && state.tailorMode !== "off" && !hookAsked.has(key)) {
+    const canAsk = Boolean(state.ai.label) && state.tailorMode !== "off";
+    if (!written && canAsk && !hookAsked.has(key)) {
       hookAsked.add(key);
       queueMicrotask(() => send({ type: "hook", key }));
+      // If no answer ever comes, stop waiting and show Miyagi's own line.
+      setTimeout(() => {
+        if (!hookDone.has(key)) {
+          hookDone.add(key);
+          render();
+        }
+      }, 40000);
     }
+    // While the learner's AI writes, the row says what is happening and gives
+    // them something to think about. Text that silently changes reads as a glitch.
+    if (!written && canAsk && hookAsked.has(key) && !hookDone.has(key)) {
+      const stake = builtIn.style === "stake";
+      const steps = [
+        builtIn.file ? `Reading \`${builtIn.file}\`` : "Reading your code",
+        stake ? "Working out what could go wrong for your users" : "Finding where this matters in your app",
+        stake ? "Writing what is at stake" : "Writing a question worth answering",
+      ];
+      return `<div class="hk-load" role="status" aria-label="Your AI is writing this card for your project">
+          <p class="hk-wait"><span>While you wait</span>${stake ? "What is the worst thing a stranger could do with this part of your app?" : "Where in your app do you think this shows up?"}</p>
+          <ol class="hk-steps">${steps.map((t, i) => `<li class="s${i}">${inline(t)}</li>`).join("")}</ol>
+        </div>
+        <div class="hk-foot"><button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
+    }
+    const h = written || builtIn;
+    // The written hook fades in once, the first time it is drawn.
+    const fresh = written && hookAsked.has(key) && !hookShown.has(key);
+    if (written) hookShown.add(key);
     const lead = h.style === "stake"
       ? `<p class="hk-stake"><span>The risk</span>${inline(h.lead)}</p>`
       : `<p class="hk-lead">${inline(h.lead)}</p>`;
-    return `${lead}
+    return `<div class="hk${fresh ? " hk-in" : ""}">${lead}
       ${h.tease ? `<p class="hk-tease">${inline(h.tease)}</p>` : ""}
+      ${written && written.general ? `<p class="hk-note">This card matched your code by pattern, and may not apply to it. Open it to check.</p>` : ""}
+      </div>
       <div class="hk-foot"><button class="primary" data-action="openCard" data-key="${esc(key)}">${esc(h.button)} ›</button>
         <span class="hk-meta">8 short steps</span>${extra}</div>`;
   }
@@ -1352,14 +1383,15 @@
   /** An idea card's built-in hook: its pitfall as the stake on Risk cards, its hook line otherwise. */
   function cardHook(/** @type {any} */ c) {
     return c.risk
-      ? { style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
-      : { style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
+      ? { file: c.file, style: "stake", lead: firstSentences(c.pitfall, 2), tease: "See where this is in your code, and how to close it.", button: "See how to avoid it" }
+      : { file: c.file, style: "question", lead: c.hook, tease: firstSentence(c.what), button: "Find out" };
   }
 
   /** A tool's built-in hook: what it does, and where it arrived. */
   function toolHook(/** @type {any} */ t) {
     const spec = t.spec || {};
     return {
+      file: t.file,
       style: "question",
       lead: spec.analogy || spec.oneLiner || t.job,
       tease: t.file ? `It arrived in \`${t.file}\`. See what it is doing for your app.` : "See what it is doing for your app.",
@@ -3062,6 +3094,9 @@
       case "lesson":
         // The built-in lesson arrives first; one written by the learner's AI replaces it.
         if (m.lesson && (!lessons[`${m.key}|${m.depth}`] || m.lesson.by || !lessons[`${m.key}|${m.depth}`].by)) lessons[`${m.key}|${m.depth}`] = m.lesson;
+        break;
+      case "hookDone":
+        hookDone.add(m.key);
         break;
       case "growNote":
         growNote = m.text || "";

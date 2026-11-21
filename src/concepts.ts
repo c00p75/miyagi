@@ -717,7 +717,12 @@ export const CONCEPTS: CodeConcept[] = [
       /\b(multer|formidable|busboy)\s*\(|["'](multer|formidable|busboy|express-fileupload|uploadthing[\w/]*|@uploadthing\/[\w-]+)["']/,
       /\bupload\.(single|array|fields|any)\(/,
       /\b(UploadFile|FileField|ImageField|FileStorage|MultipartFile|IFormFile)\b/,
-      /\b(req|request)\.files?\b|\brequest\.FILES\b|\$_FILES\b/,
+      // `req.file` and `req.files` alone are too common as ordinary field names (a
+      // prompt builder's `req.files.length`). They count only when used the way an
+      // upload is: a named or indexed file, a file's own properties, or a missing-file check.
+      /\b(?:req|request)\.files\s*(?:\[|\.(?:get|getlist)\(|\.(?!length\b|map\b|forEach\b|filter\b|slice\b|some\b|every\b|find\b|join\b|reduce\b|push\b|concat\b|includes\b|flatMap\b|sort\b|entries\b|keys\b|values\b)[A-Za-z_]\w*)/,
+      /\b(?:req|request)\.file\.(?:buffer|path|filename|originalname|mimetype|size|fieldname|destination|stream)\b|!\s*(?:req|request)\.files?\b(?!\.)/,
+      /\brequest\.FILES\b|\$_FILES\b/,
       /\btype=\{?["']file["']/,
       /\bformData\.get(All)?\(\s*["'](file|files|image|avatar|upload|attachment|photo|document)s?["']\s*\)/i,
       /\.get(All)?\([^)]*\)\s+as\s+File\b|\binstanceof\s+File\b/,

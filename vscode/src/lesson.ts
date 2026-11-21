@@ -443,6 +443,12 @@ export interface Hook {
   tease: string;
   /** What the button says: what the learner gets by opening it. */
   button: string;
+  /**
+   * The lines the card matched do not really use this idea (a pattern matched
+   * by accident), or no code was available. The hook then speaks about apps in
+   * general and claims nothing about the learner's own.
+   */
+  general: boolean;
 }
 
 export const DEFAULT_BUTTON: Record<HookStyle, string> = { question: "Find out", stake: "See how to avoid it" };
@@ -460,16 +466,18 @@ export function hookPrompt(req: { subject: Subject; style: HookStyle; profile: P
     `- ${HOOK_STANDARD[req.style]}`,
     "- tease: one line, at most 22 words, hinting at what the lesson shows without giving it away.",
     "- button: 2 to 4 words saying what I get by opening it (for example \"Find out why\", \"See the trade-off\"). Not \"Open\" or \"Learn more\".",
-    "- Everything must be true of this idea and my code. The lesson has to really answer it. No clickbait.",
+    "- applies: FIRST look at the lines of my code above. true only if they really do what this card is about. false if they do not (the card can match a line by accident), or if no code is shown.",
+    "- If applies is false: write the lead about \"an app\" in general. Do NOT say \"your app\" or \"your code\", and claim nothing about my project.",
+    "- Everything must be true of this idea and my code. Never state that my app does or lacks something the lines above do not show. The lesson has to really answer it. No clickbait.",
     "- Plain everyday words. No jargon the title does not already use.",
     "",
     JSON_ONLY,
-    '{"lead": "...", "tease": "...", "button": "..."}',
+    '{"applies": true, "lead": "...", "tease": "...", "button": "..."}',
   ]);
 }
 
 /** Null when the reply is not a usable hook in the style that was asked for. */
-export function parseHook(text: string, style: HookStyle): Hook | null {
+export function parseHook(text: string, style: HookStyle, hasCode = true): Hook | null {
   const r = extractJsonObject(text);
   const lead = str(r.lead, 260);
   const tease = str(r.tease, 200);
@@ -479,5 +487,8 @@ export function parseHook(text: string, style: HookStyle): Hook | null {
   if (style === "stake" && lead.trim().endsWith("?")) return null;
   let button = str(r.button, 40).replace(/[›>.\s]+$/, "");
   if (!button || button.split(/\s+/).length > 5 || /^(open|learn more|read more|click here)$/i.test(button)) button = DEFAULT_BUTTON[style];
-  return { style, lead, tease, button };
+  // Without code to check against, or when the model says the lines do not do this, nothing may be claimed about the learner's app.
+  const general = !hasCode || r.applies !== true;
+  if (general && /\byour (app|code|project|site|server|database|api)\b/i.test(`${lead} ${tease}`)) return null;
+  return { style, lead, tease, button, general };
 }

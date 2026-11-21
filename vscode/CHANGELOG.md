@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.6
+
+### Fixed
+
+- **A card's preview no longer changes under your eyes.** While your AI writes the hook for your project, the row shows what it is doing, step by step, and gives you a question to think about. The hook then fades in. "Open now" is there throughout.
+- **Hooks no longer claim things your code does not show.** Your AI must first confirm that the lines really do what the card is about. If they do not, the hook talks about apps in general and the card says it "matched your code by pattern, and may not apply". A hook that says "your app" without that confirmation is thrown away. Hooks written before this version are discarded.
+- **"Accepting files from users" no longer fires on ordinary code.** A variable that merely has a `files` or `file` field (`req.files.length`) is not an upload. It now takes a named or indexed file, a file's own properties, or a missing-file check.
+
 ## 0.8.5
 
 ### Changed

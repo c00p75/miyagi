@@ -111,6 +111,12 @@ Rules for every hook:
 - **True.** The lesson must really answer the question or explain the stake.
   No clickbait, no exaggeration, no invented numbers.
 - **Concrete and about their app.** Name the thing a user sees or does.
+- **Check the code before speaking about it.** A card can match a line by
+  accident. Say "your app" only when the lines shown really do what the card
+  is about; otherwise speak about apps in general and say the card may not
+  apply.
+- **Never swap text silently.** While a hook is being written, show that it is,
+  and give the learner something to think about meanwhile.
 - **Do not give the answer away.** The hook opens a gap; the lesson closes it.
 - **Short.** The lead is at most 30 words, the teasing line at most 22.
 

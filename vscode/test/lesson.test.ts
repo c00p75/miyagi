@@ -125,12 +125,18 @@ test("a project profile needs a summary", () => {
 
 test("a hook is held to the style that was asked for", () => {
   const q = parseHook('{"lead": "Your app recommends a video. Next month it is deleted. What does your reader see?", "tease": "Your code has an answer, one line long.", "button": "Find out ›"}', "question");
-  assert.deepEqual(q, { style: "question", lead: "Your app recommends a video. Next month it is deleted. What does your reader see?", tease: "Your code has an answer, one line long.", button: "Find out" });
+  assert.equal(q, null, "a hook about \"your app\" was kept though the model never confirmed the code does this");
+  const ok = parseHook('{"applies": true, "lead": "Your app recommends a video. Next month it is deleted. What does your reader see?", "tease": "Your code has an answer, one line long.", "button": "Find out ›"}', "question");
+  assert.deepEqual(ok, { style: "question", lead: "Your app recommends a video. Next month it is deleted. What does your reader see?", tease: "Your code has an answer, one line long.", button: "Find out", general: false });
   assert.equal(parseHook('{"lead": "Links can break when pages move around the web."}', "question"), null, "a question hook that asks nothing was kept");
   assert.equal(parseHook('{"lead": "What happens when a link in your app dies?"}', "stake"), null, "a stake that asks instead of saying was kept");
   assert.equal(parseHook('{"lead": "Too short?"}', "question"), null);
-  const s = parseHook('{"lead": "One dead link, and your reader stops trusting every other link you give them.", "button": "Open"}', "stake");
+  const s = parseHook('{"applies": false, "lead": "One dead link, and a reader stops trusting every other link an app gives them.", "button": "Open"}', "stake");
   assert.equal(s?.button, "See how to avoid it", "a button that only says Open was kept");
+  assert.equal(s?.general, true);
+  // No code to check against: nothing may be claimed about the learner's app, whatever the model says.
+  assert.equal(parseHook('{"applies": true, "lead": "Your app takes whole files from visitors and nobody checks them on the server."}', "stake", false), null);
+  assert.match(hookPrompt({ subject, style: "stake", profile: null, files: [] }).user, /can match a line by accident/);
 });
 
 test("the hook prompt asks for the style the rule chose, and forbids clickbait", () => {
