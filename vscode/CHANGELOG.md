@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3
+
+### Changed
+
+- **A shorter greeting.** The "Waiting below…" line is gone; the list underneath already shows what is waiting. The greeting now carries an icon for the time of day: a sun in the morning, sun and cloud in the afternoon, a moon in the evening.
+
 ## 0.8.2
 
 ### Changed

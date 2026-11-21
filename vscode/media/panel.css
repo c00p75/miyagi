@@ -2326,3 +2326,7 @@ button.term-open { font-weight: 600; }
 .ls-tabs button:hover:not(:disabled) { background: none; color: var(--vscode-foreground); }
 .ls-tabs i { font-size: 0.8em; font-style: normal; opacity: 0.7; }
 .ls-reslist { display: grid; gap: 7px; }
+
+.greet-icon {
+  margin-right: 6px;
+}

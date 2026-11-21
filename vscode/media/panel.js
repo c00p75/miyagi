@@ -1392,8 +1392,8 @@
   }
 
   /**
-   * Once a day, a greeting before the work: a quote, what is new, and the one
-   * thing worth focusing on. Nothing here asks for anything; the questions
+   * Once a day, a greeting before the work: a quote and the one thing worth
+   * focusing on. Nothing here asks for anything; the questions
    * wait at the bottom of the feed, after the cards they are about.
    */
   function todayCard() {
@@ -1401,35 +1401,22 @@
     if (!t) return "";
     const hour = new Date().getHours();
     const hello = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    // A sun by day, a moon once it is dark.
+    const icon = hour < 5 || hour >= 18 ? "🌙" : hour < 12 ? "☀️" : "🌤️";
     const [quote, author] = quoteOfTheDay();
-    const since = Date.now() - 24 * 3600000;
-    const fresh = new Set(
-      state.lessons.filter((/** @type {any} */ l) => Date.parse(l.at) > since).flatMap((/** @type {any} */ l) => l.cards.map((/** @type {any} */ c) => c.conceptId)),
-    ).size;
-    const open = t.open || {};
-    const news = [
-      fresh ? `${plural(fresh, "idea")} from your AI's work` : "",
-      open.debug ? `${plural(open.debug, "error")} to read` : "",
-      open.gates ? plural(open.gates, "commit check") : "",
-      open.upgrades ? plural(open.upgrades, "upgrade") : "",
-      open.tools ? plural(open.tools, "new tool") : "",
-    ].filter(Boolean);
     const extras = [
       t.next ? `<li>Focus: <button class="link" data-action="openSkill" data-id="${esc(t.next.id)}">${esc(t.next.title)}</button></li>` : "",
       t.canRead && !t.readToday ? `<li><button class="link" data-action="readStart">Read one function you did not write</button> <span class="muted">· 3 min</span></li>` : "",
     ].filter(Boolean);
     return `<section class="today greeting" aria-label="Today">
       <div class="greet-head">
-        <h3>${hello}.</h3>
+        <h3><span class="greet-icon" aria-hidden="true">${icon}</span>${hello}.</h3>
         <button class="icon" data-action="todayDone" aria-label="Hide until tomorrow" title="Hide until tomorrow">×</button>
       </div>
       <figure class="quote">
         <blockquote>${esc(quote)}</blockquote>
         <figcaption>${esc(author)}</figcaption>
       </figure>
-      <p class="muted">${news.length ? `Waiting below: ${esc(list(news))}.` : "Nothing new yet. Cards appear here as your AI works."}${
-        news.length && fresh ? " A few questions on them wait at the end." : ""
-      }</p>
       ${extras.length ? `<ul class="greet-links">${extras.join("")}</ul>` : ""}
     </section>`;
   }
