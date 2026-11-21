@@ -6,7 +6,7 @@
 
 - **214 researched "Did you know" facts.** The 36 facts written from memory are replaced by 214 that were each checked against a source, whose link sits beside the fact in `vscode/src/facts.ts`. Each is a real event with a consequence and, where possible, a number.
   - Every built-in idea has its own facts, usually three to six.
-  - 43 of the 49 tools now have their own facts, for the first time.
+  - 40 of the 49 tools now have their own facts, for the first time.
   - 29 general stories of software going wrong or right cover everything else.
 - A card always shows the same fact. Facts are sent to the panel once, not with every update.
 
