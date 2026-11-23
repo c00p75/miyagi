@@ -140,11 +140,14 @@ test("a hook is held to the style that was asked for", () => {
   // No code to check against: nothing may be claimed about the learner's app, whatever the model says.
   assert.equal(parseHook('{"applies": true, "lead": "Your app takes whole files from visitors and nobody checks them on the server."}', "stake", false), null);
   assert.match(hookPrompt({ subject, style: "stake", profile: null, files: [] }).user, /can match a line by accident/);
+  // A stake a novice cannot picture is rejected: technique words belong in the lesson.
+  assert.equal(parseHook('{"applies": false, "lead": "In an app, a user\'s text can be shown as live HTML, so a crafted bio can run its own script in other people\'s browsers."}', "stake"), null);
+  assert.ok(parseHook('{"applies": false, "lead": "Someone types a few odd characters into their profile bio. Everyone who opens that profile can have their account taken over."}', "stake"));
 });
 
 test("the hook prompt asks for the style the rule chose, and forbids clickbait", () => {
   const stake = hookPrompt({ subject, style: "stake", profile: null, files: [] });
-  assert.match(stake.user, /what goes wrong for a real user/);
+  assert.match(stake.user, /who has never coded/);
   assert.match(stake.user, /No clickbait/);
   assert.match(hookPrompt({ subject, style: "question", profile: null, files: [] }).user, /must end with a question mark/);
 });

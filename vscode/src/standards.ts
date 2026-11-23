@@ -17,6 +17,7 @@ export const HOUSE_STYLE = [
   "- Explain through my own project and files first; a general example only after that.",
   "- Never show an error, output or line of code without saying what its important parts mean.",
   "- No praise words. Say what is right, then what is missing.",
+  "- When something can go wrong, say who it hurts and what they lose (their account, money, private messages, photos, data) in words someone who has never coded would understand. Do not name the technique (HTML, script, injection, query, token, session, hash) in that sentence; explain the how afterwards.",
   "- Never invent a link, version detail, file or line number. If you are not sure, say so.",
 ].join("\n");
 
@@ -73,10 +74,19 @@ export const LESSON_STANDARD = [
 
 export type HookStyle = "question" | "stake";
 
+/**
+ * Words a novice cannot picture. A stake must say what a person loses, so its
+ * lead may not use these: the lesson explains the how.
+ */
+export const STAKE_JARGON =
+  /\b(html|script|scripts|javascript|browser|browsers|inject\w*|xss|sql|quer(y|ies)|database|token|tokens|session|sessions|api|endpoint|server|request|requests|payload|hash\w*|crafted|markup|escap\w*|sanitiz\w*|render\w*|cookie|cookies|header|origin|cors|webhook|repo|commit)\b/i;
+
 /** The hook standard, for the prompt that writes a card's preview. */
 export const HOOK_STANDARD: Record<HookStyle, string> = {
   question:
-    "lead: a situation in MY app in one or two short sentences, ending in a question I cannot answer yet. At most 30 words. It must end with a question mark. Do not answer it.",
+    "lead: a situation in MY app in one or two short sentences, ending in a question I cannot answer yet. At most 30 words. It must end with a question mark. Do not answer it. Describe what a person sees or does, not code.",
   stake:
-    "lead: one sentence saying what goes wrong for a real user of MY app when this is got wrong, told as what actually happens. At most 30 words. No question. No exaggeration.",
+    "lead: one or two short sentences a person who has never coded would understand. Name someone real (a visitor, a customer, you) and what they lose: their account, money, private messages, data. Tell it as a tiny scene (someone does X, then Y happens to them), not as how it works. Never use technical words here: no HTML, script, browser, code, inject, query, database, token, session, API, server, request. At most 30 words. No question. No exaggeration.\n" +
+    "  Bad: \"A user's text can be shown as live HTML, so a crafted bio can run its own script in other people's browsers.\"\n" +
+    "  Good: \"Someone types a few odd characters into their profile bio. Everyone who opens that profile can have their account taken over.\"",
 };

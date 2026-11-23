@@ -15,6 +15,7 @@
 
 import * as vscode from "vscode";
 import path from "node:path";
+import { STAKE_JARGON } from "./standards.js";
 import { createHash } from "node:crypto";
 import { conceptsIn, gitChanges } from "../../src/changes.js";
 import { CONCEPTS, scrub, type FileChange } from "../../src/concepts.js";
@@ -968,7 +969,10 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   /* ---- the hook: what an expanded card shows in the list ---------- */
 
   private savedHooks(): Record<string, { hook: Hook; by: string; at: string }> {
-    return this.deps.context.workspaceState.get<Record<string, { hook: Hook; by: string; at: string }>>(HOOK_KEY) ?? {};
+    const all = this.deps.context.workspaceState.get<Record<string, { hook: Hook; by: string; at: string }>>(HOOK_KEY) ?? {};
+    // A stake saved before the plain-words rule is dropped, so it is written again.
+    for (const k of Object.keys(all)) if (all[k].hook.style === "stake" && STAKE_JARGON.test(all[k].hook.lead)) delete all[k];
+    return all;
   }
 
   private hooksView(): Record<string, Hook> {

@@ -20,7 +20,7 @@
 
 import type { Prompt } from "./ai.js";
 import { DEPTH_NOTE, JSON_ONLY, buildPrompt, changeBlock, extractJsonObject, type ChangedFile, type Depth } from "./prompts.js";
-import { DEPTH_GOAL, HOOK_STANDARD, LESSON_SECTIONS, LESSON_STANDARD, type HookStyle, type SectionId } from "./standards.js";
+import { DEPTH_GOAL, HOOK_STANDARD, LESSON_SECTIONS, LESSON_STANDARD, STAKE_JARGON, type HookStyle, type SectionId } from "./standards.js";
 
 export type Visual =
   | { type: "compare"; cols: Array<{ title: string; good: boolean; rows: string[]; diff: number; result: string }> }
@@ -464,12 +464,12 @@ export function hookPrompt(req: { subject: Subject; style: HookStyle; profile: P
     "",
     "Rules:",
     `- ${HOOK_STANDARD[req.style]}`,
-    "- tease: one line, at most 22 words, hinting at what the lesson shows without giving it away.",
+    "- tease: one line, at most 22 words, hinting at what the lesson shows without giving it away. Plain words: a promise a beginner understands (\"See how a profile can hide instructions\"), not the technique's name.",
     "- button: 2 to 4 words saying what I get by opening it (for example \"Find out why\", \"See the trade-off\"). Not \"Open\" or \"Learn more\".",
     "- applies: FIRST look at the lines of my code above. true only if they really do what this card is about. false if they do not (the card can match a line by accident), or if no code is shown.",
     "- If applies is false: write the lead about \"an app\" in general. Do NOT say \"your app\" or \"your code\", and claim nothing about my project.",
     "- Everything must be true of this idea and my code. Never state that my app does or lacks something the lines above do not show. The lesson has to really answer it. No clickbait.",
-    "- Plain everyday words. No jargon the title does not already use.",
+    "- Plain everyday words, as you would say it to a friend who has never coded. No jargon, even if the title uses it.",
     "",
     JSON_ONLY,
     '{"applies": true, "lead": "...", "tease": "...", "button": "..."}',
@@ -485,6 +485,8 @@ export function parseHook(text: string, style: HookStyle, hasCode = true): Hook 
   // A question hook that does not ask anything, or a stake that asks instead of saying, is the wrong style.
   if (style === "question" && !lead.includes("?")) return null;
   if (style === "stake" && lead.trim().endsWith("?")) return null;
+  // A stake a novice cannot picture does not land: technique words belong in the lesson, not the warning.
+  if (style === "stake" && STAKE_JARGON.test(lead)) return null;
   let button = str(r.button, 40).replace(/[›>.\s]+$/, "");
   if (!button || button.split(/\s+/).length > 5 || /^(open|learn more|read more|click here)$/i.test(button)) button = DEFAULT_BUTTON[style];
   // Without code to check against, or when the model says the lines do not do this, nothing may be claimed about the learner's app.

@@ -95,6 +95,11 @@ chosen per card, because a senior front-end developer may be new to Docker.
 - No praise words ("great job"). Say what was right, then what was missed.
 - Describe, never grade the person. "Not met yet" is about their projects.
 - Tell failures as what actually happens to a user, not as a category.
+- Name who gets hurt and what they lose (their account, money, private
+  messages, data) in words someone who has never coded would understand. The
+  technique (HTML, script, injection, query, token, session) comes after, in
+  the lesson. Not "a crafted bio can run script in other browsers" but
+  "someone writes a bio, and everyone who opens it can lose their account".
 - Numbers and names over adjectives: "four containers", not "several".
 
 ## 5. Hooks: the preview that makes someone open a card
@@ -109,7 +114,10 @@ There are two styles, chosen by rule, never by the model:
   held back for the lesson.
 - **What is at stake** (cards tagged Risk only): one sentence saying what goes
   wrong for a real user, told as what happens. Red is kept for these cards so
-  it keeps meaning danger.
+  it keeps meaning danger. A novice must be able to picture it: a person, an
+  action, a loss. No technique words at all; the code rejects a stake that
+  uses them (`STAKE_JARGON` in `vscode/src/standards.ts`) and the card keeps
+  its built-in line instead.
 
 Both are followed by one teasing line that hints at what the lesson reveals,
 and a button that says what the learner gets ("Find out", "See the
