@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+### Changed
+
+- **Risk cards say who gets hurt and what they lose, in plain words.** The red warning now reads as a short scene anyone can picture, such as someone writing a bio and everyone who opens it losing their account. Words like HTML, script or token are kept for the lesson. A warning that still uses them is written again.
+- Security warnings and the five Risk cards' descriptions start with the consequence for a real person, then the technical cause.
+- Warnings written before this version are written again the next time you open the card.
+
 ## 0.9.2
 
 ### Changed
