@@ -2,7 +2,7 @@
   "name": "miyagi-vscode",
   "displayName": "Miyagi: learn while your AI codes",
   "description": "A side panel that watches what your AI assistant builds and teaches you the few ideas worth owning, without touching the assistant's work.",
-  "version": "0.6.2",
+  "version": "0.9.3",
   "publisher": "georgemsapenda",
   "author": "George M'sapenda",
   "license": "MIT",
@@ -133,6 +133,21 @@
       {
         "command": "miyagi.tour",
         "title": "Tour the Ideas in This Codebase",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.today",
+        "title": "Show Today's Greeting",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.readCode",
+        "title": "Read a Function I Did Not Write",
+        "category": "Miyagi"
+      },
+      {
+        "command": "miyagi.interview",
+        "title": "Start a Mock Interview",
         "category": "Miyagi"
       },
       {
@@ -412,6 +427,21 @@
           ],
           "markdownDescription": "Let your AI find ideas the built-in list does not know. This runs **without a button press** on your AI account, at most `miyagi.ai.findIdeasPerHour` times an hour. Set it to `off` to keep to the built-in ideas. Lessons it writes are marked as written by your AI."
         },
+        "miyagi.ai.tailorCards": {
+          "type": "string",
+          "default": "onOpen",
+          "enum": [
+            "off",
+            "onOpen",
+            "always"
+          ],
+          "enumDescriptions": [
+            "Cards show Miyagi's general lesson only.",
+            "When you open a card, your AI rewrites its hook, lesson and pitfall around your own lines. One small call per card, redone only when those lines change.",
+            "Also rewrite the first three cards of every change as they arrive, before you open them. Costs more calls."
+          ],
+          "markdownDescription": "Fit each card's lesson to your own code. Every function name and line number your AI mentions is checked against your lines; anything it cannot back is dropped and Miyagi's general text shows instead."
+        },
         "miyagi.ai.findIdeasPerHour": {
           "type": "number",
           "default": 6,
@@ -428,6 +458,21 @@
           "type": "boolean",
           "default": true,
           "description": "When a command fails, in your terminal or your assistant's, offer to read the error with you before the fix: pick the line that matters, say what you think broke, then compare. Only the error lines are kept, never the full output."
+        },
+        "miyagi.coach.dailyStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Once a day, open the Now tab with a short greeting: a quote, what is waiting, and the one skill to focus on. Questions on the ideas in your recent cards wait at the end of the feed. The × hides the greeting until tomorrow."
+        },
+        "miyagi.coach.guardrails": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you stage a change, look for what it could cost: a secret exposed to the browser, an env file, open database rules, a webhook that trusts anyone, a 100% trace sample rate, a query with no limit, an AI call with no output cap. You are asked what is risky before you are told. Never blocks the commit."
+        },
+        "miyagi.coach.upgrades": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a dependency jumps a major version, offer a lesson on what changed and what to check in your project."
         },
         "miyagi.coach.commitCheckLines": {
           "type": "number",
@@ -564,6 +609,21 @@
           "command": "miyagi.story",
           "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
           "group": "0_grow@5"
+        },
+        {
+          "command": "miyagi.today",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@0"
+        },
+        {
+          "command": "miyagi.readCode",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@6"
+        },
+        {
+          "command": "miyagi.interview",
+          "when": "(view == miyagi.panel || view == miyagi.panelSecondary)",
+          "group": "0_grow@7"
         }
       ],
       "commandPalette": [

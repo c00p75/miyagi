@@ -19,7 +19,7 @@ export const SKILL_LEVELS: readonly SkillLevel[] = ["Junior", "Mid", "Senior"];
 
 type Signal =
   | { kind: "ideas"; ids: string[] }
-  | { kind: "count"; of: "debugRight" | "explainedRight" | "decisions" | "incidents" | "tools" | "unaided" | "gates"; target: number };
+  | { kind: "count"; of: "debugRight" | "explainedRight" | "decisions" | "incidents" | "tools" | "unaided" | "gates" | "readsRight"; target: number };
 
 export interface Skill {
   id: string;
@@ -123,6 +123,14 @@ export const SKILLS: readonly Skill[] = [
     signal: { kind: "count", of: "explainedRight", target: 5 },
   },
   {
+    id: "reading",
+    level: "Mid",
+    title: "Read code you did not write",
+    why: "Most of a working developer's day is reading code someone else wrote, and with an AI, that is nearly all of it.",
+    tryIt: "Pick a function your assistant wrote, cover its body, and say what it does from the name alone. Then read it.",
+    signal: { kind: "count", of: "readsRight", target: 3 },
+  },
+  {
     id: "scale",
     level: "Mid",
     title: "Make it fast enough",
@@ -209,6 +217,7 @@ const COUNT_WORDS: Record<Extract<Signal, { kind: "count" }>["of"], [string, str
   tools: ["tool learned", "tools learned"],
   unaided: ["change written unaided", "changes written unaided"],
   gates: ["commit check answered", "commit checks answered"],
+  readsRight: ["function read right", "functions read right"],
 };
 
 function countOf(g: Growth, of: Extract<Signal, { kind: "count" }>["of"]): number {
@@ -227,6 +236,8 @@ function countOf(g: Growth, of: Extract<Signal, { kind: "count" }>["of"]): numbe
       return g.weeks.reduce((n, w) => n + w.unaided, 0);
     case "gates":
       return g.gates.asked;
+    case "readsRight":
+      return g.reads.filter((r) => r.verdict === "right" || r.verdict === "self-right").length;
   }
 }
 

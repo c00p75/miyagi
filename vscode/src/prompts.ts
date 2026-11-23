@@ -12,6 +12,7 @@
 
 import type { Prompt } from "./ai.js";
 import { TOPICS, parseTopic, type Topic } from "./topics.js";
+import { HOUSE_STYLE } from "./standards.js";
 
 export type Depth = "Junior" | "Mid" | "Senior";
 
@@ -26,10 +27,18 @@ const DEPTH_NOTE: Record<Depth, string> = {
   Senior: "The learner is experienced. Go straight to the design choice, its cost, and what to verify.",
 };
 
+/**
+ * Every prompt carries the house style from the teaching standard
+ * (docs/TEACHING.md), so every model writes to the same standard.
+ */
 const prompt = (lines: Array<string | null | false | undefined>): Prompt => ({
   system: SYSTEM,
-  user: lines.filter((l): l is string => typeof l === "string").join("\n"),
+  user: [HOUSE_STYLE, "", ...lines.filter((l): l is string => typeof l === "string")].join("\n"),
 });
+
+/** For prompt modules outside this file: the same builder, system line and house style. */
+export const buildPrompt = prompt;
+export { DEPTH_NOTE, JSON_ONLY, extractJsonObject };
 
 const fenced = (code: string) => "```\n" + code + "\n```";
 
@@ -65,8 +74,10 @@ export function extractJson(text: string): unknown | null {
   return null;
 }
 
-const obj = (v: unknown): Record<string, unknown> =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+const extractJsonObject = (text: string): Record<string, unknown> => obj(extractJson(text));
+function obj(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
 const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const int = (v: unknown): number | null => {
   const n = typeof v === "string" ? Number(v) : v;
@@ -670,12 +681,17 @@ export function transferQuestionPrompt(req: { title: string; what: string; file:
  * Tools: a primer tied to this project
  * ------------------------------------------------------------------ */
 
+export type RiskKind = "security" | "cost" | "reliability" | "setup";
+const RISK_KINDS: readonly RiskKind[] = ["security", "cost", "reliability", "setup"];
+
 export interface ToolPrimer {
   /** What it does in this project, in a few plain sentences. */
   summary: string;
   wired: Array<{ file: string; line: number | null; what: string }>;
   flow: string[];
-  risks: Array<{ title: string; why: string }>;
+  risks: Array<{ title: string; why: string; kind: RiskKind }>;
+  /** What this project would be like without the tool, for the before-and-after at the top of its page. */
+  without: string;
   verify: string;
   /** Said about the learner's guess, when they made one. */
   guessFeedback: string;
@@ -711,7 +727,8 @@ export function toolPrimerPrompt(req: {
     `- summary: at most 60 words. What ${req.name} does for THIS project specifically, and what would be missing without it.`,
     "- wired: up to 5 places in the lines above where it is set up or used: file, line number, and what that line does in at most 15 words. Only lines that exist above. Empty if none.",
     "- flow: 3 to 5 short steps (at most 15 words each) of what happens at runtime, in order, in this project.",
-    "- risks: up to 3 ways this particular setup could hurt me (cost, leaked data, silently not working), each a title of at most 8 words and why in at most 35 words. Only real ones.",
+    `- without: at most 30 words. What this project would have to do, or would suffer, without ${req.name}. Concrete to this project, no "you would need to".`,
+    '- risks: up to 3 ways this particular setup could hurt me, each a title of at most 8 words, why in at most 35 words, and kind: "security" (leaked data, someone gets in), "cost" (money or quota), "reliability" (fails or breaks in use) or "setup" (fails to start or configure). Only real ones.',
     "- verify: one concrete way to prove it works in this project, in at most 35 words.",
     req.guess
       ? "- guessFeedback: at most 35 words. Say plainly what my guess got right and what it missed. No praise words."
@@ -725,8 +742,8 @@ export function toolPrimerPrompt(req: {
     "",
     JSON_ONLY,
     describe
-      ? '{"summary": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "..."}], "verify": "...", "guessFeedback": "...", "name": "...", "emoji": "...", "job": "...", "oneLiner": "...", "topic": "...", "terms": [{"term": "...", "meaning": "..."}]}'
-      : '{"summary": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "..."}], "verify": "...", "guessFeedback": "..."}',
+      ? '{"summary": "...", "without": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "...", "kind": "security" | "cost" | "reliability" | "setup"}], "verify": "...", "guessFeedback": "...", "name": "...", "emoji": "...", "job": "...", "oneLiner": "...", "topic": "...", "terms": [{"term": "...", "meaning": "..."}]}'
+      : '{"summary": "...", "without": "...", "wired": [{"file": "path", "line": 12, "what": "..."}], "flow": ["..."], "risks": [{"title": "...", "why": "...", "kind": "security" | "cost" | "reliability" | "setup"}], "verify": "...", "guessFeedback": "..."}',
   ]);
 }
 
@@ -742,10 +759,13 @@ export function parseToolPrimer(text: string, known: readonly string[], describe
   const flow = (Array.isArray(o.flow) ? o.flow : []).map((s) => str(s, 160)).filter(Boolean).slice(0, 5);
   const risks = (Array.isArray(o.risks) ? o.risks : [])
     .map(obj)
-    .map((r) => ({ title: str(r.title, 100), why: str(r.why, 300) }))
+    .map((r) => {
+      const kind = str(r.kind, 20).toLowerCase();
+      return { title: str(r.title, 100), why: str(r.why, 300), kind: (RISK_KINDS.find((k) => k === kind) ?? "reliability") as RiskKind };
+    })
     .filter((r) => r.title && r.why)
     .slice(0, 3);
-  const primer: ToolPrimer = { summary, wired, flow, risks, verify: str(o.verify, 300), guessFeedback: str(o.guessFeedback, 300) };
+  const primer: ToolPrimer = { summary, wired, flow, risks, without: str(o.without, 300), verify: str(o.verify, 300), guessFeedback: str(o.guessFeedback, 300) };
   if (describe) {
     const terms = (Array.isArray(o.terms) ? o.terms : [])
       .map(obj)
@@ -1220,4 +1240,207 @@ export function parseGlossary(text: string, knownFiles: readonly string[], exist
     if (out.length >= 8) break;
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Reading code you did not write
+ * ------------------------------------------------------------------ */
+
+export interface ReadingFeedback {
+  verdict: Verdict;
+  feedback: string;
+  /** What the function really does, in plain words. */
+  summary: string;
+  /** The one thing in it most worth noticing: an edge case, a side effect, a hidden assumption. */
+  notice: string;
+}
+
+export function readCodePrompt(req: { file: string; name: string; signature: string; code: string; guess: string; depth: Depth }): Prompt {
+  return prompt([
+    `I am practising reading code I did not write. From only the name and signature of \`${req.name}\` in ${req.file}, I predicted what it does:`,
+    `Signature: ${req.signature.slice(0, 200)}`,
+    `My prediction: "${req.guess.slice(0, 800)}"`,
+    "",
+    "Here is the whole function:",
+    fenced(req.code),
+    "",
+    "Rules:",
+    '- verdict: "right" if my prediction has what it does, "partly" if I have the gist but missed something that matters, "wrong" otherwise.',
+    "- feedback: at most 45 words. What I read correctly from the name, then what the name hid.",
+    "- summary: at most 40 words, what it actually does, including inputs, output and side effects.",
+    "- notice: at most 30 words, the one thing in the body most worth noticing (an edge case, a side effect, an assumption that would break). Point at a line number.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "...", "summary": "...", "notice": "..."}',
+  ]);
+}
+
+export function parseReading(text: string): ReadingFeedback | null {
+  const graded = parseAttemptFeedback(text);
+  const o = obj(extractJson(text));
+  const summary = str(o.summary, 400);
+  if (!graded || !summary) return null;
+  return { ...graded, summary, notice: str(o.notice, 300) };
+}
+
+/* ------------------------------------------------------------------ *
+ * A major version upgrade
+ * ------------------------------------------------------------------ */
+
+export interface UpgradeLesson {
+  summary: string;
+  changes: Array<{ title: string; why: string; file: string; line: number | null }>;
+  checklist: string[];
+  guessFeedback: string;
+  question: OwnQuestion | null;
+}
+
+export function upgradePrompt(req: { name: string; from: string; to: string; files: readonly ChangedFile[]; guess: string; depth: Depth }): Prompt {
+  return prompt([
+    `My project just upgraded ${req.name} from ${req.from} to ${req.to}, a major version. I want to understand what that means for my code.`,
+    "",
+    req.files.length ? "Where my project uses it:\n" + changeBlock(req.files) : "I could not find where my project uses it.",
+    req.guess ? `\nBefore reading anything, I guessed this might break: "${req.guess.slice(0, 400)}"` : "",
+    "",
+    "Rules:",
+    `- summary: at most 50 words, what changed between these versions that a user of ${req.name} must know. If you are not sure of the details of these exact versions, say so plainly instead of inventing them.`,
+    "- changes: up to 4 breaking or important changes, each a title (at most 8 words), why it matters (at most 35 words), and the file and line above it affects if any (else empty file and null line). Only lines that exist above.",
+    "- checklist: 2 to 4 short things to check or run to know the upgrade is safe in this project.",
+    req.guess ? "- guessFeedback: at most 30 words on my guess, plainly." : '- guessFeedback: "".',
+    "- question: one multiple-choice question about the most important change, with one answer, three plausible wrong answers of similar length, and a one-sentence explanation.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"summary": "...", "changes": [{"title": "...", "why": "...", "file": "path or empty", "line": 12}], "checklist": ["..."], "guessFeedback": "...", "question": {"question": "...", "answer": "...", "distractors": ["...", "...", "..."], "explanation": "..."}}',
+  ]);
+}
+
+export function parseUpgrade(text: string, known: readonly string[]): UpgradeLesson | null {
+  const o = obj(extractJson(text));
+  const summary = str(o.summary, 500);
+  if (!summary) return null;
+  return {
+    summary,
+    changes: (Array.isArray(o.changes) ? o.changes : [])
+      .map(obj)
+      .map((c) => ({ title: str(c.title, 100), why: str(c.why, 300), file: matchFile(str(c.file, 300), known), line: int(c.line) }))
+      .filter((c) => c.title && c.why)
+      .slice(0, 4),
+    checklist: (Array.isArray(o.checklist) ? o.checklist : []).map((s) => str(s, 200)).filter(Boolean).slice(0, 4),
+    guessFeedback: str(o.guessFeedback, 300),
+    question: o.question ? parseOwnQuestion(JSON.stringify(o.question)) : null,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Mock interview: one open answer, judged like an interviewer would
+ * ------------------------------------------------------------------ */
+
+export function interviewGradePrompt(req: { question: string; truth: string; why: string; answer: string; seconds: number; depth: Depth }): Prompt {
+  return prompt([
+    "This is a mock technical interview. Judge my answer the way a fair interviewer would.",
+    `Question: ${req.question.slice(0, 600)}`,
+    `A good answer covers: ${req.truth.slice(0, 300)}. ${req.why.slice(0, 400)}`,
+    `I took ${Math.round(req.seconds)} seconds.`,
+    "",
+    `My answer: ${req.answer.slice(0, 1_500)}`,
+    "",
+    "Rules:",
+    '- verdict: "right" if an interviewer would be satisfied, "partly" if it is on track but thin or partly wrong, "wrong" otherwise.',
+    "- feedback: at most 60 words. What landed, the one thing a stronger answer would add, and whether it was clear and concrete. No praise words.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"verdict": "right" | "partly" | "wrong", "feedback": "..."}',
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * A card's lesson, fitted to the learner's own code
+ * ------------------------------------------------------------------ */
+
+/**
+ * The three parts of a card a learner reads first, rewritten around their
+ * own lines. Each field may be "" when the model's version failed a check;
+ * the panel then shows Miyagi's general text for that part.
+ */
+export interface Tailored {
+  hook: string;
+  lens: string;
+  pitfall: string;
+}
+
+export function tailorPrompt(req: {
+  title: string;
+  what: string;
+  hook: string;
+  lens: string;
+  pitfall: string;
+  file: string;
+  excerpt: string;
+  depth: Depth;
+}): Prompt {
+  return prompt([
+    `An AI assistant wrote this code in ${req.file} for my project. It uses the idea "${req.title}": ${req.what}`,
+    fenced(req.excerpt),
+    "",
+    "Here is Miyagi's general lesson on the idea, written for any project:",
+    `- hook: ${req.hook}`,
+    `- lens: ${req.lens}`,
+    `- pitfall: ${req.pitfall}`,
+    "",
+    "Rewrite those three parts about THIS code, so I learn the idea from what is in front of me. Keep what the general lesson teaches; change the examples to mine.",
+    "",
+    "Rules:",
+    "- hook: one sentence, at most 25 words, saying what this code does with the idea.",
+    "- lens: at most 70 words on how the idea works in these lines. Name the real functions, variables or values.",
+    "- pitfall: at most 50 words on the concrete way it could go wrong HERE: the input or situation, and what the user would see. If the code already guards against the general pitfall, say what guards it and what still could go wrong.",
+    "- Put every name from the code in backticks, exactly as written in it, like `fetchUser`. Do not invent names that are not in the lines shown.",
+    "- When you point at a line, write \"line N\" using the numbers shown. Only use numbers that appear above.",
+    "- Plain language, no praise, no headings, no markdown other than backticks.",
+    `- ${DEPTH_NOTE[req.depth]}`,
+    "",
+    JSON_ONLY,
+    '{"hook": "...", "lens": "...", "pitfall": "..."}',
+  ]);
+}
+
+/** Line numbers shown in an excerpt (`12: code`). */
+function excerptLines(excerpt: string): Set<number> {
+  const out = new Set<number>();
+  for (const m of excerpt.matchAll(/^(\d+): /gm)) out.add(Number(m[1]));
+  return out;
+}
+
+/**
+ * Whether a sentence only claims things the excerpt can back: every
+ * backticked name appears in the code, and every "line N" was shown.
+ * A model that names a function that is not there would teach a fiction
+ * about the learner's own project, which is worse than a general lesson.
+ */
+export function groundedIn(text: string, excerpt: string): boolean {
+  const code = excerpt.replace(/^\d+: /gm, "");
+  for (const m of text.matchAll(/`([^`\n]{1,120})`/g)) {
+    const name = m[1].trim().replace(/\(\)$/, "");
+    if (name && !code.includes(name)) return false;
+  }
+  const shown = excerptLines(excerpt);
+  for (const m of text.matchAll(/\blines? (\d+)(?:\s*(?:-|–|to|and)\s*(\d+))?/gi)) {
+    if (!shown.has(Number(m[1]))) return false;
+    if (m[2] && !shown.has(Number(m[2]))) return false;
+  }
+  return true;
+}
+
+/** Null when no part survives; a part that is ungrounded is "" and falls back. */
+export function parseTailored(text: string, excerpt: string): Tailored | null {
+  const o = obj(extractJson(text));
+  const keep = (v: unknown, max: number) => {
+    const s = str(v, max * 2);
+    if (!s || s.length > max) return "";
+    return groundedIn(s, excerpt) ? s : "";
+  };
+  const out = { hook: keep(o.hook, 240), lens: keep(o.lens, 700), pitfall: keep(o.pitfall, 500) };
+  return out.hook || out.lens || out.pitfall ? out : null;
 }

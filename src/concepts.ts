@@ -83,7 +83,7 @@ export const CONCEPTS: CodeConcept[] = [
       /:\/\/[^/\s:@]+:[^@\s$<{/]{6,}@/,
     ],
     hook: "Your house key is now taped to the front door.",
-    what: "A real credential typed straight into a source file, so everyone who can read the code can use the key.",
+    what: "A real password or key written straight into your app's files, so anyone who can see the files can use it as you.",
     lens: {
       Junior:
         "Code travels: GitHub, screenshots, chat pastes, the browser. A key inside the code goes on every one of those trips. Keys live in the environment; the code only mentions the variable's name.",
@@ -121,7 +121,7 @@ export const CONCEPTS: CodeConcept[] = [
       /["'](SELECT|INSERT INTO|UPDATE|DELETE FROM)\b[^"']*["']\s*\.\s*\$\w/i,
     ],
     hook: "You just let strangers finish your sentences — and the database does whatever the sentence says.",
-    what: "A database query assembled by dropping a value directly into the query text.",
+    what: "Your app asks its stored data a question, and pastes what a visitor typed straight into that question, so a visitor can change what it asks.",
     lens: {
       Junior:
         "The database cannot tell your words from the user's. If someone types a bit of SQL into your form, it runs. Placeholders (`?` or `$1`) hand the value over separately, so it can only ever be data.",
@@ -131,7 +131,7 @@ export const CONCEPTS: CodeConcept[] = [
         "Placeholders cover values, not identifiers: a user-chosen table or sort column still needs an allow-list. ORMs are safe right up until someone reaches for the raw-string escape hatch.",
     },
     pitfall:
-      "It passes every test you write, because you never type a quote into your own form. The first person who does can read the whole users table.",
+      "It passes every test you write, because you never type a quote into your own form. The first stranger who does can see every customer's details.",
     askTheAi: "Rewrite this query with placeholders and show me which values are now passed separately.",
     docs: { label: "OWASP: SQL Injection Prevention", url: "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html" },
   },
@@ -143,7 +143,7 @@ export const CONCEPTS: CodeConcept[] = [
     files: CODE,
     patterns: [/\b(bcrypt|argon2|scrypt)\b/i, /\b(hashpw|hashSync|password_hash|pbkdf2)\b/],
     hook: "The best way to keep a password safe is to never actually have it.",
-    what: "Passwords are stored as a one-way scramble, so the database never holds the password itself.",
+    what: "Passwords are kept as a scramble that cannot be turned back, so even you never store anyone's real password.",
     lens: {
       Junior:
         "A hash is a blender: password in, smoothie out, no way back. At login the app blends what was typed and compares smoothies. If the database leaks, the passwords are not in it.",
@@ -153,7 +153,7 @@ export const CONCEPTS: CodeConcept[] = [
         "The cost factor is yours to own: aim for about a quarter second on production hardware and raise it over time, re-hashing at login. Compare in constant time, and cap input length so hashing cannot be used to burn your CPU.",
     },
     pitfall:
-      "MD5 and SHA-256 look identical in code and can be guessed billions of times a second. After a leak, most of your users' passwords are cracked before lunch.",
+      "If your data ever leaks, most of your users' passwords are worked out before lunch, and many reuse them for email and banking. MD5 and SHA-256 look safe in code but can be guessed billions of times a second.",
     askTheAi: "Which algorithm and cost factor is this using, and where does the comparison at login happen?",
     docs: { label: "OWASP: Password Storage", url: "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html" },
   },
@@ -170,7 +170,7 @@ export const CONCEPTS: CodeConcept[] = [
       /\bcookies\(\)\.(set|get)\b|\bres\.cookie\(|\bset_cookie\(/,
     ],
     hook: "A token is a festival wristband: whoever is wearing it gets in.",
-    what: "How the server recognises that a request comes from someone who already logged in.",
+    what: "How your app knows it is still the same person who logged in a minute ago, like a wristband at an event.",
     lens: {
       Junior:
         "After login the server hands the browser a wristband, and the browser shows it on every request. Whoever holds it is treated as you, so where it is kept and how long it lasts both matter.",
@@ -180,7 +180,7 @@ export const CONCEPTS: CodeConcept[] = [
         "A stateless token cannot be revoked before it expires, so keep access tokens short and pair them with a revocable refresh token or a server-side session. Pin the algorithm; set cookies HttpOnly, Secure and SameSite.",
     },
     pitfall:
-      "The code checks that a token exists, not that it verifies. Anyone can now write their own wristband saying \"admin\" and walk straight in.",
+      "Anyone can make their own wristband saying \"admin\" and walk straight into other people's accounts. The code checks that a pass exists, not that it is real.",
     askTheAi: "Where is the token verified on each request, how long does it last, and how would I log a user out everywhere?",
     docs: { label: "OWASP: Session Management", url: "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html" },
   },
@@ -693,7 +693,7 @@ export const CONCEPTS: CodeConcept[] = [
       /\{\{\{\s*[\w.]+\s*\}\}\}/,
     ],
     hook: "You handed a stranger a pen and let them write on your page, in your handwriting.",
-    what: "Text is being inserted into the page as live HTML, so any markup inside it is built and run by the browser.",
+    what: "Text is put on the page as instructions instead of plain words, so anything hidden in it is carried out for every visitor.",
     lens: {
       Junior:
         "Normally a framework shows text as text: type `<b>` and you see `<b>`. This switches that off. If any part of the string came from a user, they can add their own script, and it runs for everyone who opens the page.",
@@ -703,7 +703,7 @@ export const CONCEPTS: CodeConcept[] = [
         "Sanitise at output, for the context it lands in: HTML, attribute and URL each have different rules. Add a Content-Security-Policy as the second wall, and treat stored rich text as hostile every time it is rendered, not only when it was saved.",
     },
     pitfall:
-      "You render a user's bio as HTML so the line breaks show. Someone saves a bio with a script in it, and every visitor to their profile quietly sends them a session.",
+      "You let bios keep their formatting so the line breaks show. Someone writes a bio with hidden instructions, and everyone who opens their profile hands over their account without knowing.",
     askTheAi: "Where does this HTML string come from, could a user have written any part of it, and what sanitises it?",
     docs: { label: "OWASP: Cross Site Scripting Prevention", url: "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html" },
   },
@@ -717,7 +717,12 @@ export const CONCEPTS: CodeConcept[] = [
       /\b(multer|formidable|busboy)\s*\(|["'](multer|formidable|busboy|express-fileupload|uploadthing[\w/]*|@uploadthing\/[\w-]+)["']/,
       /\bupload\.(single|array|fields|any)\(/,
       /\b(UploadFile|FileField|ImageField|FileStorage|MultipartFile|IFormFile)\b/,
-      /\b(req|request)\.files?\b|\brequest\.FILES\b|\$_FILES\b/,
+      // `req.file` and `req.files` alone are too common as ordinary field names (a
+      // prompt builder's `req.files.length`). They count only when used the way an
+      // upload is: a named or indexed file, a file's own properties, or a missing-file check.
+      /\b(?:req|request)\.files\s*(?:\[|\.(?:get|getlist)\(|\.(?!length\b|map\b|forEach\b|filter\b|slice\b|some\b|every\b|find\b|join\b|reduce\b|push\b|concat\b|includes\b|flatMap\b|sort\b|entries\b|keys\b|values\b)[A-Za-z_]\w*)/,
+      /\b(?:req|request)\.file\.(?:buffer|path|filename|originalname|mimetype|size|fieldname|destination|stream)\b|!\s*(?:req|request)\.files?\b(?!\.)/,
+      /\brequest\.FILES\b|\$_FILES\b/,
       /\btype=\{?["']file["']/,
       /\bformData\.get(All)?\(\s*["'](file|files|image|avatar|upload|attachment|photo|document)s?["']\s*\)/i,
       /\.get(All)?\([^)]*\)\s+as\s+File\b|\binstanceof\s+File\b/,

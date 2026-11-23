@@ -15,6 +15,8 @@
 
 import * as vscode from "vscode";
 import path from "node:path";
+import { STAKE_JARGON } from "./standards.js";
+import { createHash } from "node:crypto";
 import { conceptsIn, gitChanges } from "../../src/changes.js";
 import { CONCEPTS, scrub, type FileChange } from "../../src/concepts.js";
 import type { Observation } from "../../src/observe.js";
@@ -62,9 +64,26 @@ import { assistantReasoning } from "./transcript.js";
 import { parseTopic } from "./topics.js";
 import type { Scan } from "./watch.js";
 import { Coach } from "./coach.js";
+import { FACTS, GENERAL_FACTS } from "./facts.js";
+import {
+  builtInLesson,
+  hookPrompt,
+  lessonPrompt,
+  parseHook,
+  parseLesson,
+  parseProfile,
+  profilePrompt,
+  type Hook,
+  type Lesson,
+  type ProjectProfile,
+  type Subject,
+} from "./lesson.js";
 import { addStory, count, updateGrowth } from "./growth.js";
 import {
   alternativesPrompt,
+  tailorPrompt,
+  parseTailored,
+  type Tailored,
   glossaryPrompt,
   parseAlternatives,
   parseGlossary,
@@ -86,6 +105,19 @@ const TOPIC_KEY = "miyagi.topic.v1";
 const METER_KEY = "miyagi.meter.v1";
 const DEPTH_DISMISSED_KEY = "miyagi.depthSuggestionDismissed.v1";
 const MIRROR_KEY = "miyagi.mirror.v1";
+const TAILOR_KEY = "miyagi.tailored.v1";
+const LESSON_KEY = "miyagi.lessons.v2";
+const PROFILE_KEY = "miyagi.profile.v1";
+/** v2: hooks written before 0.8.6 could claim things the code did not show. */
+const HOOK_KEY = "miyagi.hooks.v2";
+const MAX_HOOKS = 200;
+const MAX_LESSONS_KEPT = 60;
+/** A project's purpose changes slowly; describe it again after this long. */
+const PROFILE_DAYS = 21;
+/** Tailored cards kept per workspace; the oldest go first. */
+const MAX_TAILORED = 300;
+/** In "always" mode, how many cards of one change are tailored before the learner opens any. */
+const TAILOR_AHEAD = 3;
 /** Questions in an unaided check. */
 const CHECK_LENGTH = 10;
 /** XP for a small change written without the assistant: more than any single answer. */
@@ -130,6 +162,8 @@ interface CardExtra {
   /** "Why not another way?": the learner's own idea first, then the real options. */
   alternatives?: Alternatives & { by: string; guess: string; saved?: boolean };
 }
+
+type StoredTailored = Tailored & { hash: string; by: string; at: string };
 
 interface LessonExtra {
   risks?: { items: Risk[]; by: string };
@@ -179,6 +213,10 @@ type Inbound =
   | { type: "contrastPick"; key: string; pick: "a" | "b" }
   | { type: "alternatives"; key: string; guess?: string }
   | { type: "saveAlternative"; key: string }
+  | { type: "tailor"; key: string }
+  | { type: "lesson"; key: string; depth: string }
+  | { type: "hook"; key: string }
+  | { type: "lessonMove" }
   | { type: "findTerms"; lesson?: string; root?: string }
   | { type: "termGuess"; id: string; text: string }
   | { type: "termReview"; id: string }
@@ -189,7 +227,8 @@ type Inbound =
   | { type: "turnHint"; lesson: string }
   | { type: "check" }
   | { type: "recap"; text: string }
-  | { type: "review" }
+  | { type: "review"; fresh?: boolean }
+  | { type: "cardQuiz"; ids: string[] }
   | { type: "dojo" }
   | { type: "setDepth"; depth: engine.Level }
   | { type: "dismissDepth"; depth: string }
@@ -223,7 +262,22 @@ type Inbound =
   | { type: "skillExercise"; id: string }
   | { type: "skillDone"; id: string }
   | { type: "storyAsk" }
-  | { type: "storyAnswer"; text: string };
+  | { type: "storyAnswer"; text: string }
+  | { type: "todayDone" }
+  | { type: "readStart" }
+  | { type: "readSubmit"; key: string; text: string }
+  | { type: "readSkip"; key: string }
+  | { type: "readSelf"; key: string; right: boolean }
+  | { type: "findingReveal"; key: string; index: number }
+  | { type: "findingKeep"; key: string; index: number }
+  | { type: "upgradeGuess"; key: string; text: string }
+  | { type: "upgradeLesson"; key: string }
+  | { type: "upgradeAdopt"; key: string }
+  | { type: "interviewStart" }
+  | { type: "interviewAnswer"; text: string }
+  | { type: "interviewSkip" }
+  | { type: "interviewNext" }
+  | { type: "interviewClose" };
 
 export interface PanelDeps {
   context: vscode.ExtensionContext;
@@ -254,6 +308,11 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private lessons: engine.LessonView[] = [];
   private explanations: Record<string, Explanation> = {};
   private lastSeen: Record<string, engine.Where> = {};
+  /**
+   * Card text rewritten around the learner's own lines, by card key. `hash`
+   * is of the lines it was written from: when they change, it is redone.
+   */
+  private tailored: Record<string, StoredTailored> = {};
   /** Lessons opened from the dojo. They live outside the feed. */
   private readonly ideaCards = new Map<string, engine.CardView>();
   private topic: engine.Topic | null;
@@ -283,6 +342,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   private week: { at: number; value: WeekProgress } | null = null;
   /** An unaided check in progress. */
   private check: { plan: string[]; asked: number; correct: number; token: string | null } | null = null;
+  /** "Check what you just saw": the ideas from recent cards still to ask about, in order. */
+  private cardQuiz: string[] | null = null;
   /** A capped review, such as the three questions offered after the first commit of the day. */
   private reviewCap: number | null = null;
   /** Lines each file had added when a "your turn" task was proposed. */
@@ -311,6 +372,7 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       this.lastSeen = saved.lastSeen ?? {};
     }
     this.topic = parseTopic(deps.context.globalState.get<string>(TOPIC_KEY));
+    this.tailored = deps.context.workspaceState.get<Record<string, StoredTailored>>(TAILOR_KEY) ?? {};
     void loadGlossary().then((g) => {
       this.glossary = g;
       void this.pushState();
@@ -482,6 +544,9 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       topic: this.topic,
       lessons: this.lessons,
       explanations: this.explanations,
+      tailored: this.tailoredView(),
+      hooks: this.hooksView(),
+      tailorMode: setting<string>("ai.tailorCards", "onOpen"),
       extras: this.extras,
       lessonExtras: this.lessonExtras,
       busy: Object.fromEntries([...this.busy].map(([slot, b]) => [slot, b.by])),
@@ -850,6 +915,253 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
   /* ---- why not another way? ------------------------------------ */
 
   /** The other ways this idea could have been written here. The learner's guess goes first, if they gave one. */
+  /* ---- a card fitted to the learner's code ----------------------- */
+
+  /** What the webview needs: the text and who wrote it, not the hashes. */
+  /* ---- the lesson: what an open card teaches ---------------------- */
+
+  private savedLessons(): Record<string, { lesson: Lesson; at: string }> {
+    return this.deps.context.workspaceState.get<Record<string, { lesson: Lesson; at: string }>>(LESSON_KEY) ?? {};
+  }
+
+  private keepLesson(id: string, lesson: Lesson): void {
+    const all = this.savedLessons();
+    all[id] = { lesson, at: new Date().toISOString() };
+    const ids = Object.keys(all);
+    if (ids.length > MAX_LESSONS_KEPT) {
+      ids.sort((a, b) => all[a].at.localeCompare(all[b].at)).slice(0, ids.length - MAX_LESSONS_KEPT).forEach((k) => delete all[k]);
+    }
+    void this.deps.context.workspaceState.update(LESSON_KEY, all);
+  }
+
+  /** What the project is for, asked once per repository and reused by every lesson. */
+  private async profile(root: string): Promise<ProjectProfile | null> {
+    if (!root) return null;
+    const all = this.deps.context.workspaceState.get<Record<string, { profile: ProjectProfile; at: string }>>(PROFILE_KEY) ?? {};
+    const had = all[root];
+    if (had && Date.now() - Date.parse(had.at) < PROFILE_DAYS * 86_400_000) return had.profile;
+    let found: ProjectProfile | null = null;
+    await this.ask(
+      `${root}|profile`,
+      async () => {
+        const files = await trackedFiles(root).catch(() => [] as string[]);
+        if (!files.length) return "";
+        const chosen = chooseFiles(files, { tree: 160, heads: 6 });
+        const heads: Array<{ file: string; head: string }> = [];
+        for (const file of chosen.heads) {
+          const head = await engine.headOf(root, file, /readme/i.test(file) ? 50 : 30);
+          if (head?.trim()) heads.push({ file, head });
+        }
+        return profilePrompt({ name: path.basename(root), tree: chosen.tree, heads });
+      },
+      (reply) => {
+        found = parseProfile(reply);
+      },
+    );
+    delete this.errors[`${root}|profile`];
+    if (found) {
+      all[root] = { profile: found, at: new Date().toISOString() };
+      void this.deps.context.workspaceState.update(PROFILE_KEY, all);
+    }
+    return found ?? had?.profile ?? null;
+  }
+
+  /* ---- the hook: what an expanded card shows in the list ---------- */
+
+  private savedHooks(): Record<string, { hook: Hook; by: string; at: string }> {
+    const all = this.deps.context.workspaceState.get<Record<string, { hook: Hook; by: string; at: string }>>(HOOK_KEY) ?? {};
+    // A stake saved before the plain-words rule is dropped, so it is written again.
+    for (const k of Object.keys(all)) if (all[k].hook.style === "stake" && STAKE_JARGON.test(all[k].hook.lead)) delete all[k];
+    return all;
+  }
+
+  private hooksView(): Record<string, Hook> {
+    return Object.fromEntries(Object.entries(this.savedHooks()).map(([key, h]) => [key, h.hook]));
+  }
+
+  /**
+   * Writes the preview for a card the learner just expanded: a question for
+   * most cards, what is at stake for the ones tagged Risk. Asked once per card
+   * and kept. The built-in text is on screen meanwhile, and stays if this fails.
+   */
+  private async hook(key: string): Promise<void> {
+    try {
+      if (setting<string>("ai.tailorCards", "onOpen") === "off") return;
+      if (this.savedHooks()[key] || !(await this.resolveAi()).provider) return;
+      const found = await this.lessonSubject(key, (await engine.status()).depth);
+      if (!found) return;
+      const style = this.card(key)?.risk ? "stake" : "question";
+      const slot = `${key}|hook`;
+      if (this.busy.has(slot)) return;
+      // Only a profile already written is used: a preview is not worth a second model call.
+      const profiles = this.deps.context.workspaceState.get<Record<string, { profile: ProjectProfile }>>(PROFILE_KEY) ?? {};
+      await this.ask(
+        slot,
+        async () => hookPrompt({ subject: found.subject, style, profile: profiles[found.root]?.profile ?? null, files: found.files }),
+        (reply, by) => {
+          const hook = parseHook(reply, style, found.files.length > 0);
+          if (!hook) return "unusable";
+          const all = this.savedHooks();
+          all[key] = { hook, by, at: new Date().toISOString() };
+          const keys = Object.keys(all);
+          if (keys.length > MAX_HOOKS) keys.sort((x, y) => all[x].at.localeCompare(all[y].at)).slice(0, keys.length - MAX_HOOKS).forEach((k) => delete all[k]);
+          void this.deps.context.workspaceState.update(HOOK_KEY, all);
+        },
+      );
+      // The built-in preview is still there; a failed hook is not the learner's problem.
+      delete this.errors[slot];
+    } finally {
+      // Written or not, the row stops waiting: it shows the hook, or Miyagi's own line.
+      this.post({ type: "hookDone", key });
+      void this.pushState();
+    }
+  }
+
+  /** An idea card or a tool, reduced to what a lesson is written from. */
+  private async lessonSubject(key: string, depth: engine.Level): Promise<{ id: string; root: string; subject: Subject; files: ChangedFile[] } | null> {
+    const card = this.card(key);
+    if (card) {
+      const excerpt = card.file ? await this.excerpt(card) : null;
+      return {
+        id: `idea:${card.conceptId}|${card.root}`,
+        root: card.root,
+        subject: {
+          kind: "idea",
+          name: card.title,
+          what: card.what,
+          hook: card.hook,
+          know: card.lens[depth] || card.lens.Junior,
+          pitfall: card.pitfall,
+          docs: card.docs,
+          file: card.file || undefined,
+          evidence: card.evidence || undefined,
+        },
+        files: excerpt && card.file ? [{ file: card.file, excerpt }] : [],
+      };
+    }
+    const tool = await this.coach.toolSubject(key);
+    if (!tool) return null;
+    const spec = tool.spec;
+    return {
+      id: `${key}|${tool.root}`,
+      root: tool.root,
+      subject: {
+        kind: "tool",
+        name: tool.name,
+        what: spec?.oneLiner || tool.job,
+        hook: spec?.analogy || `${tool.name}: ${tool.job.toLowerCase()}.`,
+        know: spec?.oneLiner || tool.job,
+        pitfall: spec?.risks[0] ?? "",
+        analogy: spec?.analogy,
+        flow: spec?.flow,
+        terms: spec?.terms,
+        risks: spec?.risks,
+        verify: spec?.verify,
+        docs: spec?.docs ? { label: `${tool.name} docs`, url: spec.docs } : undefined,
+        file: tool.file || undefined,
+        evidence: tool.file ? tool.evidence : undefined,
+      },
+      files: tool.files,
+    };
+  }
+
+  /**
+   * Sends the lesson for a card at a depth. The built-in lesson goes first, so
+   * the card is never empty; the one written for the learner's project follows
+   * when their AI has written it, and is kept so it is only ever asked for once.
+   */
+  private async openLesson(key: string, rawDepth: string): Promise<void> {
+    const depth: engine.Level = rawDepth === "Mid" || rawDepth === "Senior" ? rawDepth : "Junior";
+    const found = await this.lessonSubject(key, depth);
+    if (!found) return;
+    const id = `${found.id}|${depth}`;
+    const kept = this.savedLessons()[id]?.lesson;
+    if (kept) return this.post({ type: "lesson", key, depth, lesson: kept });
+    this.post({ type: "lesson", key, depth, lesson: builtInLesson(found.subject, depth) });
+    if (!(await this.resolveAi()).provider) return;
+    const slot = `${key}|lesson|${depth}`;
+    if (this.busy.has(slot)) return;
+    // Marked busy before the project is described, so the card says so from the first moment.
+    const profile = await this.profile(found.root);
+    await this.ask(
+      slot,
+      async () => lessonPrompt({ subject: found.subject, depth, profile, files: found.files }),
+      (reply, by) => {
+        const lesson = parseLesson(reply, found.subject, depth, by);
+        if (!lesson) return "The lesson your AI wrote could not be used, so this is Miyagi's built-in one. Switch depth and back to try again.";
+        this.keepLesson(id, lesson);
+        this.post({ type: "lesson", key, depth, lesson });
+      },
+    );
+  }
+
+  private tailoredView(): Record<string, Tailored & { by: string }> {
+    return Object.fromEntries(
+      Object.entries(this.tailored).map(([key, t]) => [key, { hook: t.hook, lens: t.lens, pitfall: t.pitfall, by: t.by }]),
+    );
+  }
+
+  private saveTailored(): void {
+    const keys = Object.keys(this.tailored);
+    if (keys.length > MAX_TAILORED) {
+      keys
+        .sort((a, b) => this.tailored[a].at.localeCompare(this.tailored[b].at))
+        .slice(0, keys.length - MAX_TAILORED)
+        .forEach((k) => delete this.tailored[k]);
+    }
+    void this.deps.context.workspaceState.update(TAILOR_KEY, this.tailored);
+  }
+
+  /**
+   * Rewrites a card's hook, lens and pitfall around the lines it was seen in.
+   * Called when a card's page opens (or, in "always" mode, when it arrives).
+   * Costs nothing when the lines have not changed since the last rewrite.
+   * A failure is silent: the card keeps Miyagi's general text, which is
+   * still right, just less personal.
+   */
+  private async tailor(key: string, background = false): Promise<void> {
+    if (setting<string>("ai.tailorCards", "onOpen") === "off") return;
+    const card = this.card(key);
+    if (!card?.file || card.status === "locked") return;
+    const excerpt = await this.excerpt(card);
+    if (!excerpt) return;
+    const hash = createHash("sha1").update(excerpt).digest("hex").slice(0, 16);
+    const had = this.tailored[key];
+    if (had?.hash === hash) return;
+    if (had) {
+      // The code moved on; text about the old lines would now be wrong.
+      delete this.tailored[key];
+      this.saveTailored();
+      void this.pushState();
+    }
+    const slot = `${key}|tailor`;
+    if (background && !(await this.resolveAi()).provider) return;
+    await this.ask(
+      slot,
+      async () => {
+        const depth = (await engine.status()).depth;
+        return tailorPrompt({
+          title: card.title,
+          what: card.what,
+          hook: card.hook,
+          lens: card.lens[depth] || card.lens.Junior,
+          pitfall: card.pitfall,
+          file: card.file,
+          excerpt,
+          depth,
+        });
+      },
+      (reply, by) => {
+        const found = parseTailored(reply, excerpt);
+        if (!found) return "unusable";
+        this.tailored[key] = { ...found, hash, by, at: new Date().toISOString() };
+        this.saveTailored();
+      },
+    );
+    // Not the learner's problem: the general lesson is still on screen.
+    if (this.errors[slot]) this.errors[slot] = "quiet";
+  }
+
   private async alternatives(key: string, guess: string): Promise<void> {
     const card = this.card(key);
     if (!card) return;
@@ -1101,6 +1413,24 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       });
     }
     void this.pushState();
+  }
+
+  /* ---- check what you just saw ----------------------------------- */
+
+  /**
+   * One question per idea from the cards the learner just read, asked after
+   * the cards rather than before them: reading first, then retrieving what was
+   * read while it is still close, is what makes it stick. Answers count like
+   * any review, so the ideas' boxes move as usual.
+   */
+  private async cardQuizNext(): Promise<void> {
+    while (this.cardQuiz?.length) {
+      const id = this.cardQuiz.shift() as string;
+      const quiz = await engine.quizForConcept(id);
+      if (quiz) return this.post({ type: "review", quiz });
+    }
+    this.cardQuiz = null;
+    this.post({ type: "review", quiz: null });
   }
 
   /* ---- the unaided check ----------------------------------------- */
@@ -1433,6 +1763,9 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
       };
     }
     this.save();
+    if (setting<string>("ai.tailorCards", "onOpen") === "always") {
+      for (const card of lesson.cards.filter((c) => c.file).slice(0, TAILOR_AHEAD)) void this.tailor(card.key, true);
+    }
     this.reflect((m) => {
       m.cards += lesson.cards.length;
       // Only files an assistant is known to have written belong in the mirror.
@@ -1525,6 +1858,8 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     // What was written for a dojo idea is kept; it was not part of the feed.
     for (const key of Object.keys(this.explanations)) if (!key.startsWith("dojo:")) delete this.explanations[key];
     for (const key of Object.keys(this.extras)) if (!key.startsWith("dojo:")) delete this.extras[key];
+    for (const key of Object.keys(this.tailored)) if (!key.startsWith("dojo:")) delete this.tailored[key];
+    this.saveTailored();
     for (const key of Object.keys(this.lessonExtras)) delete this.lessonExtras[key];
     for (const key of Object.keys(this.errors)) delete this.errors[key];
     this.changes.clear();
@@ -1553,6 +1888,12 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
     try {
       switch (message.type) {
         case "ready":
+          // The facts never change while the editor is open: sent once, not with every state.
+          this.post({
+            type: "facts",
+            facts: Object.fromEntries(Object.entries(FACTS).map(([id, list]) => [id, list.map((f) => f.text)])),
+            general: GENERAL_FACTS.map((f) => f.text),
+          });
           return void (await this.pushState());
         case "openFile":
           return void (await this.openFile(message.key));
@@ -1607,7 +1948,14 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           this.week = null;
           return void (await this.pushState());
         }
+        case "cardQuiz":
+          this.check = null;
+          this.reviewCap = null;
+          this.cardQuiz = (Array.isArray(message.ids) ? message.ids : []).filter((id) => typeof id === "string").slice(0, 8);
+          return void (await this.cardQuizNext());
         case "review": {
+          if (message.fresh) this.cardQuiz = null;
+          if (this.cardQuiz) return void (await this.cardQuizNext());
           if (this.check) return void (await this.checkNext());
           if (this.reviewCap !== null && this.reviewCap <= 0) {
             this.reviewCap = null;
@@ -1644,6 +1992,15 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return this.contrastPick(message.key, message.pick === "b" ? "b" : "a");
         case "alternatives":
           return void (await this.alternatives(message.key, String(message.guess ?? "")));
+        case "lesson":
+          return void (await this.openLesson(String(message.key), String(message.depth)));
+        case "hook":
+          return void (await this.hook(String(message.key)));
+        case "lessonMove":
+          // The learner predicted, explained or did a task before being told.
+          return void (await updateGrowth((g) => count(g, { kind: "first" })));
+        case "tailor":
+          return void (await this.tailor(String(message.key)));
         case "saveAlternative":
           return void (await this.saveAlternative(message.key));
         case "findTerms":
@@ -1726,6 +2083,36 @@ export class MiyagiPanel implements vscode.WebviewViewProvider, vscode.Disposabl
           return void (await this.coach.skillExercise(String(message.id ?? "")));
         case "skillDone":
           return void (await this.coach.skillDone(String(message.id ?? "")));
+        case "todayDone":
+          return void (await this.coach.todayDone());
+        case "readStart":
+          return void (await this.coach.readStart());
+        case "readSubmit":
+          return void (await this.coach.readSubmit(message.key, String(message.text ?? "")));
+        case "readSkip":
+          return void (await this.coach.readSubmit(message.key, "", true));
+        case "readSelf":
+          return void (await this.coach.readSelf(message.key, message.right === true));
+        case "findingReveal":
+          return void (await this.coach.findingReveal(message.key, Number(message.index)));
+        case "findingKeep":
+          return this.coach.findingKeep(message.key, Number(message.index));
+        case "upgradeGuess":
+          return void (await this.coach.upgradeGuess(message.key, String(message.text ?? "")));
+        case "upgradeLesson":
+          return void (await this.coach.upgradeLesson(message.key));
+        case "upgradeAdopt":
+          return void (await this.coach.upgradeAdopt(message.key));
+        case "interviewStart":
+          return void (await this.coach.interviewStart());
+        case "interviewAnswer":
+          return void (await this.coach.interviewAnswer(String(message.text ?? "")));
+        case "interviewSkip":
+          return void (await this.coach.interviewAnswer("", true));
+        case "interviewNext":
+          return void (await this.coach.interviewNext());
+        case "interviewClose":
+          return this.coach.interviewClose();
         case "storyAsk":
           return void (await this.coach.storyAsk());
         case "storyAnswer":

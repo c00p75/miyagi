@@ -1,5 +1,203 @@
 # Changelog
 
+## 0.9.3
+
+### Changed
+
+- **Risk cards say who gets hurt and what they lose, in plain words.** The red warning now reads as a short scene anyone can picture, such as someone writing a bio and everyone who opens it losing their account. Words like HTML, script or token are kept for the lesson. A warning that still uses them is written again.
+- Security warnings and the five Risk cards' descriptions start with the consequence for a real person, then the technical cause.
+- Warnings written before this version are written again the next time you open the card.
+
+## 0.9.2
+
+### Changed
+
+- **Lessons say each thing once.** Each part of a section now has to add something new. The story stops before the outcome, so the question no longer gives away its own answer. The explanation adds what the picture did not show, the one line is the only summary, and saying it back asks you to apply the point rather than repeat it.
+- Stories in your project are told as imagined ("Say two people…"), never as something that already happened.
+- A comparison's result line is no longer cut off mid-sentence.
+- Lessons written before this version are written again the next time you open them.
+
+## 0.9.1
+
+### Changed
+
+- **504 fact-checked "Did you know" facts, up from 214.** Every one was researched against a source and then checked again by a separate reviewer, who confirmed it, corrected a detail or rejected it. About 1 in 12 new facts needed a correction. Every built-in idea and all 49 tools now have their own facts, and 141 general stories cover everything else.
+- Retellings of the same event were cut, so each story appears once.
+- **A new fact every time.** The panel remembers which facts you have seen and picks one you have not, starting with facts about the card's own idea or tool, then the general stories. Only when you have seen all of them does it start again.
+
+## 0.9.0
+
+### Changed
+
+- **214 researched "Did you know" facts.** The 36 facts written from memory are replaced by 214 that were each checked against a source, whose link sits beside the fact in `vscode/src/facts.ts`. Each is a real event with a consequence and, where possible, a number.
+  - Every built-in idea has its own facts, usually three to six.
+  - 40 of the 49 tools now have their own facts, for the first time.
+  - 29 general stories of software going wrong or right cover everything else.
+- A card always shows the same fact. Facts are sent to the panel once, not with every update.
+
+## 0.8.10
+
+### Changed
+
+- **The "Did you know" fact stays long enough to read.** It is held for five to twelve seconds, depending on its length, even when your card's hook is ready sooner. When the hook is ready the row says "Your card is ready." with a "Show it" button, so you can move on at once.
+
+## 0.8.9
+
+### Fixed
+
+- **Every card now shows "Did you know" with the shimmer while its hook is written.** Before, only built-in ideas with a fact of their own did; ideas your AI found, and tools, fell back to an older loading with no shimmer. Those cards now show one of eight sourced facts about software in general, the same one each time for a given card.
+
+## 0.8.8
+
+### Changed
+
+- **A shimmer while a card's hook is written.** Under the "Did you know" fact, two shimmering bars mark where the hook will land, and the "Writing this card for your project…" line carries the same sweep. It stays still when your system asks for reduced motion.
+
+## 0.8.7
+
+### Changed
+
+- **Did you know.** While your AI writes a card's hook, the row now shows a true fact about the idea, such as the 2008 breach that stole 130 million card numbers through SQL injection. There are 28, each with its source noted in `vscode/src/facts.ts`. An idea with no fact keeps the "While you wait" question.
+
+## 0.8.6
+
+### Fixed
+
+- **A card's preview no longer changes under your eyes.** While your AI writes the hook for your project, the row shows what it is doing, step by step, and gives you a question to think about. The hook then fades in. "Open now" is there throughout.
+- **Hooks no longer claim things your code does not show.** Your AI must first confirm that the lines really do what the card is about. If they do not, the hook talks about apps in general and the card says it "matched your code by pattern, and may not apply". A hook that says "your app" without that confirmation is thrown away. Hooks written before this version are discarded.
+- **"Accepting files from users" no longer fires on ordinary code.** A variable that merely has a `files` or `file` field (`req.files.length`) is not an upload. It now takes a named or indexed file, a file's own properties, or a missing-file check.
+
+## 0.8.5
+
+### Changed
+
+- **Lesson sections start open.** On a card's page all eight sections are expanded, so the lesson reads top to bottom without tapping each one. You can still close a section, and it stays closed.
+
+## 0.8.4
+
+### Changed
+
+- **The greeting's quote stands apart.** The quote and its author sit behind their own thin bar, like a pulled quote, and the box around the greeting is a plain outline.
+
+## 0.8.4
+
+### Changed
+
+- **A card's preview now makes you want to open it.** Expanding a card in the Now list no longer shows a three-part summary. It shows a hook, in one of two styles chosen by the card's type:
+  - **A question** on most cards and on tools: a short situation in your app, ending in a question the lesson answers.
+  - **The risk** on cards tagged Risk: what goes wrong for a real user, in a red box, so red keeps meaning danger.
+
+  Both are followed by one teasing line and a button that says what you get, such as "Find out why" or "See the trade-off". Your AI writes the hook for your project once, when you first expand the card; Miyagi's built-in line shows meanwhile and without an AI.
+- The teaching standard (`docs/TEACHING.md`) now has a section on hooks: true, concrete, about your app, and never giving the answer away.
+
+## 0.8.3
+
+### Changed
+
+- **A shorter greeting.** The "Waiting below…" line is gone; the list underneath already shows what is waiting. The greeting now carries an icon for the time of day: a sun in the morning, sun and cloud in the afternoon, a moon in the evening.
+
+## 0.8.2
+
+### Changed
+
+- **The Now list is a list.** Items are separated by thin lines, without the filled tiles. The item you tap open keeps a faint tint so its preview reads as part of it.
+
+## 0.8.1
+
+### Changed
+
+- **Keep learning, at the end of every lesson.** Further reading is no longer behind a "Go deeper" row. It is always shown after the knowledge check, as tabs by type (Videos, Articles, Sites and Books), each with a count. Your AI is now asked for sites too, such as practice labs and references. Official documentation sits under Sites.
+
+## 0.8.0
+
+### Added
+
+- **Every card opens as a lesson.** Idea cards and tool pages now share one structure of eight sections, each answering one question:
+  1. The problem: why does it exist?
+  2. The concept: what is it?
+  3. How it works
+  4. Architecture: where does it fit in your project?
+  5. Implementation: how is it used here?
+  6. Practical considerations
+  7. Application: your turn
+  8. Knowledge check
+
+  In each section you do something before you are told: predict what happens, read an error with its parts explained, tap code lines to see why each is there, or do a small task. Each ends with the point in one line and a question that leads to the next section.
+- **Depth on the card.** Junior, Mid and Senior switch at the top of every card, for that card only. The sections stay the same; what they say, ask and set as a task changes.
+- **Lessons about your project.** Your AI describes your project once per repository (what it does, who uses it, its parts), and every lesson uses that for its stories and examples. A lesson is written once per card and depth, then kept. Without an AI, a shorter built-in lesson shows in the same order.
+- **Concepts you can open.** Related concepts appear as chips in the lesson, and a tool's own concepts open as cards.
+- **Go deeper.** Each lesson ends with videos, articles and books for its depth. Except for official documentation, each link opens a search for that title, so it never leads to a dead page.
+- **Three questions in the list.** Tapping a card in the Now list shows What is it? Where is it in your app? What if it goes wrong?
+
+### Changed
+
+- **One teaching standard.** `docs/TEACHING.md` sets how Miyagi explains, structures lessons, writes questions and handles depth. Every prompt now carries its house style, and `CLAUDE.md` points coding assistants to it.
+- A tool's "words" are now called concepts.
+
+## 0.7.3
+
+### Changed
+
+- **A clearer tool page.** It opens with a before and after: your project without the tool and with it, side by side, with the "without" written by your AI for your project. Then:
+  - **How it fits** as a timeline.
+  - **How it bites** as a card per risk, labelled Security, Cost, Reliability or Setup by your AI.
+  - **Prove it works** as a checklist with a copyable command.
+- **The links at the bottom** (docs, a question for your AI, remove from the feed) are now full-width rows, each with a one-line hint, and "Why this tool?" is a card with one button.
+
+## 0.7.2
+
+### Changed
+
+- **The day starts with a greeting, not a to-do list.** The Now tab opens with good morning (or afternoon), a quote about the craft that changes daily, what is waiting below, and the one skill to focus on. The × hides it until tomorrow.
+- **Questions come after the cards.** "Check what you just saw" sits at the end of the feed: one question for each idea in the last day's cards (up to five), asked after you have read them. Answers count toward review like any other.
+
+## 0.7.1
+
+### Added
+
+- **Cards that talk about your code.** When you open a card, your AI rewrites its hook, "Know this" and "How it bites" around the lines it was seen in, naming your own functions and values instead of a textbook example.
+  - Every name in backticks and every "line N" is checked against your lines. A part that mentions something not there is dropped, and Miyagi's general text shows for that part instead.
+  - Saved per card and redone only when those lines change, so reopening a card costs nothing.
+  - **Show the general lesson** switches back on any card.
+  - New setting `miyagi.ai.tailorCards`: `onOpen` (default), `always` (also the first three cards of each change as they arrive), or `off`.
+
+## 0.7.0
+
+### Added
+
+- **Your first five minutes.** Once a day the Now tab opens with three steps:
+  1. Recall what is due, with yesterday's misses named.
+  2. Read one function you did not write.
+  3. The one skill to work on next.
+
+  **Done for today** hides it until tomorrow; **Show Today's First Five Minutes** brings it back.
+- **Read it cold.** Miyagi picks a function from the files changed most recently and shows only its name and signature. You say what it does, then the body appears. Your AI compares your prediction with the code: what the name told you, what it hid, and the one line most worth noticing. Without an AI you judge it yourself. "Read code you did not write" is a new skill on the map.
+- **Guardrails before you commit.** Staging a change now checks it for what it could cost:
+  - a committed env file
+  - a secret behind a `NEXT_PUBLIC_`/`VITE_` prefix
+  - a service-role key in client code
+  - open Firebase rules or a wildcard CORS origin
+  - unescaped HTML
+  - an unsigned webhook
+  - a secret in a log line
+  - a 100% trace sample rate
+  - a query with no limit
+  - an AI call with no output cap
+  - a job that runs every minute
+
+  Each finding asks you a question about its line before it shows the answer and the fix, and you can mark it as intended. The idea it is an instance of comes up for review that day. It never blocks a commit.
+- **Major version upgrades.** When a dependency jumps a major version (or a 0.x minor), a card asks what you think might break, then your AI explains what changed, where it touches your code, and what to check, with a question you can put on review. Without an AI it points you to the changelog.
+- **Mock interview.** Four questions in the Grow tab:
+  - two on ideas you hold
+  - one on a tool your project uses
+  - one "tell me about a time" from your own story
+
+  You type your answers against a soft timer, and each one is judged as an interviewer would. At the end you see what to work on, and ideas that did not land come back for review today.
+
+### Fixed
+
+- Questions from decisions, incidents and saved alternatives disappeared from review after the editor restarted. They are now kept in `~/.miyagi/coach-ideas.json` and registered at startup.
+
 ## 0.6.0
 
 ### Added

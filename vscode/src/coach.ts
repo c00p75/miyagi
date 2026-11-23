@@ -82,10 +82,36 @@ import {
 } from "./tools.js";
 import { assignTopic } from "./topics.js";
 import { trackedFiles, chooseFiles } from "./reports.js";
+import { profileDir } from "../../src/profile.js";
+import {
+  checkGuardrails,
+  diffLines,
+  findFunctions,
+  pickFunction,
+  planInterview,
+  readableFile,
+  upgradesIn,
+  type Finding,
+  type InterviewQuestion,
+} from "./practice.js";
+import {
+  interviewGradePrompt,
+  parseReading,
+  parseUpgrade,
+  readCodePrompt,
+  upgradePrompt,
+  type ReadingFeedback,
+  type UpgradeLesson,
+} from "./prompts.js";
 
 const COACH_KEY = "miyagi.coach.v1";
 const TOOLS_KEY = "miyagi.coachTools.v1";
 const NO_AI_OFFER_KEY = "miyagi.noAiOffered.v1";
+const TODAY_DISMISSED_KEY = "miyagi.todayDismissed.v1";
+const UPGRADES_SEEN_KEY = "miyagi.upgradesSeen.v1";
+const XP_READ: Record<Verdict, number> = { right: 15, partly: 8, wrong: 3 };
+/** A soft time per interview question. Shown, never enforced. */
+const INTERVIEW_SECONDS = 150;
 
 /** XP for going first. Smaller than an answer recalled cold, larger than nothing. */
 const XP_DEBUG: Record<Verdict, number> = { right: 20, partly: 10, wrong: 5 };
@@ -162,9 +188,59 @@ export interface GateItem {
   correct?: boolean;
   committed?: boolean;
   noQuestion?: boolean;
+  /** What the staged lines could cost: security and money. Shown before the question. */
+  findings?: Finding[];
+  /** Findings whose answer has been revealed, and ones the learner marked as intended. */
+  shown?: number[];
+  kept?: number[];
 }
 
-export type CoachItem = ToolItem | DebugItem | GateItem;
+/** A function to read cold: name and signature first, the body only after a prediction. */
+export interface ReadItem {
+  kind: "read";
+  key: string;
+  at: string;
+  root: string;
+  file: string;
+  name: string;
+  signature: string;
+  start: number;
+  end: number;
+  /** Numbered, scrubbed lines. Never sent to the webview before the prediction. */
+  code: string;
+  guess?: string;
+  revealed: boolean;
+  result?: ReadingFeedback & { by: string };
+  self?: "right" | "wrong";
+}
+
+/** A dependency that crossed a major version. */
+export interface UpgradeItem {
+  kind: "upgrade";
+  key: string;
+  at: string;
+  root: string;
+  name: string;
+  from: string;
+  to: string;
+  file: string;
+  guess?: string;
+  guessDone: boolean;
+  lesson?: UpgradeLesson & { by: string };
+  conceptId?: string;
+  adopted?: boolean;
+}
+
+export type CoachItem = ToolItem | DebugItem | GateItem | ReadItem | UpgradeItem;
+
+interface Interview {
+  questions: InterviewQuestion[];
+  at: number;
+  /** When the current question was shown, for the soft timer. */
+  shownAt: number;
+  answers: Array<{ text: string; seconds: number; verdict?: Verdict; feedback?: string; by?: string; skipped?: boolean }>;
+  done: boolean;
+}
 
 interface Saved {
   items: CoachItem[];
@@ -289,6 +365,60 @@ export async function restoreTools(): Promise<number> {
 }
 
 /* ------------------------------------------------------------------ *
+ * Ideas the coach registers at runtime: decisions, incidents, upgrades
+ *
+ * Their questions are on the review schedule, so they must exist again after
+ * a restart. Kept in ~/.miyagi/coach-ideas.json and registered at startup.
+ * ------------------------------------------------------------------ */
+
+function coachIdeasPath(): string {
+  return path.join(profileDir(), "coach-ideas.json");
+}
+
+/** Registers an idea and remembers it. Returns whether it is live. */
+async function keepIdea(def: ConceptDefinition, origin: "decision" | "incident" | "upgrade"): Promise<boolean> {
+  if (!registerConcepts([def], origin).added.includes(def.id)) return false;
+  assignTopic(def.id, "Tooling");
+  const fs = await import("node:fs/promises");
+  let list: Array<{ origin: string; def: ConceptDefinition }> = [];
+  try {
+    const raw = JSON.parse(await fs.readFile(coachIdeasPath(), "utf8"));
+    if (Array.isArray(raw?.ideas)) list = raw.ideas;
+  } catch {
+    // First one, or an unreadable file: start again.
+  }
+  list = [...list.filter((x) => x?.def?.id !== def.id), { origin, def }].slice(-400);
+  try {
+    await fs.mkdir(path.dirname(coachIdeasPath()), { recursive: true });
+    const tmp = `${coachIdeasPath()}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify({ version: 1, ideas: list }), "utf8");
+    await fs.rename(tmp, coachIdeasPath());
+  } catch {
+    // The idea works for this sitting either way.
+  }
+  return true;
+}
+
+/** Registers every decision, incident and upgrade idea saved in earlier sittings. */
+export async function restoreCoachIdeas(): Promise<number> {
+  const fs = await import("node:fs/promises");
+  try {
+    const raw = JSON.parse(await fs.readFile(coachIdeasPath(), "utf8"));
+    let n = 0;
+    for (const x of Array.isArray(raw?.ideas) ? raw.ideas : []) {
+      const origin = x?.origin === "incident" || x?.origin === "upgrade" ? x.origin : "decision";
+      if (x?.def && registerConcepts([x.def], origin).added.length) {
+        assignTopic(x.def.id, "Tooling");
+        n++;
+      }
+    }
+    return n;
+  } catch {
+    return 0;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * The coach
  * ------------------------------------------------------------------ */
 
@@ -308,6 +438,7 @@ export class Coach {
   private story: { question?: string; entry?: number; by?: string; feedback?: { verdict: Verdict; feedback: string; by: string } } = {};
   private incidentDraft: { lesson?: string } = {};
   private trackedCache = new Map<string, { at: number; files: string[] }>();
+  private interview: Interview | null = null;
 
   constructor(private readonly host: CoachHost) {
     const saved = host.context.workspaceState.get<Saved>(COACH_KEY);
@@ -358,7 +489,8 @@ export class Coach {
     const feedTools = [...this.tools.values()].filter((t) => t.inFeed).map(toolView);
     const ai = await this.host.aiReady();
     return {
-      items: [...this.items.map((i) => (i.kind === "debug" ? this.debugView(i) : i)), ...feedTools].sort((a, b) => b.at.localeCompare(a.at)),
+      items: [...this.items.map((i) => (i.kind === "debug" ? this.debugView(i) : i.kind === "read" && !i.revealed ? { ...i, code: "" } : i)), ...feedTools].sort((a, b) => b.at.localeCompare(a.at)),
+      today: await this.today(),
       tools: [...this.tools.values()].map(toolView),
       packages: this.packages,
       offerAi: !ai && !this.host.context.globalState.get<boolean>(NO_AI_OFFER_KEY),
@@ -389,7 +521,54 @@ export class Coach {
       exercise: this.exercise,
       practice: this.story,
       incidentDraft: this.incidentDraft,
+      interview: this.interviewView(),
+      interviews: g.interviews.slice(-5).reverse(),
+      reads: g.reads.length,
     };
+  }
+
+  /* ---- today ----------------------------------------------------- */
+
+  /**
+   * The daily greeting: what is due, whether a function was read, and the
+   * one skill to work on. Once a day, until the learner says they are done;
+   * nothing in it is new information, only the order to take it in.
+   */
+  private async today(): Promise<unknown> {
+    if (!setting("coach.dailyStart", true)) return null;
+    const date = new Date().toDateString();
+    if (this.host.context.globalState.get<string>(TODAY_DISMISSED_KEY) === date) return null;
+    const [status, g, states, met, insight] = await Promise.all([engine.status(), loadGrowth(), engine.ideaStates(), engine.ideasMet(), engine.insight()]);
+    const map = skillMap({ ideas: states, growth: g, changesSeen: met });
+    const next = map.next ? map.skills.find((k) => k.id === map.next?.id) : undefined;
+    const since = Date.now() - 36 * 3_600_000;
+    const missed = [...new Set(insight.mistakes.filter((m) => Date.parse(m.at) > since).map((m) => m.about).filter(Boolean))].slice(0, 3);
+    const readToday = this.items.some((i) => i.kind === "read" && i.revealed && new Date(i.at).toDateString() === date);
+    const open = {
+      debug: this.items.filter((i) => i.kind === "debug" && !i.result && !i.revealed).length,
+      gates: this.items.filter((i) => i.kind === "gate" && !i.answered && !i.committed).length,
+      upgrades: this.items.filter((i) => i.kind === "upgrade" && !i.lesson).length,
+      tools: [...this.tools.values()].filter((t) => t.inFeed && !t.adopted).length,
+    };
+    return {
+      due: status.dueQuestions,
+      minutes: Math.max(1, Math.round((Math.min(5, status.dueQuestions) * 25) / 60)),
+      missed,
+      next: next ? { id: next.id, title: next.title, sentence: map.next?.sentence ?? "" } : null,
+      canRead: this.host.roots().length > 0,
+      readToday,
+      open,
+    };
+  }
+
+  async todayDone(): Promise<void> {
+    await this.host.context.globalState.update(TODAY_DISMISSED_KEY, new Date().toDateString());
+    this.host.push();
+  }
+
+  async todayShow(): Promise<void> {
+    await this.host.context.globalState.update(TODAY_DISMISSED_KEY, undefined);
+    this.host.push();
   }
 
   /* ---- tools --------------------------------------------------- */
@@ -663,8 +842,7 @@ export class Coach {
         pitfall: (decision.tradeoff || "A choice nobody can explain gets reversed by accident, or kept long after the reason for it is gone.").slice(0, 500),
         questions: [{ ...decision.question, distractors: decision.question.distractors.slice(0, 4), level: "Junior" }],
       };
-      if (registerConcepts([def], "decision").added.includes(id)) {
-        assignTopic(id, "Tooling");
+      if (await keepIdea(def, "decision")) {
         await engine.adoptIdeas([id], "a decision you logged");
         conceptId = id;
       }
@@ -841,7 +1019,13 @@ export class Coach {
         lines += m[1] === "-" ? 0 : Number(m[1]);
         files.push(m[3]);
       }
-      if (lines < min) {
+      // Guardrails look at any staged change, however small: a key leaks in one line.
+      let findings: Finding[] = [];
+      if (setting("coach.guardrails", true)) {
+        const diff = await run(root, "git", ["diff", "--cached", "--no-color", "--no-ext-diff", "-U0"], 10_000);
+        findings = diff ? checkGuardrails(diffLines(diff)) : [];
+      }
+      if (lines < min && !findings.length) {
         // Unstaged since: an open check for this root no longer applies.
         const open = this.items.find((i): i is GateItem => i.kind === "gate" && i.root === root && !i.answered && !i.committed);
         if (open) {
@@ -851,12 +1035,29 @@ export class Coach {
         }
         return;
       }
-      const signature = `${files.length}:${lines}:${files.slice(0, 20).join("|")}`;
+      const signature = `${files.length}:${lines}:${files.slice(0, 20).join("|")}:${findings.map((f) => f.id).join(",")}`;
       if (this.items.some((i) => i.kind === "gate" && i.root === root && i.signature === signature)) return;
       // One open check per repository: a re-stage replaces it.
       this.items = this.items.filter((i) => !(i.kind === "gate" && i.root === root && !i.answered && !i.committed));
-      this.add({ kind: "gate", key: `gate:${Date.now().toString(36)}`, at: new Date().toISOString(), root, files: files.slice(0, 30), lines, signature });
-      this.host.announce(1, `Before you commit: ${lines} lines staged`);
+      this.add({
+        kind: "gate",
+        key: `gate:${Date.now().toString(36)}`,
+        at: new Date().toISOString(),
+        root,
+        files: files.slice(0, 30),
+        lines,
+        signature,
+        ...(findings.length ? { findings, shown: [], kept: [] } : {}),
+        // Below the size threshold there is no question, only what the lines could cost.
+        ...(lines < min ? { noQuestion: true } : {}),
+      });
+      const security = findings.filter((f) => f.kind === "security").length;
+      this.host.announce(
+        1,
+        findings.length
+          ? `Before you commit: ${findings.length} thing${findings.length === 1 ? "" : "s"} that could ${security ? "leak or break" : "cost you"}`
+          : `Before you commit: ${lines} lines staged`,
+      );
       this.host.push();
     } finally {
       this.gateBusy.delete(root);
@@ -919,6 +1120,309 @@ export class Coach {
         this.host.post({ type: "quiz", key, quiz });
       },
     );
+  }
+
+  /** The learner tried to say what is risky, or gave up guessing: show the answer. */
+  async findingReveal(key: string, index: number): Promise<void> {
+    const item = this.item(key);
+    if (item?.kind !== "gate" || !item.findings?.[index]) return;
+    item.shown = [...new Set([...(item.shown ?? []), index])];
+    const f = item.findings[index];
+    // The idea it is an instance of is worth recalling today.
+    if (f.idea && engine.knownIdea(f.idea)) await engine.bringForward(f.idea);
+    this.save();
+    this.host.push();
+  }
+
+  findingKeep(key: string, index: number): void {
+    const item = this.item(key);
+    if (item?.kind !== "gate" || !item.findings?.[index]) return;
+    item.kept = [...new Set([...(item.kept ?? []), index])];
+    this.save();
+    this.host.push();
+  }
+
+  /* ---- reading code you did not write ----------------------------- */
+
+  private readsDone(): Promise<Set<string>> {
+    return loadGrowth().then((g) => new Set(g.reads.map((r) => `${r.file}#${r.name}`)));
+  }
+
+  /** Picks a function to read cold, from the files changed most recently. */
+  async readStart(): Promise<void> {
+    const root = this.host.roots()[0];
+    if (!root) return void vscode.window.showInformationMessage("Miyagi needs an open git repository to find code to read.");
+    // An unread one already waiting is the one to read.
+    const waiting = this.items.find((i): i is ReadItem => i.kind === "read" && !i.revealed);
+    if (waiting) return this.host.post({ type: "openItem", key: waiting.key });
+    const recent = (await run(root, "git", ["log", "--since=45.days", "--name-only", "--pretty=format:", "-n", "200"], 8_000)) ?? "";
+    const tracked = new Set(await this.tracked(root));
+    const ordered = [...new Set(recent.split("\n").map((l) => l.trim()).filter(Boolean))].filter((f) => tracked.has(f) && readableFile(f));
+    const rest = [...tracked].filter((f) => readableFile(f) && !ordered.includes(f));
+    const done = await this.readsDone();
+    const candidates: Array<ReturnType<typeof findFunctions>[number] & { file: string }> = [];
+    const fs = await import("node:fs/promises");
+    for (const file of [...ordered, ...rest].slice(0, 40)) {
+      try {
+        const text = await fs.readFile(path.join(root, file), "utf8");
+        for (const fn of findFunctions(file, text)) candidates.push({ ...fn, file });
+      } catch {
+        // Moved or unreadable: there are other files.
+      }
+      if (candidates.length >= 30) break;
+    }
+    const pick = pickFunction(candidates, done);
+    if (!pick) return void vscode.window.showInformationMessage("Miyagi found no function it has not already given you to read. Write some more code first!");
+    const code = (await engine.excerptOfRange(root, pick.file, pick.start - 1, pick.end - 1, 6_000)) ?? "";
+    if (!code) return;
+    const item: ReadItem = {
+      kind: "read",
+      key: `read:${Date.now().toString(36)}`,
+      at: new Date().toISOString(),
+      root,
+      file: pick.file,
+      name: pick.name,
+      signature: scrub(pick.signature),
+      start: pick.start,
+      end: pick.end,
+      code,
+      revealed: false,
+    };
+    this.add(item);
+    this.host.post({ type: "openItem", key: item.key });
+    this.host.push();
+  }
+
+  async readSubmit(key: string, text: string, skipped = false): Promise<void> {
+    const item = this.item(key);
+    if (item?.kind !== "read" || item.revealed) return;
+    const guess = skipped ? "" : text.trim().slice(0, 800);
+    item.guess = guess || undefined;
+    item.revealed = true;
+    this.save();
+    this.host.push();
+    if (!guess) {
+      await updateGrowth((g) => g.reads.push({ at: new Date().toISOString(), file: item.file, name: item.name, verdict: "skipped" }));
+      return;
+    }
+    if (!(await this.host.aiReady())) return; // the learner compares for themselves
+    await this.host.ask(
+      `${key}|read`,
+      async () => readCodePrompt({ file: item.file, name: item.name, signature: item.signature, code: item.code, guess, depth: await this.host.depth() }),
+      async (reply, by) => {
+        const r = parseReading(reply);
+        if (!r) return "The AI's reply could not be read. Try again, or judge it yourself below.";
+        item.result = { ...r, by };
+        await updateGrowth((g) => {
+          g.reads.push({ at: new Date().toISOString(), file: item.file, name: item.name, verdict: r.verdict });
+          count(g, { kind: "explained", verdict: r.verdict });
+          if (r.verdict === "right") addStory(g, { kind: "turn", title: `Read \`${item.name}\` from its name and called it`, detail: r.summary });
+        });
+        await engine.credit("Read code cold", `${item.file}#${item.name}`, XP_READ[r.verdict]);
+        this.save();
+      },
+    );
+  }
+
+  /** Without an AI, or as a second opinion: the learner says whether their prediction held. */
+  async readSelf(key: string, right: boolean): Promise<void> {
+    const item = this.item(key);
+    if (item?.kind !== "read" || !item.revealed || item.self || item.result) return;
+    item.self = right ? "right" : "wrong";
+    await updateGrowth((g) => {
+      g.reads.push({ at: new Date().toISOString(), file: item.file, name: item.name, verdict: right ? "self-right" : "self-wrong" });
+      count(g, { kind: "first" });
+    });
+    this.save();
+    this.host.push();
+  }
+
+  /* ---- major version upgrades -------------------------------------- */
+
+  /** Looks for dependencies that crossed a major version in what just changed. */
+  private async checkUpgrades(root: string, changes: readonly FileChange[]): Promise<void> {
+    const manifests = changes.map((c) => c.file).filter((f) => /(^|\/)(package\.json|requirements[\w.-]*\.txt|pyproject\.toml|Pipfile)$/i.test(f));
+    if (!manifests.length) return;
+    let diff = await run(root, "git", ["diff", "HEAD", "-U0", "--no-color", "--no-ext-diff", "--", ...manifests]);
+    // Already committed by the time it was read: the last commit holds the change.
+    if (!diff?.trim()) diff = await run(root, "git", ["diff", "HEAD~1", "HEAD", "-U0", "--no-color", "--no-ext-diff", "--", ...manifests]);
+    if (!diff) return;
+    const seen = new Set(this.host.context.globalState.get<string[]>(UPGRADES_SEEN_KEY) ?? []);
+    for (const u of upgradesIn(diffLines(diff))) {
+      const id = `${root}:${u.name}@${u.to.replace(/[^\d.]/g, "").split(".")[0]}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      this.add({ kind: "upgrade", key: `upgrade:${Date.now().toString(36)}:${slugOf(u.name)}`, at: new Date().toISOString(), root, name: u.name, from: u.from, to: u.to, file: u.file, guessDone: false });
+      this.host.announce(1, `${u.name} jumped a major version: ${u.from} → ${u.to}`);
+    }
+    await this.host.context.globalState.update(UPGRADES_SEEN_KEY, [...seen].slice(-200));
+  }
+
+  async upgradeGuess(key: string, text: string): Promise<void> {
+    const item = this.item(key);
+    if (item?.kind !== "upgrade") return;
+    item.guessDone = true;
+    const guess = text.trim().slice(0, 400);
+    if (guess) {
+      item.guess = guess;
+      await this.move({ kind: "first" });
+    }
+    this.save();
+    this.host.push();
+    if (await this.host.aiReady()) await this.upgradeLesson(key);
+  }
+
+  async upgradeLesson(key: string): Promise<void> {
+    const item = this.item(key);
+    if (item?.kind !== "upgrade") return;
+    let files: ChangedFile[] = [];
+    await this.host.ask(
+      `${key}|lesson`,
+      async () => {
+        files = item.root ? (await this.mentions(item.root, [item.name])).filter((f) => !/package\.json$|lock/.test(f.file)) : [];
+        return upgradePrompt({ name: item.name, from: item.from, to: item.to, files, guess: item.guess ?? "", depth: await this.host.depth() });
+      },
+      async (reply, by) => {
+        const lesson = parseUpgrade(reply, files.map((f) => f.file));
+        if (!lesson) return "The AI's reply could not be read. Try again.";
+        item.lesson = { ...lesson, by };
+        if (lesson.question) {
+          const id = `upgrade-${slugOf(item.name).slice(0, 24)}-${(item.to.match(/\d+/) ?? ["x"])[0]}`;
+          const def: ConceptDefinition = {
+            id,
+            title: `${item.name} ${item.to.replace(/^[\^~>=<\s]+/, "")}: what changed`.slice(0, 80),
+            emoji: "⬆️",
+            weight: 45,
+            patterns: [],
+            hook: `Your project moved ${item.name} from ${item.from} to ${item.to}.`.slice(0, 200),
+            what: lesson.summary.slice(0, 400),
+            lens: [lesson.summary, ...lesson.changes.map((c) => `${c.title}: ${c.why}`)].join(" ").slice(0, 700),
+            pitfall: (lesson.changes[0] ? `${lesson.changes[0].title}: ${lesson.changes[0].why}` : "A major version can change behaviour without any error, until a user finds it.").slice(0, 500),
+            questions: [{ ...lesson.question, level: "Junior" }],
+          };
+          if (await keepIdea(def, "upgrade")) {
+            item.conceptId = id;
+          }
+        }
+        this.save();
+      },
+    );
+  }
+
+  async upgradeAdopt(key: string): Promise<void> {
+    const item = this.item(key);
+    if (item?.kind !== "upgrade" || !item.conceptId || item.adopted) return;
+    await engine.adoptIdeas([item.conceptId], `the ${item.name} upgrade`);
+    item.adopted = true;
+    await updateGrowth((g) => addStory(g, { kind: "tool", title: `Upgraded ${item.name} to ${item.to.replace(/^[\^~>=<\s]+/, "")}, knowing what changed`, detail: item.lesson?.summary ?? "" }));
+    this.save();
+    this.host.push();
+  }
+
+  /* ---- mock interview ---------------------------------------------- */
+
+  private interviewView(): unknown {
+    const iv = this.interview;
+    if (!iv) return null;
+    return {
+      questions: iv.questions.map((q) => ({ kind: q.kind, prompt: q.prompt, about: q.about })),
+      at: iv.at,
+      shownAt: iv.shownAt,
+      seconds: INTERVIEW_SECONDS,
+      answers: iv.answers,
+      done: iv.done,
+    };
+  }
+
+  async interviewStart(): Promise<void> {
+    const [g, states] = await Promise.all([loadGrowth(), engine.ideaStates()]);
+    const questions = planInterview({ ideas: states, tools: [...this.tools.values()].filter((t) => t.adopted), story: g.story });
+    if (questions.length < 2) {
+      this.host.post({ type: "growNote", text: "A mock interview needs a few ideas you hold first. Answer some reviews, then come back." });
+      return;
+    }
+    this.interview = { questions, at: 0, shownAt: Date.now(), answers: [], done: false };
+    await this.prepareQuestion();
+    this.postGrow();
+  }
+
+  /** A story question is written from the learner's own entry, by their AI if there is one. */
+  private async prepareQuestion(): Promise<void> {
+    const iv = this.interview;
+    const q = iv?.questions[iv.at];
+    if (!iv || !q || q.kind !== "story" || q.prompt) return;
+    const fallback = `Tell me about a time you worked on something like this: "${q.about}". What did you do yourself, and what did you learn?`;
+    if (!(await this.host.aiReady())) {
+      q.prompt = fallback;
+      return;
+    }
+    const entry = (await loadGrowth()).story.find((e) => e.title === q.about);
+    await this.host.ask(
+      "grow|interviewQ",
+      async () => storyQuestionPrompt(entry ? [entry] : [{ kind: "story", title: q.about, detail: "" }]),
+      (reply) => {
+        q.prompt = parseStoryQuestion(reply, 1)?.question ?? fallback;
+        q.why = entry?.detail ?? "";
+      },
+    );
+    if (!q.prompt) q.prompt = fallback;
+  }
+
+  async interviewAnswer(text: string, skipped = false): Promise<void> {
+    const iv = this.interview;
+    const q = iv?.questions[iv.at];
+    if (!iv || !q || iv.done) return;
+    const written = skipped ? "" : text.trim().slice(0, 2_000);
+    const seconds = (Date.now() - iv.shownAt) / 1000;
+    const answer: Interview["answers"][number] = { text: written, seconds: Math.round(seconds), ...(skipped || !written ? { skipped: true } : {}) };
+    iv.answers[iv.at] = answer;
+    if (written && (await this.host.aiReady())) {
+      await this.host.ask(
+        "grow|interview",
+        async () =>
+          q.kind === "story"
+            ? storyFeedbackPrompt({ question: q.prompt, answer: written, entry: { title: q.about, detail: q.why } })
+            : interviewGradePrompt({ question: q.prompt, truth: q.truth, why: q.why, answer: written, seconds, depth: await this.host.depth() }),
+        (reply, by) => {
+          const r = parseAttemptFeedback(reply);
+          if (!r) return "The AI's judgement could not be read. Try again, or skip this one.";
+          Object.assign(answer, r, { by });
+        },
+      );
+    }
+    this.postGrow();
+  }
+
+  async interviewNext(): Promise<void> {
+    const iv = this.interview;
+    if (!iv || iv.done) return;
+    if (iv.at + 1 < iv.questions.length) {
+      iv.at++;
+      iv.shownAt = Date.now();
+      await this.prepareQuestion();
+      return this.postGrow();
+    }
+    iv.done = true;
+    const right = iv.answers.filter((a) => a.verdict === "right").length;
+    const partly = iv.answers.filter((a) => a.verdict === "partly").length;
+    await updateGrowth((g) => {
+      g.interviews.push({ at: new Date().toISOString(), asked: iv.questions.length, right, partly });
+      count(g, { kind: "first" });
+      if (right >= Math.ceil(iv.questions.length * 0.75)) {
+        addStory(g, { kind: "check", title: `Mock interview: ${right} of ${iv.questions.length} answers an interviewer would take`, detail: iv.questions.map((x) => x.about).join(", ") });
+      }
+    });
+    // Ideas that did not land in an interview are worth recalling soon.
+    for (const [i, a] of iv.answers.entries()) {
+      const id = iv.questions[i]?.conceptId;
+      if (id && a && a.verdict && a.verdict !== "right") await engine.bringForward(id);
+    }
+    this.postGrow();
+  }
+
+  interviewClose(): void {
+    this.interview = null;
+    this.postGrow();
   }
 
   /** Called for every graded answer, so the coach can follow the ones it asked. */
@@ -989,6 +1493,7 @@ export class Coach {
   /** Every change the watcher reads, before or without a lesson. */
   async changes(root: string, changes: readonly FileChange[], lessonId: string | null): Promise<void> {
     if (this.host.quiet()) return;
+    if (setting("coach.upgrades", true)) await this.checkUpgrades(root, changes).catch(() => undefined);
     if (setting("coach.tools", true)) {
       const commands = this.recentCommands.filter((c) => Date.now() - c.at < 15 * 60_000).map((c) => c.command);
       for (const hit of detectTools(changes, commands)) {
@@ -1055,8 +1560,7 @@ export class Coach {
             pitfall: (lesson.prevention || lesson.cause).slice(0, 500),
             questions: [{ ...lesson.question, level: "Junior" }],
           };
-          if (registerConcepts([def], "incident").added.includes(id)) {
-            assignTopic(id, "Tooling");
+          if (await keepIdea(def, "incident")) {
             await engine.adoptIdeas([id], "an incident you learned from");
             conceptId = id;
           }
@@ -1235,6 +1739,16 @@ export class Coach {
   }
 
   /** Tools in the feed, and the tool's own page data, by key. */
+  /** What a tool's lesson is built from, and the files that mention it. */
+  async toolSubject(key: string): Promise<{ root: string; name: string; job: string; spec: ToolSpec | null; file: string; evidence: string; files: ChangedFile[] } | null> {
+    const item = this.item(key);
+    if (item?.kind !== "tool") return null;
+    const catalogued = toolById(item.toolId);
+    const needles = catalogued ? [...catalogued.packages.slice(0, 2), catalogued.name] : [item.name];
+    const files = item.root ? await this.mentions(item.root, needles).catch(() => []) : [];
+    return { root: item.root, name: item.name, job: item.job, spec: item.spec, file: item.file, evidence: item.evidence, files };
+  }
+
   toolKeys(): string[] {
     return [...this.tools.values()].map((t) => `tool:${t.toolId}`);
   }

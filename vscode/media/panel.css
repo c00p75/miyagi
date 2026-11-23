@@ -1197,17 +1197,14 @@ button.chip:hover:not(:disabled) {
 .rows {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* A divided list: items separated by a thin line, with no box or fill of their own. */
 .row {
-  border-radius: var(--radius);
-  background: var(--tile);
-  overflow: hidden;
-  border: 1px solid var(--vscode-contrastBorder, transparent);
+  border-bottom: 1px solid var(--border);
 }
 
 .row-head {
@@ -1215,7 +1212,7 @@ button.chip:hover:not(:disabled) {
   align-items: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 2px;
   border: 0;
   border-radius: 0;
   background: none;
@@ -1224,12 +1221,12 @@ button.chip:hover:not(:disabled) {
 }
 
 .row-head:hover:not(:disabled) {
-  background: var(--tile-hover);
+  background: var(--vscode-list-hoverBackground, var(--tile-hover));
 }
 
+/* The open item keeps a faint tint, so its preview reads as belonging to it. */
 .row.open {
-  background: var(--tile-open);
-  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, transparent));
+  background: var(--tile);
 }
 
 .row.open .row-head,
@@ -1281,7 +1278,7 @@ button.chip:hover:not(:disabled) {
 }
 
 .preview {
-  padding: 0 10px 10px 34px;
+  padding: 0 6px 12px 30px;
 }
 
 .preview .hook {
@@ -1739,3 +1736,615 @@ ul.files {
   margin: 0 0 8px;
   padding-left: 18px;
 }
+
+/* ---- today, reading, upgrades, guardrails, interview ------------ */
+
+.today {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface);
+}
+
+.today h3 {
+  margin-bottom: 6px;
+}
+
+.today .steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.today .steps li {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.today .steps li:first-child {
+  border-top: 0;
+}
+
+.today .steps li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.today .steps .actions {
+  margin-top: 4px;
+}
+
+.today .tick {
+  flex: none;
+  width: 1em;
+  color: var(--muted);
+}
+
+.today li.done .tick {
+  color: var(--ok);
+}
+
+.today li.done > div {
+  color: var(--muted);
+}
+
+.today .tail {
+  margin: 4px 0 0;
+}
+
+pre.signature {
+  margin-top: 6px;
+}
+
+pre.excerpt {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.findings ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finding {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.finding pre {
+  margin: 4px 0;
+}
+
+.finding.kept {
+  opacity: 0.7;
+}
+
+.ask-first {
+  font-style: italic;
+}
+
+.tag.cost {
+  border-color: var(--vscode-charts-yellow, #cca700);
+  color: var(--vscode-charts-yellow, #cca700);
+}
+
+.practice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.practice-row:first-of-type {
+  border-top: 0;
+}
+
+.practice-row > div {
+  flex: 1;
+}
+
+.practice-row p {
+  margin: 2px 0 0;
+}
+
+.interview-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.interview-q {
+  margin: 6px 0 8px;
+  font-size: 1.05em;
+  line-height: 1.4;
+}
+
+pre.signature code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.interview h4.interview-q {
+  margin: 8px 0 10px;
+  font-size: 1.08em;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--vscode-foreground);
+}
+
+.interview .tail {
+  margin-top: 12px;
+}
+
+/* A card's lesson fitted to the learner's code: who wrote it, and the way back. */
+.tailor-note {
+  margin: 4px 0 0;
+  font-size: 0.88em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* The daily greeting: a quote and what is waiting, nothing to do. */
+.today.greeting .greet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.today.greeting .greet-head h3 {
+  margin: 0;
+}
+
+.today .quote {
+  margin: 8px 0;
+}
+
+.today .quote blockquote {
+  margin: 0;
+  font-size: 1.05em;
+  line-height: 1.45;
+  font-style: italic;
+}
+
+.today .quote figcaption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.today .quote figcaption::before {
+  content: "— ";
+}
+
+.today .greet-links {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.today .greet-links li {
+  padding: 2px 0;
+}
+
+/* "Check what you just saw", at the end of the feed. */
+.card-quiz {
+  margin-bottom: 12px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card-quiz h3 {
+  margin: 0 0 4px;
+}
+
+.card-quiz .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+/* ---- tool page sections: designs under comparison ---- */
+
+h4.ts-lbl {
+  margin: 3px 0 0;
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ts-analogy {
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ts-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ts-timeline li {
+  position: relative;
+  padding: 0 0 10px 20px;
+}
+
+.ts-timeline li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ts-timeline li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: calc(0.55em + 10px);
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.ts-risks {
+  display: grid;
+  gap: 8px;
+}
+
+.ts-risk {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--vscode-charts-yellow, #cca700);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface);
+}
+
+.ts-risk.hi {
+  border-left-color: var(--miss);
+}
+
+.ts-risk p {
+  color: var(--muted);
+}
+
+.ts-risk-t {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ts-sev {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vscode-charts-yellow, #cca700);
+}
+
+.ts-sev.hi {
+  color: var(--miss);
+}
+
+.ts-proof {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ok) 7%, transparent);
+}
+
+.ts-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--vscode-editor-background, var(--surface));
+}
+
+.ts-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0;
+  background: none;
+  white-space: nowrap;
+}
+
+.ts-checks {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ts-checks li {
+  display: flex;
+  gap: 8px;
+}
+
+.ts-checks li::before {
+  content: "☐";
+  color: var(--ok);
+}
+
+/* ---- the bottom of a tool page ---- */
+
+.tf {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.tf svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* icons */
+.tf-list {
+  display: grid;
+  padding-top: 4px;
+}
+
+button.tf-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--vscode-foreground);
+  text-align: left;
+}
+
+button.tf-row:last-child {
+  border-bottom: 0;
+}
+
+button.tf-row:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+button.tf-row > span:nth-child(2) {
+  display: grid;
+}
+
+.tf-row-h {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+button.tf-row.quiet .tf-row-l {
+  color: var(--muted);
+}
+
+/* segmented */
+.tg { display: grid; gap: 10px; margin-top: 12px; }
+.tg p { margin: 0; }
+.tg-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+@media (max-width: 300px) { .tg-pair { grid-template-columns: 1fr; } }
+.tg-col { display: grid; gap: 4px; align-content: start; padding: 9px 10px; border-radius: var(--radius); border: 1px solid var(--border); }
+.tg-col.without { color: var(--muted); border-style: dashed; }
+.tg-col.with { background: color-mix(in srgb, var(--ok) 8%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.tg-h { font-size: 0.78em; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.tg-col.with .tg-h { color: var(--ok); }
+.tg h4.ts-lbl { margin-top: 6px; }
+
+/* H: reading page */
+
+
+
+
+
+.tool-why {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tool-why > div {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.tool-why p {
+  margin: 2px 0 0;
+  font-size: 0.92em;
+}
+
+/* ---- the lesson: eight sections, one depth switch ---------------- */
+
+.ls { display: grid; gap: 8px; margin-top: 10px; }
+.ls p { margin: 0; }
+.ls-seg { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.ls-seg button { padding: 5px 0; border: 0; border-radius: 0; background: none; color: var(--muted); }
+.ls-seg button + button { border-left: 1px solid var(--border); }
+.ls-seg button.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); font-weight: 600; }
+.ls-note { font-size: 0.88em; }
+.ls-small { font-size: 0.88em; }
+.ls-sec > summary { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 2px; border-top: 1px solid var(--border); cursor: pointer; list-style: none; }
+.ls-sec > summary::-webkit-details-marker { display: none; }
+.ls-n { display: grid; place-items: center; width: 24px; height: 24px; border: 2px solid var(--border); border-radius: 50%; font-size: 0.8em; font-weight: 700; color: var(--muted); }
+.ls-sec[open] .ls-n { border-color: var(--accent); color: var(--accent); }
+.ls-sec.done .ls-n { border-color: var(--ok); background: var(--ok); color: var(--vscode-sideBar-background, #181818); }
+.ls-t { display: grid; }
+.ls-t > span:first-child { font-weight: 600; }
+.ls-t > span:last-child { font-size: 0.85em; color: var(--muted); }
+.ls-sec .chev { color: var(--muted); transition: transform 0.15s; }
+.ls-sec[open] > summary .chev { transform: rotate(90deg); }
+.ls-body { display: grid; gap: 9px; padding: 2px 2px 14px 34px; }
+.ls-body pre { margin: 0; white-space: pre-wrap; }
+.ls-kicker { font-size: 0.75em; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.ls-ask { display: grid; gap: 7px; padding: 10px 11px; border: 1px solid var(--accent); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.ls-ask input { width: 100%; }
+.ls-q { font-weight: 600; }
+.ls-picks { display: grid; gap: 5px; }
+.ls-picks button { text-align: left; }
+.ls-picks button.right { border-color: var(--ok); color: var(--ok); }
+.ls-picks button.wrong { border-color: var(--miss); color: var(--miss); }
+.ls-verdict { font-weight: 600; }
+.ls-one { padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface); }
+.ls-bridge { font-style: italic; }
+.ls-bridge .link { font-style: normal; white-space: nowrap; }
+.ls-cmp { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.ls-col { display: grid; gap: 2px; align-content: start; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.92em; }
+.ls-col b { margin-bottom: 2px; font-size: 0.8em; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.ls-col em { margin-top: 4px; font-style: normal; font-weight: 600; }
+.ls-col.ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.ls-col.ok em, .ls-col.ok .diff { color: var(--ok); }
+.ls-col.bad { border-style: dashed; border-color: color-mix(in srgb, var(--miss) 55%, transparent); }
+.ls-col.bad em, .ls-col.bad .diff { color: var(--miss); }
+.ls-col .diff { font-weight: 600; }
+.ls-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.ls-flow span { display: grid; padding: 5px 8px; border: 1px solid var(--accent); border-radius: var(--radius); font-size: 0.9em; font-weight: 600; }
+.ls-flow i, .ls-parts i { font-size: 0.85em; font-style: normal; font-weight: 400; color: var(--muted); }
+.ls-flow b { font-weight: 400; color: var(--muted); }
+.ls-parts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.ls-parts span { display: grid; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 0.92em; font-weight: 600; }
+.ls-terms { display: grid; gap: 6px; }
+.ls-terms div { display: grid; gap: 1px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.ls-terms span { font-size: 0.92em; color: var(--muted); }
+.ls-code { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.ls-code details { border-top: 1px solid var(--border); }
+.ls-code details:first-child { border-top: 0; }
+.ls-code summary { padding: 5px 9px; background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15)); cursor: pointer; list-style: none; }
+.ls-code summary::-webkit-details-marker { display: none; }
+.ls-code summary code { padding: 0; background: none; white-space: pre-wrap; }
+.ls-code details[open] summary { box-shadow: inset 3px 0 0 var(--accent); }
+.ls-code p { padding: 6px 10px 8px; font-size: 0.93em; }
+.ls-code p::before { content: "↳ "; color: var(--accent); }
+.ls-signal { display: grid; gap: 5px; padding: 9px 10px; border-radius: var(--radius); background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15)); font-size: 0.93em; }
+.ls-signal code { padding: 0; background: none; white-space: pre-wrap; }
+.ls-signal mark { padding: 0 3px; border-radius: 3px; background: color-mix(in srgb, var(--miss) 30%, transparent); color: inherit; font-family: var(--vscode-editor-font-family, monospace); }
+.ls-signal mark.m1 { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.ls-signal mark.m2 { background: color-mix(in srgb, var(--ok) 30%, transparent); }
+.ls-task { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--ok) 6%, transparent); }
+.ls-task summary { color: var(--accent); cursor: pointer; }
+.ls-task button { justify-self: start; }
+.ls-list { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
+.ls-remember { padding: 9px 11px; border-left: 2px solid var(--ok); background: var(--surface); }
+.ls-remember ul { display: grid; gap: 3px; margin: 4px 0 0; padding-left: 18px; }
+.ls-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ls-chips button.chip { margin: 0; padding: 2px 10px; border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
+button.ls-res { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--vscode-foreground); text-align: left; }
+button.ls-res:hover:not(:disabled) { border-color: var(--accent); }
+button.ls-res > span:nth-child(2) { display: grid; }
+button.ls-res > span:nth-child(2) > span:first-child { font-weight: 600; }
+button.ls-res > span:nth-child(2) > span:last-child { font-size: 0.85em; color: var(--muted); }
+button.term-open { font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .ls-sec .chev { transition: none; } }
+
+/* ---- keep learning: links at the end of a lesson, by type ---- */
+
+.ls-end { display: grid; gap: 7px; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+.ls-end h3 { margin: 0; font-size: 1.08em; }
+.ls-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.ls-tabs button { padding: 5px 9px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); white-space: nowrap; }
+.ls-tabs button.on { border-bottom-color: var(--accent); color: var(--vscode-foreground); }
+.ls-tabs button:hover:not(:disabled) { background: none; color: var(--vscode-foreground); }
+.ls-tabs i { font-size: 0.8em; font-style: normal; opacity: 0.7; }
+.ls-reslist { display: grid; gap: 7px; }
+
+.greet-icon {
+  margin-right: 6px;
+}
+
+/* ---- the hook in a row's preview ---- */
+
+.preview .hk-lead { margin: 0 0 6px; font-size: 1.1em; font-style: normal; font-weight: 600; line-height: 1.4; color: var(--vscode-foreground); }
+.preview .hk-stake { margin: 0 0 6px; padding: 9px 11px; border-left: 3px solid var(--miss); border-radius: 0 var(--radius) var(--radius) 0; background: color-mix(in srgb, var(--miss) 9%, transparent); font-size: 1.05em; font-style: normal; font-weight: 600; line-height: 1.4; color: var(--vscode-foreground); }
+.hk-stake > span { display: block; margin-bottom: 2px; font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase; color: var(--miss); }
+.preview .hk-tease { margin: 0 0 8px; font-style: normal; color: var(--muted); }
+.hk-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.hk-meta { font-size: 0.85em; color: var(--muted); }
+.hk-foot .link { margin-left: auto; }
+
+/* The greeting: a plain box, with the quote set apart behind its own thin bar. */
+.today.greeting {
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.today.greeting .quote {
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--accent);
+}
+
+/* ---- a hook being written, and arriving ---- */
+
+.hk-load { display: grid; gap: 8px; margin-bottom: 8px; }
+.preview .hk-wait { margin: 0; font-size: 1.05em; font-style: normal; font-weight: 600; line-height: 1.4; color: var(--vscode-foreground); }
+.hk-wait > span { display: block; margin-bottom: 2px; font-size: 0.7em; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.hk-in { animation: hk-arrive 0.45s ease-out; }
+@keyframes hk-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.preview .hk-note { margin: 0 0 8px; font-size: 0.88em; font-style: normal; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+  .hk-in { opacity: 1; animation: none; }
+}
+
+.preview .hk-writing { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.88em; font-style: normal; color: var(--muted); }
+.hk-load .hk-wait { font-weight: 500; }
+
+/* A shimmer where the hook will land, and across the line that says it is being written. */
+.hk-skel { display: grid; gap: 6px; }
+.hk-skel i { display: block; height: 10px; border-radius: 4px; background: linear-gradient(90deg, var(--border) 25%, color-mix(in srgb, var(--vscode-foreground) 22%, var(--border)) 50%, var(--border) 75%); background-size: 200% 100%; animation: hk-shimmer 1.4s linear infinite; }
+.hk-skel i:last-child { width: 62%; }
+.hk-shine { background: linear-gradient(90deg, var(--muted) 30%, var(--vscode-foreground) 50%, var(--muted) 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: hk-shimmer 1.8s linear infinite; }
+@keyframes hk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .hk-skel i { animation: none; }
+  .hk-shine { animation: none; background: none; color: var(--muted); }
+}
+
+.preview .hk-ready { color: var(--ok); font-weight: 600; }

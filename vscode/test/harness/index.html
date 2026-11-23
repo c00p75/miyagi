@@ -8,6 +8,10 @@
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style id="theme"></style>
 <link rel="stylesheet" href="panel.css"></head><body><div id="app"></div>
+<script>
+// A render error would otherwise leave a blank "Loading…" with no clue why.
+window.addEventListener("error", (e) => { const d = document.createElement("pre"); d.id = "harness-error"; d.style.cssText = "color:#f14c4c;white-space:pre-wrap;padding:8px"; d.textContent = `${e.message}\n${e.filename}:${e.lineno}`; document.body.appendChild(d); });
+</script>
 <script src="mock.js"></script>
 <script>
 document.getElementById("theme").textContent = `:root{--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-sideBar-background:#181818;--vscode-editorWidget-background:#202020;--vscode-widget-border:#313131;--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#026ec1;--vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#ccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-textLink-foreground:#4daafc;--vscode-textCodeBlock-background:#2b2b2b;--vscode-badge-background:#616161;--vscode-badge-foreground:#f8f8f8;--vscode-focusBorder:#0078d4;--vscode-font-family:-apple-system,BlinkMacSystemFont,sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:Menlo,monospace;--vscode-dropdown-background:#313131;--vscode-dropdown-foreground:#ccc;--vscode-progressBar-background:#0078d4;--vscode-charts-green:#89d185;--vscode-charts-red:#f14c4c;--vscode-charts-yellow:#cca700;--vscode-textBlockQuote-background:#222222;--vscode-input-background:#313131;--vscode-input-foreground:#ccc;--vscode-input-border:#3c3c3c} body{background:#181818;max-width:400px}`;
@@ -35,16 +39,20 @@ if (scene === "noai") {
 }
 if (scene === "debugdone") S.coach.items.push(M.debugDone);
 if (scene === "ownwords") { S.status.dueQuestions = 3; }
-const pages = { tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", gate: "gate:1" };
-const start = { tab: scene === "dojo" ? "dojo" : scene === "grow" ? "grow" : scene === "ownwords" ? "review" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null, cardKey: pages[scene] || null, skill: scene === "grow" ? "testing" : null };
+const pages = { docker: "tool:docker", tool: "tool:sentry", debug: "debug:1", debugdone: "debug:2", gate: "gate:1", gatefind: "gate:2", read: "read:1", readdone: "read:2", upgrade: "upgrade:1" };
+if (scene === "interview") { M.grow.interview = M.grow.interviewActive; }
+const start = { tab: scene === "dojo" ? "dojo" : scene === "grow" || scene === "interview" ? "grow" : scene === "ownwords" ? "review" : "now", open: {}, more: {}, practice: scene === "recall" ? { [key]: true } : {}, lesson: {}, idea: null, cardKey: pages[scene] || (new URLSearchParams(location.search).get("card") === "first" ? key : null), expanded: new URLSearchParams(location.search).get("open"), skill: scene === "grow" ? "testing" : null };
 const reply = (m) => setTimeout(() => window.postMessage(m, "*"), 20);
 window.acquireVsCodeApi = () => ({
   getState: () => start, setState: () => {},
   postMessage: (m) => {
-    if (m.type === "ready") reply(S);
+    if (m.type === "ready") { reply(M.facts); reply(S); }
     if (m.type === "dojo") reply({ type: "dojo", rows: M.dojo, belts: M.belts, insight: M.insight });
     if (m.type === "quiz") reply({ type: "quiz", key: m.key, quiz: M.quiz });
     if (m.type === "grow") reply({ type: "grow", data: M.grow });
+    // A hook arrives after a moment, as it would from the learner's AI.
+    if (m.type === "hook") setTimeout(() => { S.hooks[m.key] = { style: "stake", lead: "One crafted email address in your sign-up form, and a stranger can read every row in your users table.", tease: "One line in your sign-up code decides whether that works.", button: "See the line", general: false }; reply(S); reply({ type: "hookDone", key: m.key }); }, 1500);
+    if (m.type === "lesson") reply({ type: "lesson", key: m.key, depth: m.depth, lesson: (m.depth === "Junior" && M.lessonSample.Junior) || Object.assign({}, M.lessonSample.builtIn, { depth: m.depth }) });
     if (m.type === "review") reply({ type: "review", quiz: Object.assign({}, M.quiz, { review: true, explainBack: scene === "ownwords" }) });
     if (m.type === "answer") reply({ type: "answered", token: m.token, answer: { token: m.token, correct: true, chosenIndex: m.index, answerIndex: m.index, explanation: "The database cannot tell your words from the user's, so a value pasted into the query text can change what the query does.", xpAwarded: 25, nextDueAt: new Date(Date.now() + 864e5).toISOString(), belt: "Yellow", leveledUp: false, title: "", newBadges: [], quizStreak: 1, confidentMiss: false, repaysMiss: false, needsTransfer: false, transferPassed: false } });
   },

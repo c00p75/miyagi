@@ -210,6 +210,10 @@ const POSITIVES: Case[] = [
   { name: "upload: file input", file: "AvatarForm.tsx", code: `<input type="file" accept="image/png" onChange={onPick} />`, expect: ["file-upload"] },
   { name: "upload: File from form data", file: "actions.ts", code: `const file = formData.get("file") as File;`, expect: ["file-upload"] },
   { name: "upload: flask request.files", file: "views.py", code: `f = request.files["document"]`, expect: ["file-upload"] },
+  { name: "upload: multer missing-file check", file: "avatar.js", code: "if (!req.file) throw new Error('no file');", expect: ["file-upload", "error-handling"] },
+  { name: "upload: express-fileupload named file", file: "avatar.js", code: "const avatar = req.files.avatar;", expect: ["file-upload"] },
+  { name: "not an upload: a request object with a files field", file: "prompt.ts", code: 'const block = req.files.length ? changeBlock(req.files) : "";', expect: [] },
+  { name: "not an upload: a request object with a file field", file: "prompt.ts", code: "const line = `File: ${req.file}`;", expect: [] },
   { name: "upload: s3 put for a presigned url", file: "presign.ts", code: "const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: type });", expect: ["file-upload"] },
   { name: "upload: multipart html form", file: "upload.html", code: `<form method="post" enctype="multipart/form-data">`, expect: ["file-upload"] },
 
