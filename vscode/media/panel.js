@@ -1704,7 +1704,6 @@
     const icon = hour < 5 || hour >= 18 ? "🌙" : hour < 12 ? "☀️" : "🌤️";
     const [quote, author, source] = quoteOfTheDay();
     const extras = [
-      t.next ? `<li>Focus: <button class="link" data-action="openSkill" data-id="${esc(t.next.id)}">${esc(t.next.title)}</button></li>` : "",
       t.canRead && !t.readToday ? `<li><button class="link" data-action="readStart">Read one function you did not write</button> <span class="muted">· 3 min</span></li>` : "",
     ].filter(Boolean);
     return `<section class="today greeting" aria-label="Today">

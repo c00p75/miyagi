@@ -462,7 +462,7 @@
         "miyagi.coach.dailyStart": {
           "type": "boolean",
           "default": true,
-          "description": "Once a day, open the Now tab with a short greeting: a quote, what is waiting, and the one skill to focus on. Questions on the ideas in your recent cards wait at the end of the feed. The × hides the greeting until tomorrow."
+          "description": "Once a day, open the Now tab with a short greeting: a quote and what is waiting. Questions on the ideas in your recent cards wait at the end of the feed. The × hides the greeting until tomorrow."
         },
         "miyagi.coach.guardrails": {
           "type": "boolean",
