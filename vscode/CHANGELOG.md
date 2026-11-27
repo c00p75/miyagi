@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+
+### Changed
+
+- The daily greeting no longer shows a "Focus:" skill line. The skill to grow next is still in the Grow tab.
+
 ## 0.9.4
 
 ### Changed
