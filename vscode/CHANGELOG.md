@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4
+
+### Changed
+
+- **206 quotes in the daily greeting**, all on computing, software engineering and building products: Brooks, Dijkstra, Knuth, Perlis's epigrams, Pike, the Zen of Python, The Pragmatic Programmer, Clean Code, Refactoring, Paul Graham, Zero to One, The Lean Startup and more. Each names its book or essay where it has one, and Knuth's line on optimisation is quoted in full.
+- While a card is being written, the "Writing this card for your project…" line comes first and the "Did you know" fact sits below it.
+
 ## 0.9.3
 
 ### Changed
