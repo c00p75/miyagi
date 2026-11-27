@@ -1380,13 +1380,13 @@
     // Text that silently changes reads as a glitch, so the row says what is happening.
     if (waiting || holding) {
       return `<div class="hk-load" role="status" aria-label="${holding ? "Your card is ready" : "Your AI is writing this card for your project"}">
-          ${fact ? `<p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>` : ""}
           ${
             holding
               ? `<p class="hk-writing hk-ready">Your card is ready.</p>`
-              : `<div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
-                 <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>`
+              : `<p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>
+                 <div class="hk-skel" aria-hidden="true"><i></i><i></i></div>`
           }
+          ${fact ? `<p class="hk-wait"><span>Did you know, while you wait</span>${inline(fact)}</p>` : ""}
         </div>
         <div class="hk-foot">${holding ? `<button class="primary" data-action="hookShow" data-key="${esc(key)}">Show it ›</button>` : ""}<button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
     }

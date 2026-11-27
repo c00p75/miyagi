@@ -2334,7 +2334,7 @@ button.term-open { font-weight: 600; }
 }
 
 .preview .hk-writing { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.88em; font-style: normal; color: var(--muted); }
-.hk-load .hk-wait { font-weight: 500; }
+.hk-load .hk-wait { font-weight: 500; font-size: 0.95em; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border); }
 
 /* A shimmer where the hook will land, and across the line that says it is being written. */
 .hk-skel { display: grid; gap: 6px; }
