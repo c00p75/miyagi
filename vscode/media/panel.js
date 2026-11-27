@@ -1380,13 +1380,13 @@
     // Text that silently changes reads as a glitch, so the row says what is happening.
     if (waiting || holding) {
       return `<div class="hk-load" role="status" aria-label="${holding ? "Your card is ready" : "Your AI is writing this card for your project"}">
-          ${fact ? `<p class="hk-wait"><span>Did you know</span>${inline(fact)}</p>` : ""}
           ${
             holding
               ? `<p class="hk-writing hk-ready">Your card is ready.</p>`
-              : `<div class="hk-skel" aria-hidden="true"><i></i><i></i></div>
-                 <p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>`
+              : `<p class="hk-writing"><span class="hk-shine">Writing this card for your project…</span></p>
+                 <div class="hk-skel" aria-hidden="true"><i></i><i></i></div>`
           }
+          ${fact ? `<p class="hk-wait"><span>Did you know, while you wait</span>${inline(fact)}</p>` : ""}
         </div>
         <div class="hk-foot">${holding ? `<button class="primary" data-action="hookShow" data-key="${esc(key)}">Show it ›</button>` : ""}<button data-action="openCard" data-key="${esc(key)}">Open now ›</button>${extra}</div>`;
     }
@@ -1468,38 +1468,226 @@
 
   /* ---- today ---- */
 
-  // Said about the craft by people who practised it. Checked attributions only:
+  // Said about the craft by people who practised it: computer science, software
+  // engineering, programming, and building tech products, mostly from books. Checked wording and attribution only:
   // a misattributed quote in a learning tool teaches the wrong thing twice.
+  // [quote, who said it, where it comes from (when it is one book or essay)]
   const QUOTES = [
-    ["Programs must be written for people to read, and only incidentally for machines to execute.", "Harold Abelson"],
-    ["Simplicity is prerequisite for reliability.", "Edsger W. Dijkstra"],
-    ["Debugging is twice as hard as writing the code in the first place.", "Brian Kernighan"],
+    ["Programs must be written for people to read, and only incidentally for machines to execute.", "Harold Abelson and Gerald Jay Sussman", "Structure and Interpretation of Computer Programs"],
+    ["Everyone knows that debugging is twice as hard as writing a program in the first place. So if you're as clever as you can be when you write it, how will you ever debug it?", "Brian Kernighan and P. J. Plauger", "The Elements of Programming Style"],
+    ["The only way to learn a new programming language is by writing programs in it.", "Brian Kernighan and Dennis Ritchie", "The C Programming Language"],
+    ["Controlling complexity is the essence of computer programming.", "Brian Kernighan", "Software Tools"],
+    ["Adding manpower to a late software project makes it later.", "Fred Brooks", "The Mythical Man-Month"],
+    ["Plan to throw one away; you will, anyhow.", "Fred Brooks", "The Mythical Man-Month"],
+    ["Show me your tables, and I won't usually need your flowcharts; they'll be obvious.", "Fred Brooks", "The Mythical Man-Month"],
+    ["Any fool can write code that a computer can understand. Good programmers write code that humans can understand.", "Martin Fowler", "Refactoring"],
+    ["When you feel the need to write a comment, first try to refactor the code so that any comment becomes superfluous.", "Martin Fowler and Kent Beck", "Refactoring"],
+    ["Clean code always looks like it was written by someone who cares.", "Michael Feathers", "quoted in Clean Code"],
+    ["The ratio of time spent reading versus writing is well over 10 to 1.", "Robert C. Martin", "Clean Code"],
+    ["Functions should do one thing. They should do it well. They should do it only.", "Robert C. Martin", "Clean Code"],
+    ["Leave the campground cleaner than you found it.", "Robert C. Martin", "Clean Code"],
+    ["It is not enough for code to work. Code that works is often badly broken.", "Robert C. Martin", "Clean Code"],
+    ["Don't live with broken windows.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Fix the problem, not the blame.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Don't program by coincidence.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["\"select\" isn't broken.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Every piece of knowledge must have a single, unambiguous, authoritative representation within a system.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Complexity is anything related to the structure of a software system that makes it hard to understand and modify the system.", "John Ousterhout", "A Philosophy of Software Design"],
+    ["Working code isn't enough.", "John Ousterhout", "A Philosophy of Software Design"],
+    ["To me, legacy code is simply code without tests.", "Michael Feathers", "Working Effectively with Legacy Code"],
+    ["Optimism is an occupational hazard of programming; feedback is the treatment.", "Kent Beck", "Extreme Programming Explained"],
+    ["Make the change easy (warning: this may be hard), then make the easy change.", "Kent Beck"],
     ["Make it work, make it right, make it fast.", "Kent Beck"],
-    ["Any fool can write code that a computer can understand. Good programmers write code that humans can understand.", "Martin Fowler"],
+    ["We should forget about small efficiencies, say about 97% of the time: premature optimization is the root of all evil.", "Donald Knuth", "Structured Programming with go to Statements"],
+    ["Beware of bugs in the above code; I have only proved it correct, not tried it.", "Donald Knuth"],
+    ["Program testing can be used to show the presence of bugs, but never to show their absence!", "Edsger W. Dijkstra", "Notes on Structured Programming"],
+    ["Simplicity is prerequisite for reliability.", "Edsger W. Dijkstra"],
+    ["There are two ways of constructing a software design: one way is to make it so simple that there are obviously no deficiencies, and the other way is to make it so complicated that there are no obvious deficiencies.", "C. A. R. Hoare", "The Emperor's Old Clothes"],
+    ["Inside every large program, there is a small program trying to get out.", "C. A. R. Hoare"],
+    ["Measure. Don't tune for speed until you've measured, and even then don't unless one part of the code overwhelms the rest.", "Rob Pike", "Notes on Programming in C"],
+    ["Data dominates. If you've chosen the right data structures and organized things well, the algorithms will almost always be self-evident.", "Rob Pike", "Notes on Programming in C"],
+    ["Clear is better than clever.", "Rob Pike", "Go Proverbs"],
+    ["A little copying is better than a little dependency.", "Rob Pike", "Go Proverbs"],
+    ["Bad programmers worry about the code. Good programmers worry about data structures and their relationships.", "Linus Torvalds"],
     ["Talk is cheap. Show me the code.", "Linus Torvalds"],
-    ["We are what we repeatedly do. Excellence, then, is not an act but a habit.", "Will Durant"],
-    ["The beautiful thing about learning is that nobody can take it away from you.", "B.B. King"],
-    ["The only way to learn a new programming language is by writing programs in it.", "Brian Kernighan and Dennis Ritchie"],
-    ["Testing shows the presence, not the absence of bugs.", "Edsger W. Dijkstra"],
-    ["Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away.", "Antoine de Saint-Exupéry"],
-    ["Practice isn't the thing you do once you're good. It's the thing you do that makes you good.", "Malcolm Gladwell"],
-    ["In the beginner's mind there are many possibilities, but in the expert's there are few.", "Shunryu Suzuki"],
-    ["Fall seven times, stand up eight.", "Japanese proverb"],
-    ["A journey of a thousand miles begins with a single step.", "Lao Tzu"],
-    ["Premature optimization is the root of all evil.", "Donald Knuth"],
-    ["Adding manpower to a late software project makes it later.", "Fred Brooks"],
+    ["Given enough eyeballs, all bugs are shallow.", "Eric S. Raymond", "The Cathedral and the Bazaar"],
+    ["Every good work of software starts by scratching a developer's personal itch.", "Eric S. Raymond", "The Cathedral and the Bazaar"],
+    ["When you must fail, fail noisily and as soon as possible.", "Eric S. Raymond", "The Art of Unix Programming"],
+    ["When in doubt, use brute force.", "Ken Thompson"],
+    ["One of my most productive days was throwing away 1,000 lines of code.", "Ken Thompson"],
+    ["Errors should never pass silently.", "Tim Peters", "The Zen of Python"],
+    ["In the face of ambiguity, refuse the temptation to guess.", "Tim Peters", "The Zen of Python"],
+    ["Explicit is better than implicit.", "Tim Peters", "The Zen of Python"],
+    ["Easy things should be easy, and hard things should be possible.", "Larry Wall", "Programming Perl"],
+    ["Organizations which design systems are constrained to produce designs which are copies of the communication structures of these organizations.", "Melvin Conway", "How Do Committees Invent?"],
+    ["It always takes longer than you expect, even when you take into account Hofstadter's Law.", "Douglas Hofstadter", "Gödel, Escher, Bach"],
+    ["The first 90 percent of the code accounts for the first 90 percent of the development time. The remaining 10 percent of the code accounts for the other 90 percent.", "Tom Cargill", "quoted in Programming Pearls"],
+    ["The cheapest, fastest, and most reliable components are those that aren't there.", "Gordon Bell"],
+    ["The most dangerous phrase in the language is \"We've always done it this way.\"", "Grace Hopper"],
+    ["The best way to predict the future is to invent it.", "Alan Kay"],
     ["Before software can be reusable it first has to be usable.", "Ralph Johnson"],
-    ["Code never lies, comments sometimes do.", "Ron Jeffries"],
     ["The function of good software is to make the complex appear to be simple.", "Grady Booch"],
     ["Walking on water and developing software from a specification are easy if both are frozen.", "Edward V. Berard"],
-    ["It is not enough for code to work.", "Robert C. Martin"],
+    ["Make something people want.", "Paul Graham", "Y Combinator"],
+    ["Do things that don't scale.", "Paul Graham", "Do Things That Don't Scale"],
+    ["It's better to make a few users love you than a lot ambivalent.", "Paul Graham", "Do Things That Don't Scale"],
+    ["Live in the future, then build what's missing.", "Paul Graham", "How to Get Startup Ideas"],
+    ["If you are not embarrassed by the first version of your product, you've launched too late.", "Reid Hoffman"],
+    ["Every moment in business happens only once.", "Peter Thiel", "Zero to One"],
+    ["What important truth do very few people agree with you on?", "Peter Thiel", "Zero to One"],
+    ["The only way to win is to learn faster than anyone else.", "Eric Ries", "The Lean Startup"],
+    ["If we do not know who the customer is, we do not know what quality is.", "Eric Ries", "The Lean Startup"],
+    ["The hard thing about hard things is that there is no formula for dealing with them.", "Ben Horowitz", "The Hard Thing About Hard Things"],
+    ["Get out of the building.", "Steve Blank", "The Four Steps to the Epiphany"],
+    ["No business plan survives first contact with customers.", "Steve Blank"],
+    ["Your most unhappy customers are your greatest source of learning.", "Bill Gates", "Business @ the Speed of Thought"],
+    ["Ideas are easy. Execution is everything.", "John Doerr", "Measure What Matters"],
+    ["Real artists ship.", "Steve Jobs"],
+    ["Simple can be harder than complex: you have to work hard to get your thinking clean to make it simple.", "Steve Jobs"],
+    ["Software is eating the world.", "Marc Andreessen", "Why Software Is Eating the World"],
+    ["If you can't solve a problem, then there is an easier problem you can solve: find it.", "George Pólya", "How to Solve It"],
+    ["A problem well stated is a problem half solved.", "Charles Kettering"],
+    ["The question of whether a computer can think is no more interesting than the question of whether a submarine can swim.", "Edsger W. Dijkstra"],
+    ["The competent programmer is fully aware of the strictly limited size of his own skull.", "Edsger W. Dijkstra", "The Humble Programmer"],
+    ["The purpose of abstraction is not to be vague, but to create a new semantic level in which one can be absolutely precise.", "Edsger W. Dijkstra", "The Humble Programmer"],
+    ["Elegance is not a dispensable luxury but a quality that decides between success and failure.", "Edsger W. Dijkstra"],
+    ["An algorithm must be seen to be believed.", "Donald Knuth", "The Art of Computer Programming"],
+    ["Instead of imagining that our main task is to instruct a computer what to do, let us concentrate rather on explaining to human beings what we want a computer to do.", "Donald Knuth", "Literate Programming"],
+    ["Science is what we understand well enough to explain to a computer. Art is everything else we do.", "Donald Knuth"],
+    ["There are only two hard things in Computer Science: cache invalidation and naming things.", "Phil Karlton"],
+    ["All problems in computer science can be solved by another level of indirection.", "David Wheeler"],
+    ["Software gets slower faster than hardware gets faster.", "Niklaus Wirth", "A Plea for Lean Software"],
+    ["Algorithms + Data Structures = Programs.", "Niklaus Wirth", "Algorithms + Data Structures = Programs"],
+    ["Point of view is worth 80 IQ points.", "Alan Kay"],
+    ["People who are really serious about software should make their own hardware.", "Alan Kay"],
+    ["I invented the term object-oriented, and I can tell you I did not have C++ in mind.", "Alan Kay"],
+    ["Any sufficiently advanced technology is indistinguishable from magic.", "Arthur C. Clarke", "Profiles of the Future"],
+    ["UNIX was not designed to stop its users from doing stupid things, as that would also stop them from doing clever things.", "Doug Gwyn"],
+    ["Write programs that do one thing and do it well. Write programs to work together. Write programs to handle text streams, because that is a universal interface.", "Doug McIlroy", "quoted in A Quarter Century of Unix"],
+    ["Fancy algorithms are slow when n is small, and n is usually small.", "Rob Pike", "Notes on Programming in C"],
+    ["Simplicity is complicated.", "Rob Pike"],
+    ["Errors are values.", "Rob Pike", "Go Proverbs"],
+    ["Don't communicate by sharing memory, share memory by communicating.", "Rob Pike", "Go Proverbs"],
+    ["The bigger the interface, the weaker the abstraction.", "Rob Pike", "Go Proverbs"],
+    ["Make the zero value useful.", "Rob Pike", "Go Proverbs"],
+    ["Readability counts.", "Tim Peters", "The Zen of Python"],
+    ["Simple is better than complex.", "Tim Peters", "The Zen of Python"],
+    ["Flat is better than nested.", "Tim Peters", "The Zen of Python"],
+    ["If the implementation is hard to explain, it's a bad idea.", "Tim Peters", "The Zen of Python"],
+    ["Now is better than never.", "Tim Peters", "The Zen of Python"],
+    ["Code is read much more often than it is written.", "Guido van Rossum", "PEP 8"],
+    ["There's more than one way to do it.", "Larry Wall"],
+    ["The three chief virtues of a programmer are: Laziness, Impatience and Hubris.", "Larry Wall", "Programming Perl"],
+    ["It's harder to read code than to write it.", "Joel Spolsky", "Things You Should Never Do"],
+    ["The single worst strategic mistake that any software company can make: they decided to rewrite the code from scratch.", "Joel Spolsky", "Things You Should Never Do"],
+    ["All non-trivial abstractions, to some degree, are leaky.", "Joel Spolsky", "The Law of Leaky Abstractions"],
+    ["Theory and practice sometimes clash. And when that happens, theory loses. Every single time.", "Linus Torvalds"],
+    ["Release early. Release often. And listen to your customers.", "Eric S. Raymond", "The Cathedral and the Bazaar"],
+    ["Smart data structures and dumb code works a lot better than the other way around.", "Eric S. Raymond", "The Cathedral and the Bazaar"],
+    ["Good programmers know what to write. Great ones know what to rewrite (and reuse).", "Eric S. Raymond", "The Cathedral and the Bazaar"],
+    ["Clarity is better than cleverness.", "Eric S. Raymond", "The Art of Unix Programming"],
+    ["In interface design, always do the least surprising thing.", "Eric S. Raymond", "The Art of Unix Programming"],
+    ["When a program has nothing surprising to say, it should say nothing.", "Eric S. Raymond", "The Art of Unix Programming"],
+    ["Prototype before polishing. Get it working before you optimize it.", "Eric S. Raymond", "The Art of Unix Programming"],
+    ["Truth can only be found in one place: the code.", "Robert C. Martin", "Clean Code"],
+    ["The only way to go fast, is to go well.", "Robert C. Martin"],
+    ["The first rule of functions is that they should be small. The second rule of functions is that they should be smaller than that.", "Robert C. Martin", "Clean Code"],
+    ["A long descriptive name is better than a short enigmatic name.", "Robert C. Martin", "Clean Code"],
+    ["Always use version control.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Test your software, or your users will.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Don't assume it. Prove it.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Crash early.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Invest regularly in your knowledge portfolio.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Refactor early, refactor often.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Don't gather requirements. Dig for them.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Prototype to learn.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Program close to the problem domain.", "Andrew Hunt and David Thomas", "The Pragmatic Programmer"],
+    ["Before you start refactoring, make sure you have a solid suite of tests. These tests must be self-checking.", "Martin Fowler", "Refactoring"],
+    ["When you have to add a feature to a program but the code is not structured in a convenient way, first refactor the program to make it easy to add the feature, then add the feature.", "Martin Fowler", "Refactoring"],
+    ["Comments are often used as a deodorant.", "Martin Fowler and Kent Beck", "Refactoring"],
+    ["If it hurts, do it more often.", "Martin Fowler", "Frequency Reduces Difficulty"],
+    ["Duplication is far cheaper than the wrong abstraction.", "Sandi Metz", "The Wrong Abstraction"],
+    ["A language that doesn't affect the way you think about programming is not worth knowing.", "Alan Perlis", "Epigrams on Programming"],
+    ["Simplicity does not precede complexity, but follows it.", "Alan Perlis", "Epigrams on Programming"],
+    ["It is easier to write an incorrect program than understand a correct one.", "Alan Perlis", "Epigrams on Programming"],
+    ["Fools ignore complexity. Pragmatists suffer it. Some can avoid it. Geniuses remove it.", "Alan Perlis", "Epigrams on Programming"],
+    ["If you have a procedure with ten parameters, you probably missed some.", "Alan Perlis", "Epigrams on Programming"],
+    ["There are two ways to write error-free programs; only the third one works.", "Alan Perlis", "Epigrams on Programming"],
+    ["Every program has (at least) two purposes: the one for which it was written, and another for which it wasn't.", "Alan Perlis", "Epigrams on Programming"],
+    ["Optimization hinders evolution.", "Alan Perlis", "Epigrams on Programming"],
+    ["I think that it's extraordinarily important that we in computer science keep fun in computing.", "Alan Perlis", "dedication in Structure and Interpretation of Computer Programs"],
+    ["The hardest single part of building a software system is deciding precisely what to build.", "Fred Brooks", "No Silver Bullet"],
+    ["The bearing of a child takes nine months, no matter how many women are assigned.", "Fred Brooks", "The Mythical Man-Month"],
+    ["Conceptual integrity is the most important consideration in system design.", "Fred Brooks", "The Mythical Man-Month"],
+    ["How does a project get to be a year late? One day at a time.", "Fred Brooks", "The Mythical Man-Month"],
+    ["Within C++, there is a much smaller and cleaner language struggling to get out.", "Bjarne Stroustrup", "The Design and Evolution of C++"],
+    ["There are only two kinds of languages: the ones people complain about and the ones nobody uses.", "Bjarne Stroustrup"],
+    ["Ruby is designed to make programmers happy.", "Yukihiro Matsumoto"],
+    ["Write tests. Not too many. Mostly integration.", "Guillermo Rauch"],
+    ["Make illegal states unrepresentable.", "Yaron Minsky"],
+    ["Parse, don't validate.", "Alexis King", "Parse, Don't Validate"],
+    ["Choose boring technology.", "Dan McKinley", "Choose Boring Technology"],
+    ["You aren't gonna need it.", "Ron Jeffries"],
+    ["Do the simplest thing that could possibly work.", "Ward Cunningham"],
+    ["Shipping first time code is like going into debt. A little debt speeds development so long as it is paid back promptly with a rewrite.", "Ward Cunningham", "The WyCash Portfolio Management System"],
+    ["If you think good architecture is expensive, try bad architecture.", "Brian Foote and Joseph Yoder", "Big Ball of Mud"],
+    ["Architecture represents the significant design decisions that shape a system, where significant is measured by cost of change.", "Grady Booch"],
+    ["A distributed system is one in which the failure of a computer you didn't even know existed can render your own computer unusable.", "Leslie Lamport"],
+    ["If you're thinking without writing, you only think you're thinking.", "Leslie Lamport"],
+    ["Be conservative in what you do, be liberal in what you accept from others.", "Jon Postel", "RFC 793"],
+    ["We reject kings, presidents and voting. We believe in rough consensus and running code.", "David Clark"],
+    ["When a measure becomes a target, it ceases to be a good measure.", "Marilyn Strathern", "stating Goodhart's law"],
+    ["In software, the most beautiful code, the most beautiful functions, and the most beautiful programs are sometimes not there at all.", "Jon Bentley", "Beautiful Code"],
+    ["Hope is not a strategy.", "Google SRE", "Site Reliability Engineering"],
+    ["You build it, you run it.", "Werner Vogels"],
+    ["Everything fails all the time.", "Werner Vogels"],
+    ["Security is a process, not a product.", "Bruce Schneier"],
+    ["Amateurs hack systems, people hack people.", "Bruce Schneier"],
+    ["Anyone, from the most clueless amateur to the best cryptographer, can create an algorithm that he himself can't break.", "Bruce Schneier"],
+    ["Focus is a matter of deciding what things you're not going to do.", "John Carmack"],
+    ["The way to get startup ideas is not to try to think of startup ideas.", "Paul Graham", "How to Get Startup Ideas"],
+    ["Startup = growth.", "Paul Graham", "Startup = Growth"],
+    ["Be relentlessly resourceful.", "Paul Graham", "A Word to the Resourceful"],
+    ["It's hard to do a really good job on anything you don't think about in the shower.", "Paul Graham", "The Top Idea in Your Mind"],
+    ["Keep your identity small.", "Paul Graham", "Keep Your Identity Small"],
+    ["Writing doesn't just communicate ideas; it generates them.", "Paul Graham", "Writing, Briefly"],
+    ["Fall in love with the problem, not the solution.", "Uri Levine", "Fall in Love with the Problem, Not the Solution"],
+    ["Done is better than perfect.", "Facebook office poster"],
+    ["We are stubborn on vision. We are flexible on details.", "Jeff Bezos"],
+    ["It's always Day 1.", "Jeff Bezos", "letter to shareholders"],
+    ["Disagree and commit.", "Jeff Bezos", "2016 letter to shareholders"],
+    ["Most decisions should probably be made with somewhere around 70% of the information you wish you had.", "Jeff Bezos", "2016 letter to shareholders"],
+    ["If you double the number of experiments you do per year you're going to double your inventiveness.", "Jeff Bezos"],
+    ["Your margin is my opportunity.", "Jeff Bezos"],
+    ["Success breeds complacency. Complacency breeds failure. Only the paranoid survive.", "Andy Grove", "Only the Paranoid Survive"],
+    ["Design is not just what it looks like and feels like. Design is how it works.", "Steve Jobs"],
+    ["You've got to start with the customer experience and work back toward the technology.", "Steve Jobs"],
+    ["People don't know what they want until you show it to them.", "Steve Jobs"],
+    ["You can't connect the dots looking forward; you can only connect them looking backwards.", "Steve Jobs", "Stanford commencement address"],
+    ["The minimum viable product is that version of a new product which allows a team to collect the maximum amount of validated learning about customers with the least effort.", "Eric Ries", "The Lean Startup"],
+    ["It's not about ideas. It's about making ideas happen.", "Scott Belsky", "Making Ideas Happen"],
+    ["Build something 100 people love, not something 1 million people kind of like.", "Brian Chesky"],
+    ["There is nothing so useless as doing efficiently that which should not be done at all.", "Peter Drucker"],
+    ["Efficiency is doing things right; effectiveness is doing the right things.", "Peter Drucker", "The Effective Executive"],
+    ["All happy companies are different: each one earns a monopoly by solving a unique problem.", "Peter Thiel", "Zero to One"],
+    ["Brilliant thinking is rare, but courage is in even shorter supply than genius.", "Peter Thiel", "Zero to One"],
+    ["There are no silver bullets for this, only lead bullets.", "Ben Horowitz", "The Hard Thing About Hard Things"],
+    ["Take care of the people, the products, and the profits, in that order.", "Ben Horowitz", "The Hard Thing About Hard Things"],
+    ["A startup is a temporary organization designed to search for a repeatable and scalable business model.", "Steve Blank"],
+    ["In a startup no facts exist inside the building, only opinions.", "Steve Blank"],
+    ["The first principle is that you must not fool yourself, and you are the easiest person to fool.", "Richard Feynman", "Cargo Cult Science"],
+    ["What I cannot create, I do not understand.", "Richard Feynman"],
+    ["I learned very early the difference between knowing the name of something and knowing something.", "Richard Feynman"],
+    ["Study hard what interests you the most in the most undisciplined, irreverent and original manner possible.", "Richard Feynman"],
   ];
 
   /** The same quote all day, a different one tomorrow. */
+  // Stepping 23 at a time (the list length is not a multiple of 23) visits every
+  // quote before repeating, and keeps neighbouring days on different shelves.
   function quoteOfTheDay() {
     const now = new Date();
     const day = Math.floor((now.getTime() - now.getTimezoneOffset() * 60000) / 86400000);
-    return QUOTES[day % QUOTES.length];
+    return QUOTES[(day * 23) % QUOTES.length];
   }
 
   /**
@@ -1514,7 +1702,7 @@
     const hello = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
     // A sun by day, a moon once it is dark.
     const icon = hour < 5 || hour >= 18 ? "🌙" : hour < 12 ? "☀️" : "🌤️";
-    const [quote, author] = quoteOfTheDay();
+    const [quote, author, source] = quoteOfTheDay();
     const extras = [
       t.next ? `<li>Focus: <button class="link" data-action="openSkill" data-id="${esc(t.next.id)}">${esc(t.next.title)}</button></li>` : "",
       t.canRead && !t.readToday ? `<li><button class="link" data-action="readStart">Read one function you did not write</button> <span class="muted">· 3 min</span></li>` : "",
@@ -1526,7 +1714,7 @@
       </div>
       <figure class="quote">
         <blockquote>${esc(quote)}</blockquote>
-        <figcaption>${esc(author)}</figcaption>
+        <figcaption>${esc(author)}${source ? `, <cite>${esc(source)}</cite>` : ""}</figcaption>
       </figure>
       ${extras.length ? `<ul class="greet-links">${extras.join("")}</ul>` : ""}
     </section>`;
